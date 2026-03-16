@@ -14,8 +14,9 @@ from frankapy import FrankaArm
 if __name__ == "__main__":
     
     start = time.time()
-    fa = FrankaArm()
-    fa.open_gripper()
+    print("Guide Mode Started")
+    fa = FrankaArm(with_gripper=False, old_gripper=False)
+    #fa.open_gripper()
     fa.run_guide_mode(10000,block=False)
 
     while((time.time()-start) < 10000):

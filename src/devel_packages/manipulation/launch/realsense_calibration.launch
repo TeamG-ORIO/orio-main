@@ -1,7 +1,7 @@
 <launch>
-    <arg name="marker1Id"         default="33"/> <!-- change this if required-->
+    <arg name="marker1Id"         default="0"/> <!-- change this if required-->
     <arg name="marker2Id"         default="999"/>
-    <arg name="markerSize"        default="0.04"/>    <!-- change this, in m -->
+    <arg name="markerSize"        default="0.06767"/>    <!-- change this, in m -->
     <arg name="dct_normalization" default="False" />
     <arg name="dct_filter_size"   default="2" />
     <arg name="marker1_frame"     default="marker_1_frame" />

@@ -14,5 +14,6 @@ docker run --privileged --rm -it \
     -v "/etc/timezone:/etc/timezone:ro" \
     -v "/etc/localtime:/etc/localtime:ro" \
     -v "/dev:/dev" \
+    -v "$(pwd)/src/git_packages:/home/ros_ws/src/git_packages" \
     --gpus all \
     frankapy_docker bash

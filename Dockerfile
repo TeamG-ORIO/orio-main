@@ -8,6 +8,8 @@ RUN apt update && apt install -y git
 RUN apt install nano ros-noetic-tf2-tools evince -y
 RUN apt install ros-noetic-moveit ros-noetic-franka-ros  -y
 RUN apt install python3-pip python3-tk -y
+RUN python3 -m pip install pip --upgrade
+RUN pip3 install pyopenssl --upgrade
 RUN apt install gnome-terminal -y
 
 # install python dependencies to run frankapy within the docker container
