@@ -2,7 +2,7 @@ import ikpy.chain
 import numpy as np
 from frankapy import FrankaArm
 
-fa = FrankaArm(with_gripper=False)
+fa = FrankaArm(with_gripper=False, robot_num=2)
 
 my_chain = ikpy.chain.Chain.from_urdf_file(
     "panda_arm_hand.urdf", 

@@ -1,0 +1,47 @@
+create a new script called pick-place-label.py
+
+it should:
+instantiate two franka arms like in dual_mode.py called pick_place_arm (robot_num=1) and label_arm (robot_num=2)
+
+Now I need them to run the following sequence:
+
+at the start label_arm moves to LABEL_DISPENSER
+Both arms run in parallel in 4 distinct phases. 
+the sub positions are defined in the brackets.
+the task pose of the main positions are predefined and stored in a json file.
+
+Note: PICK_UP_ZONE, DROP_ZONE, LABEL_DISPENSER, LABEL_ZONE1, LABEL_ZONE2 are the respenctive PRE_GRASP/PRE_DROP/PRE_PLACE positions in their sub tasks
+
+
+phase 1: 
+pick_place_arm: leave current position -> pick up from PICK_UP_ZONE -> drop off at LABEL_ZONE_2 
+label_arm: leave LABEL_DISPENSER -> place label at LABEL_ZONE1 -> go to SAFE_POS
+
+phase 2:
+pick_place_arm: leave LABEL_ZONE_2 -> pick up from LABEL_ZONE_1 -> drop off at DROP_ZONE
+label_arm: leave SAFE_ZONE -> pick label from LABEL_DISPENSER
+
+phase 3:
+pick_place_arm: leave DROP_ZONE -> pick up from PICK_UP_ZONE -> drop off at LABEL_ZONE_1
+label_arm: leave LABEL_DISPENSER -> place label at LABEL_ZONE_2 -> go to SAFE_POS
+
+phase 4:
+pick_place_arm: leave LABEL_ZONE_1 -> pick up from LABEL_ZONE_2 -> drop off at DROP_ZONE
+label_arm: leave SAFE_ZONE -> pick label from LABEL_DISPENSER
+
+
+
+both arms start each phase at the same time. the phase ends when both arms have finished even if one finished earlier than the other.
+
+pick up consisits of : PRE_GRASP -> GRASP -> Switch on gripper vacuum -> PRE_GRASP
+
+drop_off consists of : PRE_DROP -> DROP -> Swictch off gripper vacuum-> PRE_DROP
+
+pick label consists of : PRE_GRASP -> PICK -> Swicth on Gripper vacuum -> PRE_GRASP 
+
+place label consists of : PRE_PLACE -> PLACE -> Swicth off Gripper vacuum -> PRE_PLACE
+
+
+the distance between all PRE_DROP/PRE_GRASP/PRE_PLACE to their corresponding DROP/PICK/PLACE/DROP is a single value APPROACH_DISTANCE
+
+Refer to pnp_test_forever.py 

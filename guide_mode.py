@@ -10,12 +10,30 @@ Commands:
 import numpy as np
 import time
 import sys
+import argparse
 from frankapy import FrankaArm
+
 if __name__ == "__main__":
-    
+
+    parser = argparse.ArgumentParser(description="Run guide mode for a specific Franka arm.")
+    parser.add_argument(
+        '--robot_num', '-n', 
+        type=int, 
+        default=1, 
+        help='The robot number to connect to (e.g., 1 or 2). Defaults to 1.'
+    )
+
+    args = parser.parse_args()
+    if args.robot_num == 1:
+        robot_name = "Pick-and-Place Arm"
+    elif args.robot_num == 2:
+        robot_name = "Labelling Arm"
+    else:
+        robot_name = None
+
     start = time.time()
-    print("Guide Mode Started")
-    fa = FrankaArm(with_gripper=False, old_gripper=False)
+    print(f"Guide Mode Started for Robot {args.robot_num} ({robot_name})")
+    fa = FrankaArm(with_gripper=False, old_gripper=False, robot_num=args.robot_num)
     #fa.open_gripper()
     fa.run_guide_mode(10000,block=False)
 

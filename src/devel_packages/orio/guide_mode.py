@@ -14,9 +14,8 @@ from frankapy import FrankaArm
 if __name__ == "__main__":
     
     start = time.time()
-    print("1")
-    fa = FrankaArm(with_gripper=False, old_gripper=False)
-    print("2")
+    print("Guide Mode Started")
+    fa = FrankaArm(with_gripper=False, old_gripper=False, robot_num=2)
     #fa.open_gripper()
     fa.run_guide_mode(10000,block=False)
 

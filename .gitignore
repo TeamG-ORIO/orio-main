@@ -1,3 +1,14 @@
 .vscode
 data/**
 !data/.gitkeep
+build/
+dataset/
+devel/
+depth_image.png
+depth_raw.npy
+Dockerfile.zed
+rgb_image.png
+save_one_frame.py
+save_zed_frame.py
+zed_run_docker.sh
+zed_terminal_docker.sh

@@ -12,7 +12,7 @@ RUN python3 -m pip install pip --upgrade
 RUN pip3 install pyopenssl --upgrade
 RUN apt install gnome-terminal -y
 
-# install python dependencies to run frankapy within the docker container
+# install python dependencies to run fDockerfilerankapy within the docker container
 RUN pip3 install autolab_core 
 RUN pip3 install --force-reinstall pillow==9.0.1 && pip3 install --force-reinstall scipy==1.8
 RUN pip3 install numpy-quaternion numba && pip3 install --upgrade google-api-python-client 
