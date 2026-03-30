@@ -22,6 +22,8 @@ if __name__ == "__main__":
     fa = FrankaArm(init_node = False)
     pub = rospy.Publisher("/real_robot_joints", sensor_msgs.msg.JointState, queue_size=10)
     gripper_sub = rospy.Subscriber("/franka_gripper_1/joint_states", sensor_msgs.msg.JointState, gripper_callback)
+    # gripper_sub = rospy.Subscriber("/franka_gripper_2/joint_states", sensor_msgs.msg.JointState, gripper_callback)
+
     rate = rospy.Rate(10)
     msg = sensor_msgs.msg.JointState()
     msg.name = ["panda_joint1", "panda_joint2", "panda_joint3", "panda_joint4", "panda_joint5", "panda_joint6", "panda_joint7", "panda_finger_joint1", "panda_finger_joint2"]

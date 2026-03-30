@@ -46,7 +46,7 @@ def transform_backward_realsense(panda_to_camrgb_pose):
         tf_buffer = tf2_ros.Buffer()
         listener = tf2_ros.TransformListener(tf_buffer)
 
-        rgb_to_cambase = tf_buffer.lookup_transform('camera_color_optical_frame', 'camera_link', rospy.Time(0), rospy.Duration(10.0))
+        rgb_to_cambase = tf_buffer.lookup_transform('camera_rgb_optical_frame', 'camera_link', rospy.Time(0), rospy.Duration(10.0))
         rgb_to_cambase_pose = Pose()
         rgb_to_cambase_pose.position.x = rgb_to_cambase.transform.translation.x
         rgb_to_cambase_pose.position.y = rgb_to_cambase.transform.translation.y
@@ -64,7 +64,7 @@ def transform_backward_realsense(panda_to_camrgb_pose):
         panda_to_cambase_pose = transformation_matrix_to_pose(panda_to_cambase_mat)
         return panda_to_cambase_pose
     except:
-        print("no transform found for Realsense camera")
+        print("no transform found for ASUS Xtion camera")
         return None
 
 def static_tf_broadcaster_realsense(static_tf_params: Pose):

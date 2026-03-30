@@ -63,8 +63,12 @@ class HandeyeSampler(object):
         """
         if time is None:
             time = Time.now()
+        time = Time(0)
 
         # here we trick the library (it is actually made for eye_on_hand only). Trust me, I'm an engineer
+        loginfo("Starting TF lookup...")
+        loginfo(self.handeye_parameters.robot_base_frame)
+        loginfo(self.handeye_parameters.robot_effector_frame)
         if self.handeye_parameters.eye_on_hand:
             rob = self.tfBuffer.lookup_transform(self.handeye_parameters.robot_base_frame,
                                                  self.handeye_parameters.robot_effector_frame, time,
@@ -73,6 +77,7 @@ class HandeyeSampler(object):
             rob = self.tfBuffer.lookup_transform(self.handeye_parameters.robot_effector_frame,
                                                  self.handeye_parameters.robot_base_frame, time,
                                                  Duration(10))
+        loginfo("Finished TF lookup...")
         opt = self.tfBuffer.lookup_transform(self.handeye_parameters.tracking_base_frame,
                                              self.handeye_parameters.tracking_marker_frame, time,
                                              Duration(10))

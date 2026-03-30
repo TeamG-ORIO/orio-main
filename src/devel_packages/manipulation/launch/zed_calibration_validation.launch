@@ -1,31 +1,30 @@
 <launch>
-    <arg name="marker1Id"         default="33"/> <!-- change this if required-->
+    <arg name="marker1Id"         default="33"/> 
     <arg name="marker2Id"         default="999"/>
-    <arg name="markerSize"        default="0.12000"/>    <!-- change this, in m -->
+    <arg name="markerSize"        default="0.12000"/>    
     <arg name="dct_normalization" default="False" />
     <arg name="dct_filter_size"   default="2" />
     <arg name="marker1_frame"     default="marker_1_frame" />
     <arg name="marker2_frame"     default="marker_2_frame" />
 
-    <!-- launch realsense2_camera using the realsense.launch file -->
-    <include file="$(find manipulation)/launch/realsense.launch"/>
+    <include file="$(find zed_wrapper)/launch/zedm.launch" />
     
-    <!-- Launch the aruco detection node -->
     <node pkg="aruco_ros" type="double" name="aruco_simple">    
-        <remap from="/camera_info" to="/camera/color/camera_info" />
-        <remap from="/image" to="/camera/color/image_raw" />
+        <remap from="/camera_info" to="/zedm/zed_node/rgb/camera_info" />
+        <remap from="/image" to="/zedm/zed_node/rgb/image_rect_color" />
+        
         <param name="image_is_rectified" value="True"/>
         <param name="marker_size" value="$(arg markerSize)"/>
         <param name="marker_id1" value="$(arg marker1Id)"/>
         <param name="marker_id2" value="$(arg marker2Id)"/>
         <param name="normalizeImage" value="$(arg dct_normalization)"/>
         <param name="dct_components_to_remove" value="$(arg dct_filter_size)"/>
-        <param name="parent_name" value="camera_color_optical_frame"/>
+        
+        <param name="parent_name" value="zedm_left_camera_optical_frame"/>
         <param name="child_name1" value="$(arg marker1_frame)" />
         <param name="child_name2" value="$(arg marker2_frame)" />
     </node>
 
-    <!-- launch the joint tf publisher for franka (reads joints from frankapy) -->
-    <node name="robot_joint_converter" pkg="manipulation" type="robot_joint_converter.py" output="screen" />
+    <node name="robot_joint_converter" pkg="manipulation" type="robot_joint_converter.py" args="--robot_num 1" output="screen" />
 
 </launch>
