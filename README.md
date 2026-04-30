@@ -1,4 +1,4 @@
-# 16-662 Robot Autonomy
+# MRSD Team G: ORIO
 ## Desktop Setup
 
 ### Install Prerequisites:
