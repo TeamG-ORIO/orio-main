@@ -1,0 +1,47 @@
+
+# TODO : Rebuild docker with openni, ZED_neural_weights, ikpy
+
+student@iam-abuela:~$ roscore
+
+student@iam-abuela:~/Documents/frankapy$ bash ./bash_scripts/start_control_pc.sh -u student -i iam-doc
+
+student@iam-abuela:~/Documents/frankapy$ bash ./bash_scripts/start_control_pc_sleepy.sh -u iam-sleepy -i iamsleepy
+
+
+student@iam-abuela:~/16662_RobotAutonomy$ bash zed_run_docker.sh 
+root@iam-abuela:/home/ros_ws/src/devel_packages/manipulation/src# sudo apt install ros-noetic-openni2-camera ros-noetic-openni2-launch
+root@iam-abuela:/home/ros_ws/src/devel_packages/manipulation/src# roslaunch manipulation cameras.launch
+
+student@iam-abuela:~/Documents/frankapy/grasp_pose$ source venv/bin/activate
+(venv) student@iam-abuela:~/Documents/frankapy/grasp_pose$ python3 perception_control_combined_pass_through.py
+
+vacuum
+open arduino ide in downloads and flash
+python3 pneumatic_control_recovery.py 
+
+student@iam-abuela:~/16662_RobotAutonomy$ bash run_docker.sh
+root@iam-abuela:/home/ros_ws/src/devel_packages/orio# pip install ikpy
+root@iam-abuela:/home/ros_ws/src/devel_packages/orio# python3 state_machine_integrated.py 
+
+
+
+-------------Visualisation-------------------
+python3 visualisation.py (in venv)
+/usr/bin/python3 /opt/ros/noetic/lib/smach_viewer/smach_viewer.py (outside)
+
+
+
+
+
+------ERROR------------------------------------------------------------------
+Zed camera issue
+root@iam-abuela:/home/ros_ws/src/devel_packages/orio# ps aux | grep zed
+root       73277  0.0  0.0 360848 11232 ?        Ssl  09:32   0:01 /opt/ros/noetic/lib/robot_state_publisher/robot_state_publisher robot_description:=zedm_description __name:=zedm_state_publisher __log:=/root/.ros/log/603cc5d0-3806-11f1-b486-05ad3de01872/zedm-zedm_state_publisher-1.log
+root       73278 30.1  7.1 9948036 1145520 ?     Ssl  09:32  10:55 /home/ros_ws/devel/lib/zed_wrapper/zed_wrapper_node __name:=zed_node __log:=/root/.ros/log/603cc5d0-3806-11f1-b486-05ad3de01872/zedm-zed_node-2.log
+root       99822  0.0  0.0 360848 15132 ?        Ssl  09:51   0:00 /opt/ros/noetic/lib/robot_state_publisher/robot_state_publisher robot_description:=zedm_description __name:=zedm_state_publisher __log:=/root/.ros/log/07aa0178-3809-11f1-b486-05ad3de01872/zedm-zedm_state_publisher-1.log
+root       99823  2.9  0.8 6047596 136820 ?      Ssl  09:51   0:30 /home/ros_ws/devel/lib/zed_wrapper/zed_wrapper_node __name:=zed_node __log:=/root/.ros/log/07aa0178-3809-11f1-b486-05ad3de01872/zedm-zed_node-2.log
+root      129726  0.0  0.0   5196  2460 pts/26   S+   10:08   0:00 grep --color=auto zed
+root@iam-abuela:/home/ros_ws/src/devel_packages/orio# kill -9 73278 99823 73277 99822
+root@iam-abuela:/home/ros_ws/src/devel_packages/orio# ZED_Diagnostic
+QStandardPaths: XDG_RUNTIME_DIR not set, defaulting to '/tmp/runtime-root'
+

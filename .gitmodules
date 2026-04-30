@@ -1,0 +1,6 @@
+[submodule "src/git_packages/src/git_packages/openni2_camera"]
+	path = src/git_packages/src/git_packages/openni2_camera
+	url = https://github.com/ros-drivers/openni2_camera.git
+[submodule "src/git_packages/src/git_packages/zed-ros-wrapper"]
+	path = src/git_packages/src/git_packages/zed-ros-wrapper
+	url = https://github.com/stereolabs/zed-ros-wrapper.git

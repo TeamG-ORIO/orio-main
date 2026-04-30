@@ -1,0 +1,16 @@
+# Label to ZED
+pose:
+  rotation:
+    w: 0.0
+    x: 0.7071067811865476
+    y: -0.7071067811865476
+    z: 0.0
+  translation:
+    x: 0.46
+    y: 0.019
+    z: 0.98
+
+
+# Corrected Values:
+# Static TF translation: (0.44675000000000004, -0.01100000000000001, 0.98)
+# Static TF rotation (quaternion: x,y,z,w): (0.0, 0.7071067811865476, 0.0, 0.7071067811865475)

@@ -1,0 +1,48 @@
+<mujoco model="panda dual scene">
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="3072"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="0.2 0.3 0.4" rgb2="0.1 0.2 0.3" markrgb="0.8 0.8 0.8" width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
+    <material name="table_wood" rgba="0.5 0.4 0.3 1"/>
+    <material name="frame_metal" rgba="0.2 0.2 0.2 1"/>
+  </asset>
+
+  <include file="orio_mj_dual.xml"/>
+
+  <statistic center="0 0 0.9" extent="2.5"/>
+
+  <visual>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <rgba haze="0.15 0.25 0.35 1"/>
+    <global azimuth="150" elevation="-25"/>
+  </visual>
+
+  <worldbody>
+    <light pos="0 0 2.0" dir="0 0 -1" directional="true"/>
+    
+    <geom name="floor" pos="0 0 0" size="0 0 0.05" type="plane" material="groundplane"/>
+
+    <body name="table_r" pos="0.423 0 0.45">
+      <geom name="table_top_r" type="box" size="0.423 0.546 0.45" material="table_wood"/>
+      
+      <body name="frame_1" pos="-0.423 0 0.45">
+          <geom name="post_1_l" type="box" size="0.0225 0.0225 0.5" pos="0.273 -0.56 0.5" material="frame_metal"/>
+          <geom name="post_1_r" type="box" size="0.0225 0.0225 0.5" pos="0.273 0.56 0.5" material="frame_metal"/>
+          <geom name="crossbar_1" type="box" size="0.0225 0.546 0.0225" pos="0.273 0 1.0" material="frame_metal"/>
+          <geom name="label_dispenser" type="box" size="0.1 0.11 0.16" pos="0.70 -0.36 0.16" material="frame_metal"/>
+          <!-- <geom name="zone_block" type="box" size="0.14 0.273 1.0" pos="0.24 0.273 1" material="frame_metal"/> -->
+          <!-- <geom name="zone_block1" type="box" size="0.14 0.273 1.0" pos="0.24 -0.273 1" material="frame_metal"/> -->
+      </body>
+    </body>
+
+    <body name="table_l" pos="-0.343 0 0.45">
+      <geom name="table_top_l" type="box" size="0.343 0.546 0.45" material="table_wood"/>
+
+      <body name="frame_2" pos="0.323 0 0.45">
+          <geom name="crossbar_2" type="box" size="0.72 0.02 0.02" pos="-0.36 -0.56 0.96" material="frame_metal"/>
+          <geom name="asus_camera" type="box" size="0.1 0.0275 0.02" pos="-0.28 -0.501 0.96" material="frame_metal"/>
+      </body>
+    </body>
+    
+  </worldbody>
+</mujoco>
