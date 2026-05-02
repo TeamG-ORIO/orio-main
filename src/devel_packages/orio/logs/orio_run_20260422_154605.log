@@ -1,0 +1,141 @@
+2026-04-22 15:46:05,949 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260422_154605.log
+2026-04-22 15:46:05,949 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260422_154605.log
+2026-04-22 15:46:28,153 INFO     [Main] Operator input — item='fhggsiz'  expiry='1234-12-12'
+2026-04-22 15:46:28,155 INFO     [Hardware] Initializing Robot Hardware...
+2026-04-22 15:46:28,710 INFO     [Hardware] Resetting both arms to home joints
+2026-04-22 15:46:35,397 INFO     [Hardware] Poses loaded from joint_angles.json
+2026-04-22 15:46:35,409 INFO     [Hardware] Initialization complete
+2026-04-22 15:46:35,414 INFO     [Main] Starting state machine execution
+2026-04-22 15:46:35,417 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-22 15:46:35,417 INFO     [TaskSelector] → do_load (empty zone available)
+2026-04-22 15:46:35,418 INFO     [GetLabel] Entering state
+2026-04-22 15:46:35,419 INFO     [FetchInput] Entering state
+2026-04-22 15:46:35,997 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-22 15:46:35,997 INFO     [FetchInput] Grasp pose received: x=0.4089 y=-0.5344 z=0.0387
+2026-04-22 15:46:35,998 INFO     [IK] compute_pick_joints called — task_pos=[ 0.4089 -0.5344  0.0387] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-22 15:46:36,029 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.4089 -0.5344  0.0387]) pre=[-0.3244  0.7077 -0.7045 -1.6868  0.5431  2.1894 -0.4493] final=[-0.495   0.8251 -0.4786 -1.6764  0.5093  2.3746 -0.4304] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-22 15:46:36,030 INFO     [FetchInput] IK pre_joints:   [-0.3244  0.7077 -0.7045 -1.6868  0.5431  2.1894 -0.4493]
+2026-04-22 15:46:36,031 INFO     [FetchInput] IK final_joints: [-0.495   0.8251 -0.4786 -1.6764  0.5093  2.3746 -0.4304]
+2026-04-22 15:46:36,031 INFO     [FetchInput] Moving to pre-pick
+2026-04-22 15:46:39,338 INFO     [FetchInput] Descending to pick
+2026-04-22 15:46:41,643 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-22 15:46:42,643 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-22 15:46:45,628 INFO     [FetchInput] Exiting: succeeded (item_depth=0.0387)
+2026-04-22 15:46:45,630 INFO     [DropToZone] Entering state (item_depth=0.0387)
+2026-04-22 15:46:45,630 INFO     [DropToZone] Targeting zone A
+2026-04-22 15:46:45,640 INFO     [IK] pose_to_joints 'L1_INTER' depth_offset=0.0387 → joints=[-0.3193 -0.4895 -0.3587 -2.5904 -0.1946  2.1192  0.2489]
+2026-04-22 15:46:45,641 INFO     [Service] /orio/lbl_cup/on → success=True msg='Labelling Cup ON command sent'
+2026-04-22 15:46:45,652 INFO     [IK] pose_to_joints 'LABEL_ZONE_1' depth_offset=0.0487 → joints=[-0.2368  1.1809 -0.1693 -0.8694  0.1756  2.039   0.4038]
+2026-04-22 15:46:45,654 INFO     [DropToZone] place_joints for LABEL_ZONE_1: [-0.2368  1.1809 -0.1693 -0.8694  0.1756  2.039   0.4038]
+2026-04-22 15:46:49,045 INFO     [IK] pose_to_joints 'LABELLING_SAFE' depth_offset=0.0000 → joints=[-0.065  -1.2718  0.0356 -2.707   0.0343  1.4354  0.7355]
+2026-04-22 15:46:52,249 INFO     [GetLabel] Exiting: succeeded
+2026-04-22 15:46:52,251 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:52,251 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:52,552 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-22 15:46:52,754 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:52,754 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:53,255 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:53,256 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:53,758 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:53,759 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:54,260 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:54,260 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:54,762 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:54,763 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:55,265 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:55,265 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:55,767 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': True, 'B': False})
+2026-04-22 15:46:55,767 DEBUG    [ApplyLabel] No zone needs label → wait
+2026-04-22 15:46:56,042 INFO     [ZoneManager] Zone A: EMPTY → NEEDS_LABEL
+2026-04-22 15:46:56,043 INFO     [DropToZone] Exiting: dropped (zone A)
+2026-04-22 15:46:56,045 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-22 15:46:56,045 INFO     [TaskSelector] → do_load (empty zone available)
+2026-04-22 15:46:56,046 INFO     [FetchInput] Entering state
+2026-04-22 15:46:56,271 INFO     [ApplyLabel] Entering state (zones: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False})
+2026-04-22 15:46:56,271 INFO     [ApplyLabel] Applying label to zone A (zone_number=1, depth=0.0387)
+2026-04-22 15:46:56,271 INFO     [compute_label_joints] Requesting label pose for zone 1, item_depth=0.0387
+2026-04-22 15:46:56,691 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-22 15:46:56,692 INFO     [FetchInput] Grasp pose received: x=0.0587 y=-0.4300 z=0.0376
+2026-04-22 15:46:56,692 INFO     [IK] compute_pick_joints called — task_pos=[ 0.0587 -0.43    0.0376] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-22 15:46:56,709 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.0587 -0.43    0.0376]) pre=[-0.4756 -0.0386 -0.9679 -2.6152 -0.0609  2.5925 -0.6058] final=[-0.6453  0.3772 -0.6632 -2.5569  0.6966  2.7804 -1.152 ] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-22 15:46:56,710 INFO     [FetchInput] IK pre_joints:   [-0.4756 -0.0386 -0.9679 -2.6152 -0.0609  2.5925 -0.6058]
+2026-04-22 15:46:56,710 INFO     [FetchInput] IK final_joints: [-0.6453  0.3772 -0.6632 -2.5569  0.6966  2.7804 -1.152 ]
+2026-04-22 15:46:56,710 INFO     [FetchInput] Moving to pre-pick
+2026-04-22 15:46:58,217 INFO     [Service] /compute_grasps_labelling → success=True msg='Zone1=OK, Zone2=FAIL'
+2026-04-22 15:46:58,217 INFO     item_depth=0.0387  X=-0.2129 Y=-0.0740 Z=0.9613  pos(world)=[0.534  0.2319 0.0187]  task_pos=[0.534  0.2319 0.0387]  task_ori=[0.7078 0.7064 0.     0.    ]
+2026-04-22 15:46:58,218 INFO     [compute_label_joints] Zone 1 received pose: x=0.5340 y=0.2319 z=0.0387  RPY r=180.00 p=0.00 y=89.89 deg
+2026-04-22 15:46:58,219 INFO     [IK] compute_pick_joints called — task_pos=[0.534  0.2319 0.0387] label_zone=1 max_attempts=10 check_collisions=True arm_number=2
+2026-04-22 15:46:58,236 INFO     Arm2: cached 8 obstacles from '/home/ros_ws/src/devel_packages/orio/obstacles_files/obs_arm2_free.p'
+2026-04-22 15:46:58,243 INFO     [IK] Arm2 compute_pick_joints attempt 1/10 OK — target=([0.534  0.2319 0.0387]) pre=[ 0.201   0.341   0.2123 -2.0972 -0.1079  2.4283 -0.3002] final=[ 0.4143  0.5423 -0.0045 -2.0859  0.0047  2.6282 -0.377 ] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-22 15:46:58,244 INFO     [ApplyLabel] IK pre_joints=[ 0.201   0.341   0.2123 -2.0972 -0.1079  2.4283 -0.3002]  final_joints=[ 0.4143  0.5423 -0.0045 -2.0859  0.0047  2.6282 -0.377 ]
+2026-04-22 15:46:58,244 INFO     [ApplyLabel] Registering label — item='fhggsiz' expiry='1234-12-12'
+2026-04-22 15:46:59,817 INFO     [FetchInput] Descending to pick
+2026-04-22 15:47:02,024 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-22 15:47:03,025 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-22 15:47:03,364 ERROR    [RFID] Service call failed for /inventory/add_item: timeout exceeded while waiting for service /inventory/add_item
+2026-04-22 15:47:08,470 INFO     [FetchInput] Exiting: succeeded (item_depth=0.0376)
+2026-04-22 15:47:08,474 INFO     [DropToZone] Entering state (item_depth=0.0376)
+2026-04-22 15:47:08,474 INFO     [DropToZone] Targeting zone B
+2026-04-22 15:47:08,484 INFO     [IK] pose_to_joints 'L1_INTER' depth_offset=0.0376 → joints=[-0.3193 -0.488  -0.3592 -2.5923 -0.1948  2.1225  0.2488]
+2026-04-22 15:47:08,496 INFO     [IK] pose_to_joints 'L2_INTER' depth_offset=0.0376 → joints=[ 0.0582 -0.5537  0.6029 -2.5836  0.3496  2.0854  1.1958]
+2026-04-22 15:47:08,511 INFO     [IK] pose_to_joints 'LABEL_ZONE_2' depth_offset=0.0476 → joints=[ 0.3483  1.1765 -0.0526 -0.8704  0.0546  2.0458  1.0884]
+2026-04-22 15:47:08,512 INFO     [DropToZone] place_joints for LABEL_ZONE_2: [ 0.3483  1.1765 -0.0526 -0.8704  0.0546  2.0458  1.0884]
+2026-04-22 15:47:13,601 INFO     [Service] /orio/lbl_cup/off → success=True msg='Labelling Cup OFF command sent'
+2026-04-22 15:47:16,606 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-22 15:47:16,927 INFO     [IK] pose_to_joints 'LABELLING_SAFE' depth_offset=0.0000 → joints=[-0.065  -1.2718  0.0356 -2.707   0.0343  1.4354  0.7355]
+2026-04-22 15:47:20,491 INFO     [ZoneManager] Zone A: NEEDS_LABEL → READY_FOR_PICKUP
+2026-04-22 15:47:20,491 INFO     [ApplyLabel] Exiting: labeled (zone A)
+2026-04-22 15:47:20,491 INFO     [ZoneManager] Zone B: EMPTY → NEEDS_LABEL
+2026-04-22 15:47:20,491 INFO     [DropToZone] Exiting: dropped (zone B)
+2026-04-22 15:47:20,492 INFO     [GetLabel] Entering state
+2026-04-22 15:47:20,493 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'READY_FOR_PICKUP', 'B': 'NEEDS_LABEL'}  busy: {'A': False, 'B': False}
+2026-04-22 15:47:20,494 INFO     [TaskSelector] → do_unload (both zones occupied, ready zone exists)
+2026-04-22 15:47:20,495 INFO     [RetrieveFromZone] Entering state
+2026-04-22 15:47:20,495 INFO     [RetrieveFromZone] Picking from zone A (depth=0.0387)
+2026-04-22 15:47:20,510 INFO     [IK] pose_to_joints 'L1_INTER' depth_offset=0.0387 → joints=[-0.3193 -0.4895 -0.3587 -2.5904 -0.1946  2.1192  0.2489]
+2026-04-22 15:47:20,524 INFO     [IK] pose_to_joints 'LABEL_ZONE_1' depth_offset=0.1387 → joints=[-0.2317  1.0428 -0.1781 -0.8887  0.1636  1.9202  0.4068]
+2026-04-22 15:47:20,541 INFO     [IK] pose_to_joints 'LABEL_ZONE_1' depth_offset=0.0287 → joints=[-0.2404  1.2236 -0.1662 -0.8424  0.1767  2.0551  0.405 ]
+2026-04-22 15:47:20,542 INFO     [RetrieveFromZone] A pre_pick=[-0.2317  1.0428 -0.1781 -0.8887  0.1636  1.9202  0.4068] pick=[-0.2404  1.2236 -0.1662 -0.8424  0.1767  2.0551  0.405 ]
+2026-04-22 15:47:29,536 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-22 15:47:30,538 INFO     [RetrieveFromZone] Retracting to pre-pick height
+2026-04-22 15:47:30,716 INFO     [Service] /orio/lbl_cup/on → success=True msg='Labelling Cup ON command sent'
+2026-04-22 15:47:34,124 INFO     [IK] pose_to_joints 'LABELLING_SAFE' depth_offset=0.0000 → joints=[-0.065  -1.2718  0.0356 -2.707   0.0343  1.4354  0.7355]
+2026-04-22 15:47:37,329 INFO     [ZoneManager] Zone A: READY_FOR_PICKUP → EMPTY
+2026-04-22 15:47:37,329 INFO     [GetLabel] Exiting: succeeded
+2026-04-22 15:47:37,329 INFO     [RetrieveFromZone] Exiting: picked (zone A)
+2026-04-22 15:47:37,330 INFO     [ApplyLabel] Entering state (zones: {'A': 'EMPTY', 'B': 'NEEDS_LABEL'}  busy: {'A': False, 'B': False})
+2026-04-22 15:47:37,330 INFO     [ApplyLabel] Applying label to zone B (zone_number=2, depth=0.0376)
+2026-04-22 15:47:37,330 INFO     [compute_label_joints] Requesting label pose for zone 2, item_depth=0.0376
+2026-04-22 15:47:37,331 INFO     [PlaceOutput] Entering state (retrieved_depth=0.0387)
+2026-04-22 15:47:37,347 INFO     [IK] pose_to_joints 'OUTPUT1' depth_offset=0.1887 → joints=[-1.4047 -0.8487  2.6379 -0.878   0.372   1.6545  2.1404]
+2026-04-22 15:47:37,359 INFO     [IK] pose_to_joints 'L2_INTER' depth_offset=0.0387 → joints=[ 0.0601 -0.5546  0.6002 -2.5818  0.3481  2.0824  1.1967]
+2026-04-22 15:47:37,360 INFO     [PlaceOutput] drop_joints: [-1.4047 -0.8487  2.6379 -0.878   0.372   1.6545  2.1404]
+2026-04-22 15:47:39,380 INFO     [Service] /compute_grasps_labelling → success=True msg='Zone1=OK, Zone2=OK'
+2026-04-22 15:47:39,381 INFO     item_depth=0.0376  X=0.3970 Y=-0.0403 Z=0.9624  pos(world)=[ 0.5003 -0.378   0.0176]  task_pos=[ 0.5003 -0.378   0.0376]  task_ori=[0.9999 0.0128 0.     0.    ]
+2026-04-22 15:47:39,382 INFO     [compute_label_joints] Zone 2 received pose: x=0.5003 y=-0.3780 z=0.0376  RPY r=180.00 p=0.00 y=1.46 deg
+2026-04-22 15:47:39,382 INFO     [IK] compute_pick_joints called — task_pos=[ 0.5003 -0.378   0.0376] label_zone=2 max_attempts=10 check_collisions=True arm_number=2
+2026-04-22 15:47:39,410 INFO     [IK] Arm2 compute_pick_joints attempt 1/10 OK — target=([ 0.5003 -0.378   0.0376]) pre=[-0.3375  0.4715 -0.3304 -1.9137  0.209   2.352  -0.0225] final=[-0.5393  0.6439 -0.1089 -1.9031  0.1158  2.541   0.0377] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-22 15:47:39,411 INFO     [ApplyLabel] IK pre_joints=[-0.3375  0.4715 -0.3304 -1.9137  0.209   2.352  -0.0225]  final_joints=[-0.5393  0.6439 -0.1089 -1.9031  0.1158  2.541   0.0377]
+2026-04-22 15:47:39,411 INFO     [ApplyLabel] Registering label — item='fhggsiz' expiry='1234-12-12'
+2026-04-22 15:47:42,174 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-22 15:47:43,984 INFO     [PlaceOutput] Exiting: succeeded (total items placed: 1)
+2026-04-22 15:47:43,985 INFO     [FetchInput] Entering state
+2026-04-22 15:47:44,539 ERROR    [RFID] Service call failed for /inventory/add_item: timeout exceeded while waiting for service /inventory/add_item
+2026-04-22 15:47:44,560 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-22 15:47:44,561 INFO     [FetchInput] Grasp pose received: x=0.0344 y=-0.6476 z=0.0322
+2026-04-22 15:47:44,561 INFO     [IK] compute_pick_joints called — task_pos=[ 0.0344 -0.6476  0.0322] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-22 15:47:44,589 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.0344 -0.6476  0.0322]) pre=[-0.8484  0.673  -0.76   -1.7978  0.5767  2.2348 -1.0833] final=[-1.0308  0.7963 -0.5249 -1.7802  0.5727  2.4195 -1.0809] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-22 15:47:44,591 INFO     [FetchInput] IK pre_joints:   [-0.8484  0.673  -0.76   -1.7978  0.5767  2.2348 -1.0833]
+2026-04-22 15:47:44,591 INFO     [FetchInput] IK final_joints: [-1.0308  0.7963 -0.5249 -1.7802  0.5727  2.4195 -1.0809]
+2026-04-22 15:47:44,591 INFO     [FetchInput] Moving to pre-pick
+2026-04-22 15:47:54,753 INFO     [Service] /orio/lbl_cup/off → success=True msg='Labelling Cup OFF command sent'
+2026-04-22 15:47:57,871 INFO     [IK] pose_to_joints 'LABELLING_SAFE' depth_offset=0.0000 → joints=[-0.065  -1.2718  0.0356 -2.707   0.0343  1.4354  0.7355]
+2026-04-22 15:48:01,354 INFO     [ZoneManager] Zone B: NEEDS_LABEL → READY_FOR_PICKUP
+2026-04-22 15:48:01,354 INFO     [ApplyLabel] Exiting: labeled (zone B)
+2026-04-22 15:48:01,355 INFO     [GetLabel] Entering state
+2026-04-22 15:48:06,905 WARNING  [Main] Shutting down: turning off both vacuums
+2026-04-22 15:48:06,906 INFO     [Main] Total items placed at output: 1
+2026-04-22 15:48:06,908 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-22 15:48:06,910 INFO     [Service] /orio/lbl_cup/off → success=True msg='Labelling Cup OFF command sent'
+2026-04-22 15:48:06,978 INFO     [Service] /orio/lbl_cup/on → success=True msg='Labelling Cup ON command sent'
+2026-04-22 15:48:07,094 ERROR    [FETCH_INPUT] Unhandled exception: service [/get_current_franka_interface_status_server_node_1/get_current_franka_interface_status_server] returned no response

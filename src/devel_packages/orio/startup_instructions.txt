@@ -1,0 +1,32 @@
+run the bash scripts for both control pcs
+
+launches the vision node
+roslaunch manipulation xtion_calibration_validation.launch
+
+connects it to the arm
+rosrun manipulation xtion_pro_tf_publisher.py 
+
+grasp pose generation service
+~/Documents/frankapy/grasp_pose$ python3 perception_control_SAFETY.py 
+
+vacuum
+open arduino ide in downloads and flash
+python3 pneumatic_control.py 
+
+for zed
+activate zed docker in 16662
+launches the vision node
+roslaunch manipulation zed_calibration_validation.launch
+
+connects it to the arm
+in src run 
+python3 zed_tf_publisher.py 
+
+
+source venv/bin/activate
+~/Documents/frankapy/grasp_pose$ python3 perception_control_SAFETY_labelling.py
+
+https://github.com/tenfoldpaper/multipanda_ros2/tree/humble/franka_moveit_config/srdf
+
+
+sudo apt install ros-noetic-openni2-camera ros-noetic-openni2-launch

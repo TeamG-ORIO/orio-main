@@ -2,7 +2,7 @@ import ikpy.chain
 import numpy as np
 from frankapy import FrankaArm
 
-fa = FrankaArm(with_gripper=False, robot_num=2)
+fa = FrankaArm(with_gripper=False, robot_num=1)
 
 my_chain = ikpy.chain.Chain.from_urdf_file(
     "panda_arm_hand.urdf", 
@@ -25,7 +25,7 @@ fa.reset_joints()
 
 # 3. Set up the target translation and rotation
 target_matrix = np.eye(4)
-target_matrix[:3, 3] = [0.5, 0.0, 0.4] 
+target_matrix[:3, 3] = [0.11724421485643097, -0.39760496444264787, 0.02127784452131563] 
 
 target_pos = target_matrix[:3, 3]
 target_ori = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])

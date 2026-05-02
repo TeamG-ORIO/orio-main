@@ -1,0 +1,6 @@
+2026-04-14T21:42:49 [INFO    ] franka_prm: Arm1: offline collision checker initialized
+2026-04-14T21:42:49 [INFO    ] franka_prm: Arm1: connected to real robot
+2026-04-14T21:42:49 [INFO    ] franka_prm: Arm2: offline collision checker initialized
+2026-04-14T21:42:50 [INFO    ] franka_prm: Arm2: connected to real robot
+2026-04-14T21:42:50 [INFO    ] franka_prm: Arm1 q_start=[-0.077 -0.482  0.057 -2.066  0.027  1.585  0.759]  goal=[0.4 0.  0.5]  yaw=0.000
+2026-04-14T21:42:50 [INFO    ] franka_prm: Arm2 q_start=[-0.065 -1.272  0.036 -2.707  0.034  1.435  0.735]  goal=[0.18, 0.001, 0.41]  yaw=0.000

@@ -1,0 +1,197 @@
+2026-04-15 22:24:17,639 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260415_222417.log
+2026-04-15 22:24:17,640 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260415_222417.log
+2026-04-15 22:24:28,022 INFO     [Main] Operator input — item='fg'  expiry='2003-11-11'
+2026-04-15 22:24:28,023 INFO     [Hardware] Initializing Robot Hardware...
+2026-04-15 22:24:28,508 INFO     [Hardware] Resetting both arms to home joints
+2026-04-15 22:24:35,289 INFO     [Hardware] Poses loaded from joint_angles.json
+2026-04-15 22:24:35,297 INFO     [Hardware] Initialization complete
+2026-04-15 22:24:35,302 INFO     [Main] Starting state machine execution
+2026-04-15 22:24:35,304 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:24:35,304 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 22:24:35,305 INFO     [GetLabel] Entering state
+2026-04-15 22:24:35,305 INFO     [FetchInput] Entering state
+2026-04-15 22:24:35,873 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-15 22:24:35,874 INFO     [FetchInput] Grasp pose received: x=0.3496 y=-0.6225 z=0.0246
+2026-04-15 22:24:35,874 INFO     [IK] compute_pick_joints called — task_pos=[ 0.3496 -0.6225  0.0246] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-15 22:24:35,898 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.3496 -0.6225  0.0246]) pre=[-0.5587  0.8417 -0.6584 -1.4756  0.5653  2.1222 -0.57  ] final=[-0.7153  0.9534 -0.4343 -1.4548  0.479   2.3019 -0.526 ] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-15 22:24:35,899 INFO     [FetchInput] IK pre_joints:   [-0.5587  0.8417 -0.6584 -1.4756  0.5653  2.1222 -0.57  ]
+2026-04-15 22:24:35,899 INFO     [FetchInput] IK final_joints: [-0.7153  0.9534 -0.4343 -1.4548  0.479   2.3019 -0.526 ]
+2026-04-15 22:24:35,899 INFO     [FetchInput] Moving to pre-pick
+2026-04-15 22:24:39,346 INFO     [FetchInput] Descending to pick
+2026-04-15 22:24:41,553 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-15 22:24:42,554 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-15 22:24:45,517 INFO     [Service] /orio/lbl_cup/on → success=True msg='Labelling Cup ON command sent'
+2026-04-15 22:24:46,818 ERROR    [FETCH_INPUT] Unhandled exception: PNP vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:24:46,821 WARNING  [ARM1 Recovery] Showing GUI — both arms paused
+2026-04-15 22:24:48,832 INFO     [IK] pose_to_joints 'LABELLING_SAFE' depth_offset=0.0000 → joints=[-0.065  -1.2718  0.0356 -2.707   0.0343  1.4354  0.7355]
+2026-04-15 22:24:53,431 ERROR    [GET_LABEL] Unhandled exception: LBL vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:24:53,432 WARNING  [ARM2 Recovery] Showing GUI — both arms paused
+2026-04-15 22:24:59,618 INFO     [Recovery] Zones updated: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:24:59,621 INFO     [ARM1 Recovery] choice=FETCH_INPUT  ARM2 override=APPLY
+2026-04-15 22:25:04,420 INFO     [Recovery] Zones updated: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:25:04,423 INFO     [ARM2 Recovery] choice=APPLY  ARM1 override=None
+2026-04-15 22:25:10,022 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:25:10,022 INFO     [ARM1 Recovery] Resetting both arms before resuming
+2026-04-15 22:25:10,025 INFO     [FetchInput] Entering state
+2026-04-15 22:25:10,558 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-15 22:25:10,559 INFO     [FetchInput] Grasp pose received: x=0.3339 y=-0.6018 z=0.0267
+2026-04-15 22:25:10,559 INFO     [IK] compute_pick_joints called — task_pos=[ 0.3339 -0.6018  0.0267] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-15 22:25:10,575 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.3339 -0.6018  0.0267]) pre=[-0.5219  0.7596 -0.6633 -1.6138  0.5439  2.1813 -0.5857] final=[-0.6924  0.8773 -0.4346 -1.595   0.4799  2.3643 -0.5508] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-15 22:25:10,575 INFO     [FetchInput] IK pre_joints:   [-0.5219  0.7596 -0.6633 -1.6138  0.5439  2.1813 -0.5857]
+2026-04-15 22:25:10,576 INFO     [FetchInput] IK final_joints: [-0.6924  0.8773 -0.4346 -1.595   0.4799  2.3643 -0.5508]
+2026-04-15 22:25:10,576 INFO     [FetchInput] Moving to pre-pick
+2026-04-15 22:25:14,008 INFO     [FetchInput] Descending to pick
+2026-04-15 22:25:16,214 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-15 22:25:17,215 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-15 22:25:20,723 ERROR    [FETCH_INPUT] Unhandled exception: PNP vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:25:20,725 WARNING  [ARM1 Recovery] Showing GUI — both arms paused
+2026-04-15 22:25:24,790 INFO     [Recovery] Zones updated: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:25:24,794 INFO     [ARM1 Recovery] choice=DECIDE_HUB  ARM2 override=None
+2026-04-15 22:25:30,908 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:25:30,908 INFO     [ARM1 Recovery] Resetting both arms before resuming
+2026-04-15 22:25:30,910 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:25:30,910 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 22:25:30,912 INFO     [FetchInput] Entering state
+2026-04-15 22:25:31,471 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-15 22:25:31,472 INFO     [FetchInput] Grasp pose received: x=0.3339 y=-0.6032 z=0.0266
+2026-04-15 22:25:31,472 INFO     [IK] compute_pick_joints called — task_pos=[ 0.3339 -0.6032  0.0266] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-15 22:25:31,497 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.3339 -0.6032  0.0266]) pre=[-0.5249  0.7631 -0.6627 -1.6078  0.5446  2.1788 -0.5861] final=[-0.6948  0.8805 -0.4343 -1.589   0.4795  2.3616 -0.5507] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-15 22:25:31,498 INFO     [FetchInput] IK pre_joints:   [-0.5249  0.7631 -0.6627 -1.6078  0.5446  2.1788 -0.5861]
+2026-04-15 22:25:31,498 INFO     [FetchInput] IK final_joints: [-0.6948  0.8805 -0.4343 -1.589   0.4795  2.3616 -0.5507]
+2026-04-15 22:25:31,498 INFO     [FetchInput] Moving to pre-pick
+2026-04-15 22:25:34,936 INFO     [FetchInput] Descending to pick
+2026-04-15 22:25:37,143 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-15 22:25:38,144 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-15 22:25:41,651 ERROR    [FETCH_INPUT] Unhandled exception: PNP vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:25:41,654 WARNING  [ARM1 Recovery] Showing GUI — both arms paused
+2026-04-15 22:25:44,337 INFO     [Recovery] Zones updated: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:25:44,339 INFO     [ARM1 Recovery] choice=FETCH_INPUT  ARM2 override=None
+2026-04-15 22:25:49,950 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:25:49,950 INFO     [ARM1 Recovery] Resetting both arms before resuming
+2026-04-15 22:25:49,952 INFO     [FetchInput] Entering state
+2026-04-15 22:25:50,576 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-15 22:25:50,577 INFO     [FetchInput] Grasp pose received: x=0.3343 y=-0.6026 z=0.0265
+2026-04-15 22:25:50,577 INFO     [IK] compute_pick_joints called — task_pos=[ 0.3343 -0.6026  0.0265] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-15 22:25:50,613 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.3343 -0.6026  0.0265]) pre=[-0.5234  0.7623 -0.6628 -1.6097  0.5446  2.1798 -0.5855] final=[-0.6936  0.8798 -0.4343 -1.5907  0.4797  2.3626 -0.5501] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-15 22:25:50,615 INFO     [FetchInput] IK pre_joints:   [-0.5234  0.7623 -0.6628 -1.6097  0.5446  2.1798 -0.5855]
+2026-04-15 22:25:50,617 INFO     [FetchInput] IK final_joints: [-0.6936  0.8798 -0.4343 -1.5907  0.4797  2.3626 -0.5501]
+2026-04-15 22:25:50,618 INFO     [FetchInput] Moving to pre-pick
+2026-04-15 22:25:54,016 INFO     [FetchInput] Descending to pick
+2026-04-15 22:25:56,222 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-15 22:25:57,223 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-15 22:26:00,731 ERROR    [FETCH_INPUT] Unhandled exception: PNP vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:26:00,737 WARNING  [ARM1 Recovery] Showing GUI — both arms paused
+2026-04-15 22:26:15,884 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:26:15,888 INFO     [ARM1 Recovery] choice=DECIDE_HUB  ARM2 override=APPLY
+2026-04-15 22:26:21,302 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:26:21,302 INFO     [ARM1 Recovery] Resetting both arms before resuming
+2026-04-15 22:26:21,305 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:26:21,305 INFO     [TaskSelector] → do_load (zone B empty)
+2026-04-15 22:26:21,307 INFO     [FetchInput] Entering state
+2026-04-15 22:26:21,865 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-15 22:26:21,866 INFO     [FetchInput] Grasp pose received: x=0.0253 y=-0.6135 z=0.0205
+2026-04-15 22:26:21,866 INFO     [IK] compute_pick_joints called — task_pos=[ 0.0253 -0.6135  0.0205] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-15 22:26:21,884 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.0253 -0.6135  0.0205]) pre=[-0.9111  0.5524 -0.6549 -1.9561  0.4679  2.3541 -1.0473] final=[-1.1233  0.7057 -0.4041 -1.9293  0.4688  2.5418 -1.0486] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-15 22:26:21,885 INFO     [FetchInput] IK pre_joints:   [-0.9111  0.5524 -0.6549 -1.9561  0.4679  2.3541 -1.0473]
+2026-04-15 22:26:21,885 INFO     [FetchInput] IK final_joints: [-1.1233  0.7057 -0.4041 -1.9293  0.4688  2.5418 -1.0486]
+2026-04-15 22:26:21,886 INFO     [FetchInput] Moving to pre-pick
+2026-04-15 22:26:25,293 INFO     [FetchInput] Descending to pick
+2026-04-15 22:26:27,502 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-15 22:26:28,504 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-15 22:26:32,011 ERROR    [FETCH_INPUT] Unhandled exception: PNP vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:26:32,014 WARNING  [ARM1 Recovery] Showing GUI — both arms paused
+2026-04-15 22:26:45,823 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:26:45,825 INFO     [ARM1 Recovery] choice=DECIDE_HUB  ARM2 override=APPLY
+2026-04-15 22:26:51,237 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:26:51,237 INFO     [ARM1 Recovery] Resetting both arms before resuming
+2026-04-15 22:26:51,241 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:26:51,241 INFO     [TaskSelector] → do_load (zone B empty)
+2026-04-15 22:26:51,248 INFO     [FetchInput] Entering state
+2026-04-15 22:26:51,849 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-15 22:26:51,850 INFO     [FetchInput] Grasp pose received: x=0.0258 y=-0.6133 z=0.0204
+2026-04-15 22:26:51,850 INFO     [IK] compute_pick_joints called — task_pos=[ 0.0258 -0.6133  0.0204] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-15 22:26:51,868 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.0258 -0.6133  0.0204]) pre=[-0.9114  0.5518 -0.6537 -1.9568  0.467   2.3549 -1.046 ] final=[-1.1237  0.7053 -0.4028 -1.9299  0.4676  2.5427 -1.0472] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-15 22:26:51,869 INFO     [FetchInput] IK pre_joints:   [-0.9114  0.5518 -0.6537 -1.9568  0.467   2.3549 -1.046 ]
+2026-04-15 22:26:51,869 INFO     [FetchInput] IK final_joints: [-1.1237  0.7053 -0.4028 -1.9299  0.4676  2.5427 -1.0472]
+2026-04-15 22:26:51,869 INFO     [FetchInput] Moving to pre-pick
+2026-04-15 22:26:55,326 INFO     [FetchInput] Descending to pick
+2026-04-15 22:26:57,533 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-15 22:26:58,534 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-15 22:27:02,041 ERROR    [FETCH_INPUT] Unhandled exception: PNP vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:27:02,048 WARNING  [ARM1 Recovery] Showing GUI — both arms paused
+2026-04-15 22:27:07,019 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:27:10,617 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:27:10,621 INFO     [ARM1 Recovery] choice=DECIDE_HUB  ARM2 override=APPLY
+2026-04-15 22:27:15,936 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:27:15,936 INFO     [ARM1 Recovery] Resetting both arms before resuming
+2026-04-15 22:27:15,939 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:27:15,939 INFO     [TaskSelector] → do_load (zone B empty)
+2026-04-15 22:27:15,940 INFO     [FetchInput] Entering state
+2026-04-15 22:27:16,506 INFO     [Service] /compute_grasps → success=True msg='Published 1 PnP poses.'
+2026-04-15 22:27:16,506 INFO     [FetchInput] Grasp pose received: x=0.0250 y=-0.6135 z=0.0204
+2026-04-15 22:27:16,506 INFO     [IK] compute_pick_joints called — task_pos=[ 0.025  -0.6135  0.0204] label_zone=None max_attempts=10 check_collisions=False arm_number=None
+2026-04-15 22:27:16,532 INFO     [IK] Arm? compute_pick_joints attempt 1/10 OK — target=([ 0.025  -0.6135  0.0204]) pre=[-0.9119  0.5527 -0.6546 -1.9559  0.4681  2.3542 -1.0478] final=[-1.1241  0.7061 -0.4038 -1.9289  0.4687  2.5419 -1.049 ] (FK err pre=0.0000 m final=0.0000 m)
+2026-04-15 22:27:16,533 INFO     [FetchInput] IK pre_joints:   [-0.9119  0.5527 -0.6546 -1.9559  0.4681  2.3542 -1.0478]
+2026-04-15 22:27:16,533 INFO     [FetchInput] IK final_joints: [-1.1241  0.7061 -0.4038 -1.9289  0.4687  2.5419 -1.049 ]
+2026-04-15 22:27:16,534 INFO     [FetchInput] Moving to pre-pick
+2026-04-15 22:27:19,987 INFO     [FetchInput] Descending to pick
+2026-04-15 22:27:22,193 INFO     [Service] /orio/pnp_cup/on → success=True msg='PnP Cup ON command sent'
+2026-04-15 22:27:23,194 INFO     [FetchInput] Retracting to pre-pick height
+2026-04-15 22:27:26,701 ERROR    [FETCH_INPUT] Unhandled exception: PNP vacuum failed to pick up item (expected=True, actual=False)
+2026-04-15 22:27:26,704 WARNING  [ARM1 Recovery] Showing GUI — both arms paused
+2026-04-15 22:27:30,003 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:27:31,255 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:27:31,469 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:27:39,419 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 22:27:43,117 INFO     [Recovery] Zones updated: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:43,120 INFO     [ARM1 Recovery] choice=DECIDE_HUB  ARM2 override=APPLY
+2026-04-15 22:27:48,533 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:27:48,533 INFO     [ARM1 Recovery] Resetting both arms before resuming
+2026-04-15 22:27:48,538 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:48,538 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:49,041 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:49,041 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:49,547 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:49,547 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:50,049 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:50,049 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:50,554 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:50,554 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:51,057 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:51,057 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:51,561 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:51,561 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:52,064 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:52,064 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:52,567 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:52,567 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:53,070 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:53,070 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:53,573 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:53,573 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:54,075 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:54,075 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:54,580 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:54,580 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:55,083 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:55,083 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:55,587 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:55,587 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:56,090 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:56,090 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:56,593 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:56,593 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:57,097 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:57,098 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:57,601 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:57,601 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:58,104 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:58,104 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:58,608 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:58,608 DEBUG    [TaskSelector] → wait (no actionable zones)
+2026-04-15 22:27:59,022 WARNING  [Main] Shutting down: turning off both vacuums
+2026-04-15 22:27:59,022 INFO     [Main] Total items placed at output: 0
+2026-04-15 22:27:59,024 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 22:27:59,025 INFO     [Service] /orio/lbl_cup/off → success=True msg='Labelling Cup OFF command sent'
+2026-04-15 22:27:59,112 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'NEEDS_LABEL', 'B': 'EMPTY'}  busy: {'A': False, 'B': True}
+2026-04-15 22:27:59,112 DEBUG    [TaskSelector] → wait (no actionable zones)

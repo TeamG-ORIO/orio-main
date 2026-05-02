@@ -1,0 +1,60 @@
+layout {
+    // This template gives you the standard Zellij UI bars at the top and bottom
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        children
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="Robot Autonomy Pipeline" focus=true {
+        pane split_direction="vertical" {
+            
+            // LEFT COLUMN: Core Infrastructure
+            pane split_direction="horizontal" {
+                pane name="roscore" {
+                    command "bash"
+                    args "-c" "roscore; exec bash"
+                }
+                pane name="Franka Doc" {
+                    command "bash"
+                    args "-c" "cd ~/Documents/frankapy && bash ./bash_scripts/start_control_pc.sh -u student -i iam-doc; exec bash"
+                }
+                pane name="Franka Sleepy" {
+                    command "bash"
+                    args "-c" "cd ~/Documents/frankapy && bash ./bash_scripts/start_control_pc_sleepy.sh -u iam-sleepy -i iamsleepy; exec bash"
+                }
+                pane name="Docker Core" {
+                    command "bash"
+                    // Waits 3 seconds for roscore before launching the container
+                    args "-c" "echo 'Waiting for roscore...'; sleep 3; cd ~/16662_RobotAutonomy && bash orio_run_docker.sh; exec bash"
+                }
+            }
+            
+            // RIGHT COLUMN: Perception & Control
+            pane split_direction="horizontal" {
+                pane name="ROS Cameras" {
+                    command "bash"
+                    // Waits 12s for Docker container to fully spin up
+                    args "-c" "echo 'Waiting for Docker to initialize...'; sleep 12; docker exec -it orio_docker_container bash -c 'source /home/ros_ws/devel/setup.bash && roslaunch manipulation cameras.launch'; exec bash"
+                }
+                pane name="Grasp Pose" {
+                    command "bash"
+                    args "-c" "echo 'Waiting for startup...'; sleep 12; cd ~/Documents/frankapy/grasp_pose && source venv/bin/activate && python3 perception_control_combined.py; exec bash"
+                }
+                pane name="Pneumatics" focus=true {
+                    command "bash"
+                    args "-c" "sleep 12; echo '====================================================='; echo ' ACTION REQUIRED: '; echo ' 1. Open Arduino IDE (in Downloads)'; echo ' 2. Flash the vacuum code to the board'; echo '====================================================='; read -p 'Press [Enter] when flashing is complete to start pneumatic control...'; cd ~/Documents/frankapy/grasp_pose && python3 pneumatic_control_recovery.py; exec bash"
+                }
+                pane name="State Machine" {
+                    command "bash"
+                    // Waits 15s to ensure cameras and grasp controllers are alive
+                    args "-c" "echo 'Waiting for nodes to initialize...'; sleep 15; docker exec -it orio_docker_container bash -c 'source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && python3 state_machine_integrated.py'; exec bash"
+                }
+            }
+        }
+    }
+}

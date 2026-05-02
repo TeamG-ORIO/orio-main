@@ -59,7 +59,7 @@ for trial in range(NUM_TRIALS):
     
     for pose_idx, target_pos in enumerate(target_positions):
         # Always start from reset position per instructions
-        fa.reset_joints()
+        fa.reset_joints(duration = 2)
         
         # Formulate initial guess
         initial_guess = [0.0] * chain_length
@@ -79,7 +79,7 @@ for trial in range(NUM_TRIALS):
             results[pose_idx]['target_joints'] = np.array(joint_angles[1:8])
             
         # Command the robot
-        fa.goto_joints(joint_angles[1:8])
+        fa.goto_joints(joint_angles[1:8], duration = 2)
         
         # ---------------------------------------------------------
         # 4. DATA EXTRACTION

@@ -1,0 +1,5 @@
+2026-04-14T18:03:33 [INFO    ] franka_prm: Arm1: offline collision checker initialized
+2026-04-14T18:03:33 [INFO    ] franka_prm: Arm1: connected to real robot
+2026-04-14T18:03:33 [INFO    ] franka_prm: Arm2: offline collision checker initialized
+2026-04-14T18:03:34 [INFO    ] franka_prm: Arm2: connected to real robot
+2026-04-14T18:03:40 [INFO    ] franka_prm: Arm1: cached 10 obstacles from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_none.p'

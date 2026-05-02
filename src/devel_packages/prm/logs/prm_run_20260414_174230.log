@@ -1,0 +1,36 @@
+2026-04-14T17:42:30 [INFO    ] franka_prm: Arm1: offline collision checker initialized
+2026-04-14T17:42:30 [INFO    ] franka_prm: Arm1: connected to real robot
+2026-04-14T17:42:30 [INFO    ] franka_prm: Arm2: offline collision checker initialized
+2026-04-14T17:42:31 [INFO    ] franka_prm: Arm2: connected to real robot
+2026-04-14T17:42:31 [INFO    ] franka_prm: Arm1 q_start=[-0.001 -0.785  0.    -2.356  0.     1.571  0.785]  goal=[0.4 0.  0.5]  yaw=0.000
+2026-04-14T17:42:31 [INFO    ] franka_prm: Arm2 q_start=[-0.065 -1.272  0.036 -2.707  0.034  1.436  0.736]  goal=[0.18, 0.001, 0.41]  yaw=0.000
+2026-04-14T17:42:31 [INFO    ] franka_prm: Arm2  q_init=[-0.065 -1.272  0.036 -2.707  0.034  1.436  0.736]  q_goal=[ 0.271  0.617  0.195 -2.014 -0.224  2.611 -0.062]
+2026-04-14T17:42:31 [INFO    ] franka_prm: Arm2: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p'
+2026-04-14T17:42:31 [INFO    ] franka_prm: IK solved  joints=[-0.076 -0.482  0.057 -2.066  0.026  1.584  0.759]  pos_err=0.0000 m
+2026-04-14T17:42:31 [INFO    ] franka_prm: Arm1  q_init=[-0.001 -0.785  0.    -2.356  0.     1.571  0.785]  q_goal=[-0.076 -0.482  0.057 -2.066  0.026  1.584  0.759]  [IK: 0.019s]
+2026-04-14T17:42:31 [INFO    ] franka_prm: Arm1: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_free.p'
+2026-04-14T17:42:31 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_free.p': 10000 nodes, 98424 edges, 6 components
+2026-04-14T17:42:31 [INFO    ] franka_prm:   obstacles in PRM: 8
+2026-04-14T17:42:31 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p': 10000 nodes, 95792 edges, 5 components
+2026-04-14T17:42:31 [INFO    ] franka_prm:   Arm1 FK  q_init -> EE pos [ 0.3071 -0.0001  0.469 ]
+2026-04-14T17:42:31 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T17:42:31 [INFO    ] franka_prm:   Arm1 FK  q_goal -> EE pos [ 0.4 -0.   0.5]
+2026-04-14T17:42:31 [INFO    ] franka_prm:   Arm2 FK  q_init -> EE pos [0.1801 0.0009 0.41  ]
+2026-04-14T17:42:31 [INFO    ] franka_prm:   Arm2 FK  q_goal -> EE pos [0.5315 0.2727 0.025 ]
+2026-04-14T17:42:31 [ERROR   ] franka_prm: Goal configuration is in collision: [ 0.271  0.617  0.195 -2.014 -0.224  2.611 -0.062]
+2026-04-14T17:42:31 [ERROR   ] franka_prm:   [q_goal] robot block 6 (joint_frame=4, center=[0.244 0.086 0.544]) collides with obstacle 5 (center=[ 0.469 -0.273  1.   ])
+2026-04-14T17:42:33 [INFO    ] franka_prm:  Arm1 find_neighbors(init): 20 found, 0 edge-blocked among top-20 candidates
+2026-04-14T17:42:33 [INFO    ] franka_prm:  Arm1 find_neighbors(goal): 20 found, 0 edge-blocked among top-20 candidates
+2026-04-14T17:42:33 [INFO    ] franka_prm: Neighbors found — init: 20, goal: 20
+2026-04-14T17:42:33 [INFO    ] franka_prm: Plan ready: 2 waypoints after shortcutting
+2026-04-14T17:42:33 [INFO    ] franka_prm: Arm1: PRM query took 2.366s
+2026-04-14T17:42:33 [INFO    ] franka_prm: [arm1] Waypoint execution: 1 segments at 0.500 rad/s
+2026-04-14T17:42:33 [INFO    ] franka_prm: [arm1] Moving to waypoint 1/1 (len=0.4317 rad, dur=0.86s): [-0.0762 -0.4822  0.0567 -2.0659  0.0263  1.5844  0.7591]
+2026-04-14T17:42:33 [INFO    ] franka_prm: [arm1]   FK EE pos: [ 0.4 -0.   0.5]  rot:
+[[ 1. -0. -0.]
+ [-0. -1. -0.]
+ [-0.  0. -1.]]
+2026-04-14T17:42:34 [INFO    ] franka_prm: [arm1] Waypoint 1/1 reached
+2026-04-14T17:42:34 [INFO    ] franka_prm: [arm1] Waypoint execution complete
+2026-04-14T18:02:35 [ERROR   ] franka_prm: Arm2: planning failed — aborting execution
+2026-04-14T18:02:35 [INFO    ] franka_prm: Both arms done.

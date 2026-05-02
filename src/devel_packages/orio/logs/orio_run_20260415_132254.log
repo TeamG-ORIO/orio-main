@@ -1,0 +1,149 @@
+2026-04-15 13:22:54,140 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260415_132254.log
+2026-04-15 13:22:54,140 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260415_132254.log
+2026-04-15 13:22:54,140 INFO     [Hardware] Initializing Robot Hardware...
+2026-04-15 13:22:54,666 INFO     [Hardware] Resetting both arms to home joints
+2026-04-15 13:23:04,956 INFO     [Hardware] Poses loaded from joint_angles.json
+2026-04-15 13:23:04,961 INFO     [Hardware] Initialization complete
+2026-04-15 13:23:04,965 INFO     [Main] Starting state machine execution
+2026-04-15 13:23:04,967 INFO     [GetLabel] Entering state
+2026-04-15 13:23:04,968 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:04,968 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:04,969 INFO     [FetchInput] Entering state
+2026-04-15 13:23:05,568 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:05,569 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:05,570 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:05,570 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:05,571 INFO     [FetchInput] Entering state
+2026-04-15 13:23:06,113 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:06,113 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6381 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:06,115 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:06,115 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:06,116 INFO     [FetchInput] Entering state
+2026-04-15 13:23:06,697 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:06,697 ERROR    [FetchInput] Grasp pose (x=0.0269 y=-0.6381 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:06,698 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:06,698 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:06,699 INFO     [FetchInput] Entering state
+2026-04-15 13:23:07,315 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:07,315 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:07,316 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:07,316 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:07,317 INFO     [FetchInput] Entering state
+2026-04-15 13:23:07,912 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:07,912 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6383 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:07,914 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:07,914 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:07,915 INFO     [FetchInput] Entering state
+2026-04-15 13:23:08,501 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:08,501 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:08,502 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:08,502 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:08,503 INFO     [FetchInput] Entering state
+2026-04-15 13:23:09,059 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:09,060 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:09,062 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:09,062 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:09,063 INFO     [FetchInput] Entering state
+2026-04-15 13:23:09,641 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:09,641 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:09,643 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:09,643 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:09,644 INFO     [FetchInput] Entering state
+2026-04-15 13:23:10,193 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:10,193 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:10,194 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:10,195 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:10,196 INFO     [FetchInput] Entering state
+2026-04-15 13:23:10,856 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:10,858 ERROR    [FetchInput] Grasp pose (x=0.0269 y=-0.6381 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:10,860 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:10,861 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:10,862 INFO     [FetchInput] Entering state
+2026-04-15 13:23:11,440 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:11,441 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:11,444 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:11,445 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:11,446 INFO     [FetchInput] Entering state
+2026-04-15 13:23:11,993 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:11,993 ERROR    [FetchInput] Grasp pose (x=0.0266 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:11,994 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:11,994 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:11,995 INFO     [FetchInput] Entering state
+2026-04-15 13:23:12,537 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:12,538 ERROR    [FetchInput] Grasp pose (x=0.0269 y=-0.6383 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:12,539 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:12,539 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:12,541 INFO     [FetchInput] Entering state
+2026-04-15 13:23:13,142 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:13,143 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:13,144 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:13,144 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:13,145 INFO     [FetchInput] Entering state
+2026-04-15 13:23:13,760 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:13,761 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6383 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:13,765 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:13,765 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:13,767 INFO     [FetchInput] Entering state
+2026-04-15 13:23:14,347 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:14,347 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:14,349 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:14,349 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:14,349 INFO     [FetchInput] Entering state
+2026-04-15 13:23:14,914 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:14,914 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6383 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:14,918 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:14,918 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:14,920 INFO     [FetchInput] Entering state
+2026-04-15 13:23:15,213 INFO     [Service] /orio/lbl_cup/on → success=True msg='Labelling Cup ON command sent'
+2026-04-15 13:23:15,470 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:15,470 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:15,472 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:15,472 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:15,473 INFO     [FetchInput] Entering state
+2026-04-15 13:23:16,014 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:16,014 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:16,015 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:16,015 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:16,016 INFO     [FetchInput] Entering state
+2026-04-15 13:23:16,553 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:16,554 ERROR    [FetchInput] Grasp pose (x=0.0269 y=-0.6383 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:16,555 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:16,555 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:16,556 INFO     [FetchInput] Entering state
+2026-04-15 13:23:17,109 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:17,111 ERROR    [FetchInput] Grasp pose (x=0.0267 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:17,113 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:17,113 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:17,115 INFO     [FetchInput] Entering state
+2026-04-15 13:23:17,696 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:17,696 ERROR    [FetchInput] Grasp pose (x=0.0269 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:17,697 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:17,697 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:17,698 INFO     [FetchInput] Entering state
+2026-04-15 13:23:18,248 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:18,248 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6383 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:18,249 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:18,249 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:18,250 INFO     [FetchInput] Entering state
+2026-04-15 13:23:18,722 INFO     [IK] pose_to_joints 'LABELLING_SAFE' depth_offset=0.0000 → joints=[-0.065  -1.2718  0.0356 -2.707   0.0343  1.4354  0.7355]
+2026-04-15 13:23:18,832 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:18,832 ERROR    [FetchInput] Grasp pose (x=0.0267 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:18,834 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:18,834 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:18,835 INFO     [FetchInput] Entering state
+2026-04-15 13:23:19,375 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:19,376 ERROR    [FetchInput] Grasp pose (x=0.0267 y=-0.6383 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:19,377 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:19,377 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:19,378 INFO     [FetchInput] Entering state
+2026-04-15 13:23:19,984 INFO     [Service] /compute_grasps → success=True msg='Published 2 PnP poses.'
+2026-04-15 13:23:19,984 ERROR    [FetchInput] Grasp pose (x=0.0268 y=-0.6382 z=0.0625) outside safe bounds {'x_min': 0.0, 'x_max': 0.55, 'y_min': 0.1, 'y_max': 0.8, 'z_min': 0.0, 'z_max': 0.5} — aborting
+2026-04-15 13:23:19,986 DEBUG    [TaskSelector] Evaluating zone states: {'A': 'EMPTY', 'B': 'EMPTY'}  busy: {'A': False, 'B': False}
+2026-04-15 13:23:19,986 INFO     [TaskSelector] → do_load (zone A empty)
+2026-04-15 13:23:19,987 INFO     [FetchInput] Entering state
+2026-04-15 13:23:20,056 WARNING  [Main] Shutting down: turning off both vacuums
+2026-04-15 13:23:20,057 INFO     [Main] Total items placed at output: 0
+2026-04-15 13:23:20,063 INFO     [Service] /orio/pnp_cup/off → success=True msg='PnP Cup OFF command sent'
+2026-04-15 13:23:20,065 INFO     [Service] /orio/lbl_cup/off → success=True msg='Labelling Cup OFF command sent'
+2026-04-15 13:23:20,542 ERROR    [Service] Call failed for /compute_grasps: service [/compute_grasps] returned no response
+2026-04-15 13:23:20,542 ERROR    [FetchInput] /compute_grasps service failed → exiting: failed

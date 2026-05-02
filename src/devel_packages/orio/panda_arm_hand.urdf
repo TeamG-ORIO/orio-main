@@ -158,7 +158,7 @@
   </joint>
   <link name="panda_link8"/>
   <joint name="panda_joint8" type="fixed">
-    <origin rpy="0 0 0" xyz="0 0 0.107"/>
+    <origin rpy="0 0 0" xyz="0 0 0.17"/>  <!-- changed from 0.107 to 0.17 -->
     <parent link="panda_link7"/>
     <child link="panda_link8"/>
     <axis xyz="0 0 0"/>
@@ -166,7 +166,7 @@
   <joint name="panda_hand_joint" type="fixed">
     <parent link="panda_link8"/>
     <child link="panda_hand"/>
-    <origin rpy="0 0 -0.7853981633974483" xyz="0 0 -0.04"/>
+    <origin rpy="0 0 -0.7853981633974483" xyz="0 0 0"/>
   </joint>
   <link name="panda_hand">
     <visual>

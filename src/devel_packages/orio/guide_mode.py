@@ -15,28 +15,30 @@ if __name__ == "__main__":
     
     start = time.time()
     print("Guide Mode Started")
-    fa = FrankaArm(with_gripper=False, old_gripper=False, robot_num=2)
+    fa = FrankaArm(with_gripper=False, old_gripper=False, robot_num=1)
     #fa.open_gripper()
-    fa.run_guide_mode(10000,block=False)
+    # fa.run_guide_mode(10000,block=False)
 
-    while((time.time()-start) < 10000):
-        input_num = int(input("Enter a number: "))
-        if (input_num==1):
-            T_ee_world = fa.get_pose()
-            print("pose: ")
-            print(T_ee_world)
-            time.sleep(0.01)
-        if(input_num==2):
-            joints = fa.get_joints()
-            print("joints: ")
-            print(joints)
-            time.sleep(0.01)
-        if(input_num==3):
-            fa.stop_skill()
-            break
-        if(input_num==4):
-            fa.stop_skill()
-            fa.reset_joints()
-            break
+    # while((time.time()-start) < 10000):
+    #     input_num = int(input("Enter a number: "))
+    #     if (input_num==1):
+    #         T_ee_world = fa.get_pose()
+    #         print("pose: ")
+    #         print(T_ee_world)
+    #         time.sleep(0.01)
+    #     if(input_num==2):
+    #         joints = fa.get_joints()
+    #         print("joints: ")
+    #         print(joints)
+    #         time.sleep(0.01)
+    #     if(input_num==3):
+    #         fa.stop_skill()
+    #         break
+    #     if(input_num==4):
+    #         fa.stop_skill()
+    #         fa.reset_joints()
+    #         break
 
-    print("done")
+    
+    # print("done")
+    fa.goto_joints([ 1.04322801, -0.00247779,  0.28103222, -2.71036647,  0.28632629,  2.64864927,  1.84203625], duration=5)

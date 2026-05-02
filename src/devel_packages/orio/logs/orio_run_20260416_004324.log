@@ -1,0 +1,4 @@
+2026-04-16 00:43:24,482 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260416_004324.log
+2026-04-16 00:43:24,482 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260416_004324.log
+2026-04-16 00:43:29,982 INFO     [Main] Operator input — item='11'  expiry='1234-56-78'
+2026-04-16 00:43:29,983 INFO     [Hardware] Initializing Robot Hardware...

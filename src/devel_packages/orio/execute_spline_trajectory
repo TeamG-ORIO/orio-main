@@ -1,0 +1,136 @@
+import numpy as np
+
+def _apply_fillets(self, plan):
+    """Replace sharp corners at intermediate waypoints with circular fillets.
+
+    At each interior waypoint q_i, the incoming segment (q_{i-1} -> q_i) and
+    outgoing segment (q_i -> q_{i+1}) are trimmed by fillet_radius in joint-space
+    distance. The fillet entry point `a` and exit point `b` are inserted in place
+    of q_i, and n_fillet points are sampled along the circular arc between them.
+
+    Waypoints where the adjacent segments are too short to accommodate the radius
+    are left as-is (sharp corner preserved with a warning).
+
+    Returns a list of numpy arrays representing the filleted path.
+    """
+    r = self.FILLET_RADIUS
+    n_fillet = 8  # arc sample points per fillet
+
+    if len(plan) <= 2:
+        return [np.asarray(p) for p in plan]
+
+    result = [np.asarray(plan[0])]
+
+    for i in range(1, len(plan) - 1):
+        q_prev = np.asarray(plan[i - 1])
+        q_curr = np.asarray(plan[i])
+        q_next = np.asarray(plan[i + 1])
+
+        d_in  = float(np.linalg.norm(q_curr - q_prev))
+        d_out = float(np.linalg.norm(q_next - q_curr))
+
+        # Clamp radius so it never consumes more than half of either segment
+        r_eff = min(r, d_in * 0.5, d_out * 0.5)
+        if r_eff < 1e-6:
+            log.warning("Fillet at waypoint %d skipped (segments too short: %.4f, %.4f)",
+                        i, d_in, d_out)
+            result.append(q_curr)
+            continue
+
+        t_in  = (q_curr - q_prev) / d_in   # unit tangent into corner
+        t_out = (q_next - q_curr) / d_out   # unit tangent out of corner
+
+        a = q_curr - r_eff * t_in   # fillet entry
+        b = q_curr + r_eff * t_out  # fillet exit
+
+        # Sample the arc: interpolate from a to b via the corner q_curr using
+        # a quadratic Bezier (a, q_curr, b) which gives a smooth blend
+        fillet_pts = []
+        for s in np.linspace(0.0, 1.0, n_fillet + 2)[1:-1]:
+            # Quadratic Bezier: (1-s)^2 * a + 2(1-s)s * q_curr + s^2 * b
+            pt = (1 - s)**2 * a + 2 * (1 - s) * s * q_curr + s**2 * b
+            fillet_pts.append(pt)
+
+        result.append(a)
+        result.extend(fillet_pts)
+        result.append(b)
+
+    result.append(np.asarray(plan[-1]))
+    log.info("Fillets applied: %d waypoints -> %d points (r=%.4f rad)",
+                len(plan), len(result), r)
+    return result
+
+def _build_spline_traj(joints_traj):
+    """Fillet corners then fit a C2 cubic spline, re-sampled with a
+    trapezoidal (ramp-up / cruise / ramp-down) speed profile.
+
+    Steps:
+        1. Apply joint-space fillets at every intermediate PRM waypoint.
+        2. Parameterize the filleted path by cumulative arc length.
+        3. Fit a CubicSpline (clamped zero-velocity endpoints).
+        4. Re-sample using a trapezoidal velocity profile in time so the
+            robot accelerates smoothly, cruises, then decelerates — rather
+            than moving at constant speed along the path.
+    """
+    plan = [joints_traj[i] for i in range(joints_traj.shape[0])]
+    filleted = self._apply_fillets(plan)
+
+    # Build cumulative arc-length parameter
+    pts = np.array(filleted)  # (M, 7)
+    dists = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    arc = np.concatenate([[0.0], np.cumsum(dists)])
+    total_arc = arc[-1]
+    if total_arc < 1e-9:
+        return pts  # degenerate: start == goal
+
+    # Normalize arc to [0, 1] for numerical stability
+    s = arc / total_arc
+
+    # Remove duplicate s values (can occur when consecutive fillet points are
+    # numerically identical), which would cause CubicSpline to raise ValueError.
+    unique_mask = np.concatenate([[True], np.diff(s) > 0])
+    s = s[unique_mask]
+    pts = pts[unique_mask]
+
+    # Fit cubic spline with clamped (zero velocity) endpoints for smooth start/stop
+    cs = CubicSpline(s, pts, bc_type=((1, np.zeros(pts.shape[1])),
+                                        (1, np.zeros(pts.shape[1]))))
+
+    if self.spline_speed is not None:
+        duration = total_arc / self.spline_speed
+        log.info("Spline duration from path length: %.4f rad / %.4f rad/s = %.3fs",
+                    total_arc, self.spline_speed, duration)
+    else:
+        duration = self.duration
+
+    total_pts = max(2, round(duration * self.STREAM_RATE_HZ))
+    t_uniform = np.linspace(0.0, duration, total_pts)
+
+    # Trapezoidal velocity profile: ramp up for t_ramp, cruise, ramp down for t_ramp.
+    # Uses 20% of duration for each ramp (capped so 2*t_ramp <= duration).
+    t_ramp = min(0.01 * duration, duration / 2.0)
+    t_cruise = duration - 2.0 * t_ramp
+    # Peak speed such that total arc travelled = 1.0 (normalised)
+    v_peak = 1.0 / (t_cruise + t_ramp)
+
+    def _s_of_t(t):
+        """Arc-length fraction s in [0,1] for scalar time t."""
+        if t <= t_ramp:
+            # Ramp up: s = 0.5 * a * t^2,  a = v_peak / t_ramp
+            return 0.5 * v_peak / t_ramp * t ** 2
+        elif t <= t_ramp + t_cruise:
+            # Cruise: s = area of ramp triangle + v_peak*(t - t_ramp)
+            return 0.5 * v_peak * t_ramp + v_peak * (t - t_ramp)
+        else:
+            # Ramp down (mirror of ramp up from the end)
+            t_rem = duration - t
+            return 1.0 - 0.5 * v_peak / t_ramp * t_rem ** 2
+
+    s_trap = np.array([_s_of_t(t) for t in t_uniform])
+    s_trap = np.clip(s_trap, 0.0, 1.0)
+    traj = cs(s_trap)
+
+    log.info("Spline traj (trapezoidal): %d filleted pts -> %d stream pts "
+                "(%.1fs, t_ramp=%.2fs @ %.0fHz)",
+                len(filleted), total_pts, duration, t_ramp, self.STREAM_RATE_HZ)
+    return traj

@@ -1,0 +1,271 @@
+2026-04-14T22:06:51 [INFO    ] franka_prm: Arm1: offline collision checker initialized
+2026-04-14T22:06:51 [INFO    ] franka_prm: Arm1: connected to real robot
+2026-04-14T22:06:51 [INFO    ] franka_prm: Arm2: offline collision checker initialized
+2026-04-14T22:06:51 [INFO    ] franka_prm: Arm2: connected to real robot
+2026-04-14T22:06:59 [INFO    ] franka_prm: Arm1  q_init=[-0.001 -0.786 -0.    -2.356 -0.001  1.571  0.785]  q_goal=[-0.496  0.68  -0.788 -1.534  0.513  1.998 -0.603]
+2026-04-14T22:06:59 [INFO    ] franka_prm: Arm1: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_none.p'
+2026-04-14T22:06:59 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_none.p': 10000 nodes, 97260 edges, 9 components
+2026-04-14T22:06:59 [INFO    ] franka_prm:   obstacles in PRM: 10
+2026-04-14T22:06:59 [INFO    ] franka_prm:   Arm1 FK  q_init -> EE pos [ 0.3069 -0.0004  0.469 ]
+2026-04-14T22:06:59 [INFO    ] franka_prm:   Arm1 FK  q_goal -> EE pos [ 0.3114 -0.6197  0.2199]
+2026-04-14T22:07:00 [INFO    ] franka_prm:  Arm1 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:00 [INFO    ] franka_prm:  Arm1 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:00 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:07:00 [INFO    ] franka_prm: Plan ready: 2 waypoints after shortcutting
+2026-04-14T22:07:00 [INFO    ] franka_prm: [arm1] Waypoint execution: 1 segments at 0.400 rad/s
+2026-04-14T22:07:00 [INFO    ] franka_prm: [arm1] Moving to waypoint 1/1 (len=2.4627 rad, dur=6.16s): [-0.4955  0.6805 -0.7884 -1.5339  0.5125  1.9983 -0.6029]
+2026-04-14T22:07:00 [INFO    ] franka_prm: [arm1]   FK EE pos: [ 0.3114 -0.6197  0.2199]  rot:
+[[ 1.  0. -0.]
+ [ 0. -1.  0.]
+ [-0. -0. -1.]]
+2026-04-14T22:07:06 [INFO    ] franka_prm: [arm1] Waypoint 1/1 reached
+2026-04-14T22:07:06 [INFO    ] franka_prm: [arm1] Waypoint execution complete
+2026-04-14T22:07:15 [INFO    ] franka_prm: Arm1  q_init=[-0.496  0.682 -0.788 -1.534  0.512  1.999 -0.603]  q_goal=[-0.243  1.    -0.173 -0.786  0.149  1.776  0.417]
+2026-04-14T22:07:15 [INFO    ] franka_prm: Arm1: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone1.p'
+2026-04-14T22:07:15 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone1.p': 10000 nodes, 97595 edges, 8 components
+2026-04-14T22:07:15 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:07:15 [INFO    ] franka_prm:   Arm1 FK  q_init -> EE pos [ 0.3112 -0.6195  0.2188]
+2026-04-14T22:07:15 [INFO    ] franka_prm:   Arm1 FK  q_goal -> EE pos [ 0.75   -0.25    0.2086]
+2026-04-14T22:07:15 [INFO    ] franka_prm:  Arm1 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:15 [INFO    ] franka_prm:  Arm1 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:15 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:07:20 [INFO    ] franka_prm: Plan ready: 3 waypoints after shortcutting
+2026-04-14T22:07:20 [INFO    ] franka_prm: [arm1] Waypoint execution: 2 segments at 0.400 rad/s
+2026-04-14T22:07:20 [INFO    ] franka_prm: [arm1] Moving to waypoint 1/2 (len=1.1355 rad, dur=2.84s): [-0.3946  0.7927 -0.0217 -0.9555  0.0157  1.7481 -0.4126]
+2026-04-14T22:07:20 [INFO    ] franka_prm: [arm1]   FK EE pos: [ 0.7012 -0.302   0.2811]  rot:
+[[ 0.7072  0.7071  0.    ]
+ [ 0.7071 -0.7072 -0.    ]
+ [-0.      0.     -1.    ]]
+2026-04-14T22:07:23 [INFO    ] franka_prm: [arm1] Waypoint 1/2 reached
+2026-04-14T22:07:23 [INFO    ] franka_prm: [arm1] Moving to waypoint 2/2 (len=0.9081 rad, dur=2.27s): [-0.2433  0.9998 -0.1733 -0.7856  0.1487  1.7762  0.4172]
+2026-04-14T22:07:23 [INFO    ] franka_prm: [arm1]   FK EE pos: [ 0.75   -0.25    0.2086]  rot:
+[[ 1. -0.  0.]
+ [-0. -1.  0.]
+ [ 0. -0. -1.]]
+2026-04-14T22:07:25 [INFO    ] franka_prm: [arm1] Waypoint 2/2 reached
+2026-04-14T22:07:25 [INFO    ] franka_prm: [arm1] Waypoint execution complete
+2026-04-14T22:07:37 [INFO    ] franka_prm: Arm2: cached 9 obstacles from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p'
+2026-04-14T22:07:37 [INFO    ] franka_prm: Arm2  q_init=[-0.065 -1.272  0.036 -2.707  0.035  1.436  0.736]  q_goal=[ 0.177  0.197  0.218 -2.063 -0.055  2.255  1.1  ]
+2026-04-14T22:07:37 [INFO    ] franka_prm: Arm2: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p'
+2026-04-14T22:07:38 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p': 10000 nodes, 95792 edges, 5 components
+2026-04-14T22:07:38 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:07:38 [INFO    ] franka_prm:   Arm2 FK  q_init -> EE pos [0.1801 0.0012 0.41  ]
+2026-04-14T22:07:38 [INFO    ] franka_prm:   Arm2 FK  q_goal -> EE pos [0.5362 0.2187 0.2199]
+2026-04-14T22:07:38 [INFO    ] franka_prm:  Arm2 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:38 [INFO    ] franka_prm:  Arm2 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:38 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:07:41 [INFO    ] franka_prm: Plan ready: 3 waypoints after shortcutting
+2026-04-14T22:07:41 [INFO    ] franka_prm: [arm2] Waypoint execution: 2 segments at 0.400 rad/s
+2026-04-14T22:07:41 [INFO    ] franka_prm: [arm2] Moving to waypoint 1/2 (len=2.0705 rad, dur=5.18s): [ 0.5517  0.3137  0.3267 -1.9915 -0.1315  2.2853  0.9499]
+2026-04-14T22:07:41 [INFO    ] franka_prm: [arm2]   FK EE pos: [0.3924 0.4574 0.1912]  rot:
+[[ 0.7071  0.7071 -0.    ]
+ [ 0.7071 -0.7071  0.    ]
+ [ 0.     -0.     -1.    ]]
+2026-04-14T22:07:46 [INFO    ] franka_prm: [arm2] Waypoint 1/2 reached
+2026-04-14T22:07:46 [INFO    ] franka_prm: [arm2] Moving to waypoint 2/2 (len=0.4475 rad, dur=1.12s): [ 0.1769  0.1973  0.2177 -2.0628 -0.0547  2.2548  1.0997]
+2026-04-14T22:07:46 [INFO    ] franka_prm: [arm2]   FK EE pos: [0.5362 0.2187 0.2199]  rot:
+[[ 0.9939  0.1105 -0.    ]
+ [ 0.1105 -0.9939  0.    ]
+ [-0.     -0.     -1.    ]]
+2026-04-14T22:07:48 [INFO    ] franka_prm: [arm2] Waypoint 2/2 reached
+2026-04-14T22:07:48 [INFO    ] franka_prm: [arm2] Waypoint execution complete
+2026-04-14T22:07:48 [INFO    ] franka_prm: Arm2  q_init=[ 0.177  0.198  0.218 -2.063 -0.055  2.255  1.099]  q_goal=[ 0.439  0.581 -0.048 -2.087  0.058  2.666  1.1  ]
+2026-04-14T22:07:48 [INFO    ] franka_prm: Arm2: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p'
+2026-04-14T22:07:48 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p': 10000 nodes, 95792 edges, 5 components
+2026-04-14T22:07:48 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:07:48 [INFO    ] franka_prm:   Arm2 FK  q_init -> EE pos [0.536  0.219  0.2195]
+2026-04-14T22:07:48 [INFO    ] franka_prm:   Arm2 FK  q_goal -> EE pos [0.5362 0.2187 0.0199]
+2026-04-14T22:07:48 [INFO    ] franka_prm:  Arm2 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:49 [INFO    ] franka_prm:  Arm2 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:49 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:07:49 [INFO    ] franka_prm: Plan ready: 2 waypoints after shortcutting
+2026-04-14T22:07:49 [INFO    ] franka_prm: [arm2] Waypoint execution: 1 segments at 0.400 rad/s
+2026-04-14T22:07:49 [INFO    ] franka_prm: [arm2] Moving to waypoint 1/1 (len=0.6845 rad, dur=1.71s): [ 0.4394  0.5808 -0.0483 -2.0865  0.058   2.6661  1.0997]
+2026-04-14T22:07:49 [INFO    ] franka_prm: [arm2]   FK EE pos: [0.5362 0.2187 0.0199]  rot:
+[[ 0.9995  0.0331  0.    ]
+ [ 0.0331 -0.9995 -0.    ]
+ [ 0.      0.     -1.    ]]
+2026-04-14T22:07:51 [INFO    ] franka_prm: [arm2] Waypoint 1/1 reached
+2026-04-14T22:07:51 [INFO    ] franka_prm: [arm2] Waypoint execution complete
+2026-04-14T22:07:52 [INFO    ] franka_prm: Arm2  q_init=[ 0.439  0.578 -0.047 -2.086  0.057  2.666  1.099]  q_goal=[ 0.177  0.197  0.218 -2.063 -0.055  2.255  1.1  ]
+2026-04-14T22:07:52 [INFO    ] franka_prm: Arm2: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p'
+2026-04-14T22:07:52 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p': 10000 nodes, 95792 edges, 5 components
+2026-04-14T22:07:52 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:07:52 [INFO    ] franka_prm:   Arm2 FK  q_init -> EE pos [0.537  0.2198 0.0216]
+2026-04-14T22:07:52 [INFO    ] franka_prm:   Arm2 FK  q_goal -> EE pos [0.5362 0.2187 0.2199]
+2026-04-14T22:07:53 [INFO    ] franka_prm:  Arm2 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:53 [INFO    ] franka_prm:  Arm2 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:53 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:07:53 [INFO    ] franka_prm: Plan ready: 2 waypoints after shortcutting
+2026-04-14T22:07:53 [INFO    ] franka_prm: [arm2] Waypoint execution: 1 segments at 0.400 rad/s
+2026-04-14T22:07:53 [INFO    ] franka_prm: [arm2] Moving to waypoint 1/1 (len=0.6828 rad, dur=1.71s): [ 0.1769  0.1973  0.2177 -2.0628 -0.0547  2.2548  1.0997]
+2026-04-14T22:07:53 [INFO    ] franka_prm: [arm2]   FK EE pos: [0.5362 0.2187 0.2199]  rot:
+[[ 0.9939  0.1105 -0.    ]
+ [ 0.1105 -0.9939  0.    ]
+ [-0.     -0.     -1.    ]]
+2026-04-14T22:07:55 [INFO    ] franka_prm: [arm2] Waypoint 1/1 reached
+2026-04-14T22:07:55 [INFO    ] franka_prm: [arm2] Waypoint execution complete
+2026-04-14T22:07:55 [INFO    ] franka_prm: Arm2  q_init=[ 0.177  0.198  0.218 -2.063 -0.054  2.255  1.099]  q_goal=[-0.065 -1.272  0.036 -2.707  0.034  1.435  0.736]
+2026-04-14T22:07:55 [INFO    ] franka_prm: Arm2: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p'
+2026-04-14T22:07:55 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone1.p': 10000 nodes, 95792 edges, 5 components
+2026-04-14T22:07:55 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:07:55 [INFO    ] franka_prm:   Arm2 FK  q_init -> EE pos [0.5359 0.2188 0.2192]
+2026-04-14T22:07:55 [INFO    ] franka_prm:   Arm2 FK  q_goal -> EE pos [0.18  0.001 0.41 ]
+2026-04-14T22:07:56 [INFO    ] franka_prm:  Arm2 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:56 [INFO    ] franka_prm:  Arm2 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:07:56 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:07:59 [INFO    ] franka_prm: Plan ready: 3 waypoints after shortcutting
+2026-04-14T22:07:59 [INFO    ] franka_prm: [arm2] Waypoint execution: 2 segments at 0.400 rad/s
+2026-04-14T22:07:59 [INFO    ] franka_prm: [arm2] Moving to waypoint 1/2 (len=0.4472 rad, dur=1.12s): [ 0.5517  0.3137  0.3267 -1.9915 -0.1315  2.2853  0.9499]
+2026-04-14T22:07:59 [INFO    ] franka_prm: [arm2]   FK EE pos: [0.3924 0.4574 0.1912]  rot:
+[[ 0.7071  0.7071 -0.    ]
+ [ 0.7071 -0.7071  0.    ]
+ [ 0.     -0.     -1.    ]]
+2026-04-14T22:08:00 [INFO    ] franka_prm: [arm2] Waypoint 1/2 reached
+2026-04-14T22:08:00 [INFO    ] franka_prm: [arm2] Moving to waypoint 2/2 (len=2.0704 rad, dur=5.18s): [-0.065  -1.2718  0.0356 -2.707   0.0343  1.4354  0.7355]
+2026-04-14T22:08:00 [INFO    ] franka_prm: [arm2]   FK EE pos: [0.18  0.001 0.41 ]  rot:
+[[ 1.  0. -0.]
+ [ 0. -1.  0.]
+ [-0. -0. -1.]]
+2026-04-14T22:08:05 [INFO    ] franka_prm: Arm1  q_init=[-0.    -0.785 -0.    -2.356  0.     1.571  0.785]  q_goal=[-0.564  0.359 -1.07  -2.072  0.394  2.211 -1.064]
+2026-04-14T22:08:05 [INFO    ] franka_prm: Arm1: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone1.p'
+2026-04-14T22:08:06 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone1.p': 10000 nodes, 97595 edges, 8 components
+2026-04-14T22:08:06 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:08:06 [INFO    ] franka_prm:   Arm1 FK  q_init -> EE pos [ 0.3071 -0.0002  0.469 ]
+2026-04-14T22:08:06 [INFO    ] franka_prm:   Arm1 FK  q_goal -> EE pos [-0.0046 -0.5735  0.2182]
+2026-04-14T22:08:06 [INFO    ] franka_prm: [arm2] Waypoint 2/2 reached
+2026-04-14T22:08:06 [INFO    ] franka_prm: [arm2] Waypoint execution complete
+2026-04-14T22:08:06 [INFO    ] franka_prm:  Arm1 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:08:06 [INFO    ] franka_prm:  Arm1 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:08:06 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:08:06 [INFO    ] franka_prm: Plan ready: 2 waypoints after shortcutting
+2026-04-14T22:08:06 [INFO    ] franka_prm: [arm1] Waypoint execution: 1 segments at 0.400 rad/s
+2026-04-14T22:08:06 [INFO    ] franka_prm: [arm1] Moving to waypoint 1/1 (len=2.6146 rad, dur=6.54s): [-0.5644  0.359  -1.0698 -2.0715  0.3944  2.2112 -1.0643]
+2026-04-14T22:08:06 [INFO    ] franka_prm: [arm1]   FK EE pos: [-0.0046 -0.5735  0.2182]  rot:
+[[ 1.  0.  0.]
+ [ 0. -1. -0.]
+ [ 0.  0. -1.]]
+2026-04-14T22:08:13 [INFO    ] franka_prm: [arm1] Waypoint 1/1 reached
+2026-04-14T22:08:13 [INFO    ] franka_prm: [arm1] Waypoint execution complete
+2026-04-14T22:08:22 [INFO    ] franka_prm: Arm1  q_init=[-0.565  0.36  -1.069 -2.073  0.395  2.211 -1.064]  q_goal=[ 0.297  0.994  0.053 -0.792 -0.046  1.785  1.122]
+2026-04-14T22:08:22 [INFO    ] franka_prm: Arm1: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone2.p'
+2026-04-14T22:08:22 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone2.p': 10000 nodes, 97631 edges, 5 components
+2026-04-14T22:08:22 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:08:22 [INFO    ] franka_prm:   Arm1 FK  q_init -> EE pos [-0.0046 -0.5728  0.217 ]
+2026-04-14T22:08:22 [INFO    ] franka_prm:   Arm1 FK  q_goal -> EE pos [0.75   0.25   0.2069]
+2026-04-14T22:08:22 [INFO    ] franka_prm:  Arm1 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:08:23 [INFO    ] franka_prm:  Arm1 find_neighbors(goal): 5 found, 22 edge-blocked among top-200 candidates
+2026-04-14T22:08:23 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:08:25 [INFO    ] franka_prm: Plan ready: 5 waypoints after shortcutting
+2026-04-14T22:08:25 [INFO    ] franka_prm: [arm1] Waypoint execution: 4 segments at 0.400 rad/s
+2026-04-14T22:08:25 [INFO    ] franka_prm: [arm1] Moving to waypoint 1/4 (len=1.9756 rad, dur=4.94s): [-0.2305 -0.194  -0.28   -1.1566 -0.0646  0.971  -0.542 ]
+2026-04-14T22:08:25 [INFO    ] franka_prm: [arm1]   FK EE pos: [ 0.3156 -0.2156  0.7147]  rot:
+[[ 0.7071  0.7071  0.    ]
+ [ 0.7071 -0.7071  0.    ]
+ [ 0.      0.     -1.    ]]
+2026-04-14T22:08:30 [INFO    ] franka_prm: [arm1] Waypoint 1/4 reached
+2026-04-14T22:08:30 [INFO    ] franka_prm: [arm1] Moving to waypoint 2/4 (len=0.7039 rad, dur=1.76s): [ 0.029  -0.19    0.0103 -1.1549  0.0024  0.9649  0.0405]
+2026-04-14T22:08:30 [INFO    ] franka_prm: [arm1]   FK EE pos: [0.3777 0.0161 0.717 ]  rot:
+[[ 0.7071  0.7071  0.    ]
+ [ 0.7071 -0.7071  0.    ]
+ [ 0.      0.     -1.    ]]
+2026-04-14T22:08:32 [INFO    ] franka_prm: [arm1] Waypoint 2/4 reached
+2026-04-14T22:08:32 [INFO    ] franka_prm: [arm1] Moving to waypoint 3/4 (len=0.4455 rad, dur=1.11s): [ 0.3272 -0.0028 -0.0655 -1.0261 -0.0002  1.0233  0.2615]
+2026-04-14T22:08:32 [INFO    ] franka_prm: [arm1]   FK EE pos: [0.4391 0.1175 0.6911]  rot:
+[[ 0.7071  0.7071 -0.    ]
+ [ 0.7071 -0.7071  0.    ]
+ [-0.     -0.     -1.    ]]
+2026-04-14T22:08:34 [INFO    ] franka_prm: [arm1] Waypoint 3/4 reached
+2026-04-14T22:08:34 [INFO    ] franka_prm: [arm1] Moving to waypoint 4/4 (len=1.5444 rad, dur=3.86s): [ 0.2974  0.994   0.0533 -0.7915 -0.0457  1.7847  1.1216]
+2026-04-14T22:08:34 [INFO    ] franka_prm: [arm1]   FK EE pos: [0.75   0.25   0.2069]  rot:
+[[ 1.  0.  0.]
+ [ 0. -1. -0.]
+ [ 0.  0. -1.]]
+2026-04-14T22:08:38 [INFO    ] franka_prm: [arm1] Waypoint 4/4 reached
+2026-04-14T22:08:38 [INFO    ] franka_prm: [arm1] Waypoint execution complete
+2026-04-14T22:08:48 [INFO    ] franka_prm: Arm1  q_init=[ 0.    -0.785  0.    -2.356 -0.     1.571  0.786]  q_goal=[-0.247  1.001 -0.171 -0.753  0.146  1.746  0.42 ]
+2026-04-14T22:08:48 [INFO    ] franka_prm: Arm1: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_free.p'
+2026-04-14T22:08:48 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_free.p': 10000 nodes, 98424 edges, 6 components
+2026-04-14T22:08:48 [INFO    ] franka_prm:   obstacles in PRM: 8
+2026-04-14T22:08:48 [INFO    ] franka_prm:   Arm1 FK  q_init -> EE pos [ 0.3071 -0.      0.469 ]
+2026-04-14T22:08:48 [INFO    ] franka_prm:   Arm1 FK  q_goal -> EE pos [ 0.75   -0.25    0.2199]
+2026-04-14T22:08:48 [INFO    ] franka_prm:  Arm1 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:08:48 [INFO    ] franka_prm:  Arm1 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:08:48 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:08:49 [INFO    ] franka_prm: Plan ready: 2 waypoints after shortcutting
+2026-04-14T22:08:49 [INFO    ] franka_prm: [arm1] Waypoint execution: 1 segments at 0.400 rad/s
+2026-04-14T22:08:49 [INFO    ] franka_prm: [arm1] Moving to waypoint 1/1 (len=2.4568 rad, dur=6.14s): [-0.247   1.0014 -0.1714 -0.7534  0.1464  1.7462  0.4196]
+2026-04-14T22:08:49 [INFO    ] franka_prm: [arm1]   FK EE pos: [ 0.75   -0.25    0.2199]  rot:
+[[ 1.  0.  0.]
+ [ 0. -1.  0.]
+ [ 0. -0. -1.]]
+2026-04-14T22:08:50 [INFO    ] franka_prm: Arm2: cached 9 obstacles from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone2.p'
+2026-04-14T22:08:51 [INFO    ] franka_prm: Arm2  q_init=[-0.065 -1.272  0.036 -2.707  0.035  1.436  0.736]  q_goal=[ 1.553 -1.673  0.28  -0.464  2.885  1.331  1.1  ]
+2026-04-14T22:08:51 [INFO    ] franka_prm: Arm2: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone2.p'
+2026-04-14T22:08:51 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm2_labelZone2.p': 10000 nodes, 95993 edges, 2 components
+2026-04-14T22:08:51 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:08:51 [INFO    ] franka_prm:   Arm2 FK  q_init -> EE pos [0.1801 0.0012 0.41  ]
+2026-04-14T22:08:51 [INFO    ] franka_prm:   Arm2 FK  q_goal -> EE pos [-0.0692 -0.8208  0.2168]
+2026-04-14T22:08:52 [INFO    ] franka_prm:  Arm2 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:08:52 [INFO    ] franka_prm:  Arm2 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:08:52 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:08:52 [INFO    ] franka_prm: Plan ready: 2 waypoints after shortcutting
+2026-04-14T22:08:52 [INFO    ] franka_prm: [arm2] Waypoint execution: 1 segments at 0.400 rad/s
+2026-04-14T22:08:52 [INFO    ] franka_prm: [arm2] Moving to waypoint 1/1 (len=4.0169 rad, dur=10.04s): [ 1.5535 -1.6731  0.2798 -0.4643  2.8849  1.3312  1.0997]
+2026-04-14T22:08:52 [INFO    ] franka_prm: [arm2]   FK EE pos: [-0.0692 -0.8208  0.2168]  rot:
+[[-0.4377 -0.8988  0.0224]
+ [-0.8948  0.4331 -0.1081]
+ [ 0.0875 -0.0674 -0.9939]]
+2026-04-14T22:08:55 [INFO    ] franka_prm: [arm1] Waypoint 1/1 reached
+2026-04-14T22:08:55 [INFO    ] franka_prm: [arm1] Waypoint execution complete
+2026-04-14T22:09:01 [INFO    ] franka_prm: Arm1  q_init=[-0.247  1.004 -0.171 -0.754  0.147  1.747  0.419]  q_goal=[-1.309 -0.881  2.534 -1.053  0.47   1.808  2.082]
+2026-04-14T22:09:01 [INFO    ] franka_prm: Arm1: using PRM file '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone1.p'
+2026-04-14T22:09:01 [INFO    ] franka_prm: PRM loaded from '/home/ros_ws/src/devel_packages/prm/prm_files_10k/myPRM_arm1_labelZone1.p': 10000 nodes, 97595 edges, 8 components
+2026-04-14T22:09:01 [INFO    ] franka_prm:   obstacles in PRM: 9
+2026-04-14T22:09:01 [INFO    ] franka_prm:   Arm1 FK  q_init -> EE pos [ 0.7498 -0.2496  0.2175]
+2026-04-14T22:09:01 [INFO    ] franka_prm:   Arm1 FK  q_goal -> EE pos [0.065  0.76   0.2349]
+2026-04-14T22:09:01 [INFO    ] franka_prm:  Arm1 find_neighbors(init): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:09:01 [INFO    ] franka_prm:  Arm1 find_neighbors(goal): 5 found, 0 edge-blocked among top-200 candidates
+2026-04-14T22:09:01 [INFO    ] franka_prm: Neighbors found — init: 5, goal: 5
+2026-04-14T22:09:04 [INFO    ] franka_prm: Plan ready: 5 waypoints after shortcutting
+2026-04-14T22:09:04 [INFO    ] franka_prm: [arm1] Waypoint execution: 4 segments at 0.400 rad/s
+2026-04-14T22:09:04 [INFO    ] franka_prm: [arm1] Moving to waypoint 1/4 (len=1.7074 rad, dur=4.27s): [-0.759   0.043   0.1745 -1.481  -0.0075  1.5234 -0.585 ]
+2026-04-14T22:09:04 [INFO    ] franka_prm: [arm1]   FK EE pos: [ 0.4682 -0.3135  0.5174]  rot:
+[[ 0.7071  0.7071  0.    ]
+ [ 0.7071 -0.7071  0.    ]
+ [ 0.      0.     -1.    ]]
+2026-04-14T22:09:06 [CRITICAL] franka_prm: [arm2] _execute_plan_waypoints crashed
+Traceback (most recent call last):
+  File "/home/ros_ws/src/devel_packages/orio/../prm/franka_prm_single_arm.py", line 1099, in _execute_plan_waypoints
+    self.fa.goto_joints(q, duration=dur, dynamic=False)
+  File "/home/ros_ws/src/git_packages/frankapy/frankapy/franka_arm.py", line 684, in goto_joints
+    self._send_goal(goal,
+  File "/home/ros_ws/src/git_packages/frankapy/frankapy/franka_arm.py", line 308, in _send_goal
+    self.wait_for_skill()
+  File "/home/ros_ws/src/git_packages/frankapy/frankapy/franka_arm.py", line 190, in wait_for_skill
+    while not self.is_skill_done():
+  File "/home/ros_ws/src/git_packages/frankapy/frankapy/franka_arm.py", line 237, in is_skill_done
+    self.wait_for_franka_interface()
+  File "/home/ros_ws/src/git_packages/frankapy/frankapy/franka_arm.py", line 183, in wait_for_franka_interface
+    raise FrankaArmCommException('FrankaInterface status not ready for {}s'.format(
+frankapy.exceptions.FrankaArmCommException: Communication w/ FrankaInterface ran into a problem: FrankaInterface status not ready for 10s. FrankaInterface is probably not ready.
+2026-04-14T22:09:08 [INFO    ] franka_prm: [arm1] Waypoint 1/4 reached
+2026-04-14T22:09:08 [INFO    ] franka_prm: [arm1] Moving to waypoint 2/4 (len=0.9136 rad, dur=2.28s): [-0.8714 -0.4574  0.6146 -1.5211  0.2822  1.1539 -0.19  ]
+2026-04-14T22:09:08 [INFO    ] franka_prm: [arm1]   FK EE pos: [0.3895 0.0368 0.6458]  rot:
+[[ 0.7071  0.7071  0.    ]
+ [ 0.7071 -0.7071 -0.    ]
+ [-0.      0.     -1.    ]]
+2026-04-14T22:09:11 [INFO    ] franka_prm: [arm1] Waypoint 2/4 reached
+2026-04-14T22:09:11 [INFO    ] franka_prm: [arm1] Moving to waypoint 3/4 (len=1.6518 rad, dur=4.13s): [-0.856  -0.5028  1.6162 -1.0674  0.554   1.1554  1.0113]
+2026-04-14T22:09:11 [INFO    ] franka_prm: [arm1]   FK EE pos: [0.1416 0.5429 0.5988]  rot:
+[[ 0.7071  0.7071  0.    ]
+ [ 0.7071 -0.7071 -0.0001]
+ [-0.      0.0001 -1.    ]]
+2026-04-14T22:09:15 [INFO    ] franka_prm: [arm1] Waypoint 3/4 reached
+2026-04-14T22:09:15 [INFO    ] franka_prm: [arm1] Moving to waypoint 4/4 (len=1.6640 rad, dur=4.16s): [-1.3093 -0.8807  2.5337 -1.0529  0.4703  1.8078  2.0819]
+2026-04-14T22:09:15 [INFO    ] franka_prm: [arm1]   FK EE pos: [0.065  0.76   0.2349]  rot:
+[[ 1. -0. -0.]
+ [-0. -1.  0.]
+ [-0. -0. -1.]]
+2026-04-14T22:09:19 [INFO    ] franka_prm: [arm1] Waypoint 4/4 reached
+2026-04-14T22:09:19 [INFO    ] franka_prm: [arm1] Waypoint execution complete

@@ -1,0 +1,5 @@
+2026-04-22 14:32:34,716 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260422_143234.log
+2026-04-22 14:32:34,716 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260422_143234.log
+2026-04-22 14:32:43,600 INFO     [Main] Operator input — item='gk'  expiry='1234-56-78'
+2026-04-22 14:32:43,600 INFO     [Hardware] Initializing Robot Hardware...
+2026-04-22 14:32:44,220 INFO     [Hardware] Resetting both arms to home joints

@@ -1,0 +1,9 @@
+{
+  "poses": 5,
+  "zone": "1",
+  "arm": 1,
+  "mode": "sim-only",
+  "seed": 42,
+  "traj": "minjerk",
+  "duration": 20.0
+}

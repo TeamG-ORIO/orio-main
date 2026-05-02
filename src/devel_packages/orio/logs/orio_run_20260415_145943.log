@@ -1,0 +1,3 @@
+2026-04-15 14:59:43,282 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260415_145943.log
+2026-04-15 14:59:43,282 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260415_145943.log
+2026-04-15 14:59:43,282 INFO     [Hardware] Initializing Robot Hardware...

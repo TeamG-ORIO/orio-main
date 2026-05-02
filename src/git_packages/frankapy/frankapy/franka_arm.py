@@ -26,6 +26,8 @@ from .franka_arm_state_client import FrankaArmStateClient
 from .franka_constants import FrankaConstants as FC
 from .franka_interface_common_definitions import *
 from .ros_utils import BoxesPublisher
+from .proto_utils import sensor_proto2ros_msg, make_sensor_group_msg
+from .proto import JointPositionVelocitySensorMessage, ShouldTerminateSensorMessage
 
 
 class FrankaArm:
@@ -686,6 +688,139 @@ class FrankaArm:
 
         if dynamic:
             sleep(FC.DYNAMIC_SKILL_WAIT_TIME)
+
+
+    def goto_joints_with_velocity(self,
+                    joints,
+                    joint_velocities,
+                    duration=5,
+                    use_impedance=True,
+                    buffer_time=FC.DEFAULT_TERM_BUFFER_TIME,
+                    force_thresholds=None,
+                    torque_thresholds=None,
+                    cartesian_impedances=None,
+                    joint_impedances=None,
+                    k_gains=None,
+                    d_gains=None,
+                    ignore_errors=True,
+                    ignore_virtual_walls=False,
+                    skill_desc='GoToJointsWithVelocity'):
+        """
+        Commands Arm to the given joint configuration and goal velocity using a
+        cubic Hermite spline trajectory. The spline interpolates from the current
+        joint position and velocity to the specified goal position and velocity.
+
+        Parameters
+        ----------
+            joints : :obj:`list`
+                A list of 7 numbers that correspond to goal joint angles in radians.
+            joint_velocities : :obj:`list`
+                A list of 7 numbers that correspond to goal joint velocities in
+                radians/second at the end of the motion.
+            duration : :obj:`float`
+                How much time this robot motion should take.
+            use_impedance : :obj:`bool`
+                Function uses the Franka joint impedance controller by default.
+                If True, uses our joint impedance controller.
+            buffer_time : :obj:`float`
+                How much extra time the termination handler will wait
+                before stopping the skill after duration has passed.
+            force_thresholds : :obj:`list`
+                List of 6 floats corresponding to force limits on translation
+                (xyz) and rotation about (xyz) axes. Default is None.
+                If None then will not stop on contact.
+            torque_thresholds : :obj:`list`
+                List of 7 floats corresponding to torque limits on each joint.
+                Default is None. If None then will not stop on contact.
+            cartesian_impedances : :obj:`list`
+                List of 6 floats corresponding to impedances on translation
+                (xyz) and rotation about (xyz) axes. Default is None. If None
+                then will use default impedances.
+            joint_impedances : :obj:`list`
+                List of 7 floats corresponding to impedances on each joint.
+                This is used when use_impedance is False. Default is None.
+                If None then will use default impedances.
+            k_gains : :obj:`list`
+                List of 7 floats corresponding to the k_gains on each joint for
+                our impedance controller. This is used when use_impedance is
+                True. Default is None. If None then will use default k_gains.
+            d_gains : :obj:`list`
+                List of 7 floats corresponding to the d_gains on each joint for
+                our impedance controller. This is used when use_impedance is
+                True. Default is None. If None then will use default d_gains.
+            ignore_errors : :obj:`bool`
+                Function ignores errors by default. If False, errors and some
+                exceptions can be thrown.
+            ignore_virtual_walls : :obj:`bool`
+                Function checks for collisions with virtual walls by default.
+                If True, the robot no longer checks, which may be dangerous.
+            skill_desc : :obj:`str`
+                Skill description to use for logging on the Control PC.
+
+        Raises:
+            ValueError: If is_joints_reachable(joints) returns False
+        """
+        joints = np.array(joints).tolist()
+        joint_velocities = np.array(joint_velocities).tolist()
+
+        if not self.is_joints_reachable(joints):
+            raise ValueError('Joints not reachable!')
+        if not ignore_virtual_walls and self.is_joints_in_collision_with_boxes(joints):
+            raise ValueError('Target joints in collision with virtual walls!')
+
+        if use_impedance:
+            skill = Skill(SkillType.ImpedanceControlSkill,
+                          TrajectoryGeneratorType.CubicHermiteSplineJointTrajectoryGenerator,
+                          feedback_controller_type=FeedbackControllerType.JointImpedanceFeedbackController,
+                          termination_handler_type=TerminationHandlerType.TimeTerminationHandler,
+                          skill_desc=skill_desc)
+        else:
+            skill = Skill(SkillType.JointPositionSkill,
+                          TrajectoryGeneratorType.CubicHermiteSplineJointTrajectoryGenerator,
+                          feedback_controller_type=FeedbackControllerType.SetInternalImpedanceFeedbackController,
+                          termination_handler_type=TerminationHandlerType.TimeTerminationHandler,
+                          skill_desc=skill_desc)
+
+        skill.add_initial_sensor_values(FC.EMPTY_SENSOR_VALUES)
+        skill.set_joint_impedances(use_impedance, cartesian_impedances, joint_impedances, k_gains, d_gains)
+
+        if not skill.check_for_contact_params(buffer_time, force_thresholds, torque_thresholds):
+            skill.add_time_termination_params(buffer_time)
+
+        skill.add_run_time(duration)
+        goal = skill.create_goal()
+
+        self._send_goal(goal,
+                        cb=lambda x: skill.feedback_callback(x),
+                        block=False,
+                        ignore_errors=ignore_errors)
+
+        # Wait until the control PC is subscribed to the sensor topic before
+        # publishing.  A bare sleep(DYNAMIC_SKILL_WAIT_TIME) is not reliable:
+        # if the message fires before the skill's subscriber is ready it is
+        # dropped and the robot never receives the spline target.
+        t_wait_start = time()
+        while self._sensor_pub.get_num_connections() == 0:
+            if time() - t_wait_start > 5.0:
+                raise FrankaArmCommException(
+                    'goto_joints_with_velocity: sensor publisher has no '
+                    'subscribers after 5s — is franka-interface running?')
+            sleep(1e-3)
+
+        sensor_msg = JointPositionVelocitySensorMessage(
+            id=1,
+            timestamp=rospy.Time.now().to_time(),
+            seg_run_time=duration,
+            joints=joints,
+            joint_vels=joint_velocities)
+
+        ros_msg = make_sensor_group_msg(
+            trajectory_generator_sensor_msg=sensor_proto2ros_msg(
+                sensor_msg, SensorDataMessageType.JOINT_POSITION_VELOCITY))
+
+        self.publish_sensor_values(ros_msg)
+        sleep(duration + buffer_time)
+
 
     def execute_cartesian_velocities(self,
                     cartesian_velocities,
