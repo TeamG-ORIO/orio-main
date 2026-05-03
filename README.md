@@ -14,18 +14,18 @@
 
 
 ### Setup the PC:
-1. Clone the [16662_RobotAutonomy](https://github.com/vib2810/16662_RobotAutonomy) repository at `/home/student`
+1. Clone the [orio-main](https://github.com/TeamG-ORIO/orio-main) repository
    ```bash
-   git clone git@github.com:vib2810/16662_RobotAutonomy.git
+   git clone git@github.com:TeamG-ORIO/orio-main.git
    ```
 
 2. Build the Docker Container:
    ```
-   cd 16662_RobotAutonomy
-   docker build -t frankapy_docker .
+   docker build -t orio_dev_env -f Dockerfile_orio .
    ```
 
 ### Running Demo Code:
+**Note:** Perform this process for both arms
 **Note:** Replace `[control-pc-name]` with the name of the control pc, for example, `iam-snowwhite`
 1. Unlock robot joints
    ```bash
@@ -49,31 +49,10 @@
 4. **Running the Docker Container:**
    - Run the Docker Container. In a new terminal:
       ```bash
-      bash run_docker.sh
+      bash orio_run_docker.sh
       ```
 
    - Attach a terminal connected to the Docker Container:
       ```bash
-      bash terminal_docker.sh
+      bash orio_terminal_docker.sh
       ```
-
-5. **Run the MoveIt Server:** <br>
-    In a new terminal
-    ```bash
-    bash terminal_docker.sh
-    roslaunch manipulation demo_frankapy.launch
-    ```
-
-6. **Run the demo_moveit.py script:** <br>
-    In a new terminal
-    ```bash
-    bash terminal_docker.sh
-    rosrun manipulation demo_moveit.py
-    ```
-    The script initially displays a planned path on rviz. Please checkout the comments in the main function in the demo_moveit.py script to run this script on the robot.  
-
-### Other Useful Commands:
-- To grant edit permissions for files created inside the docker container (in the `/data` shared volume)
-   ```bash
-   bash claim_files.sh
-   ```
