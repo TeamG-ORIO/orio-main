@@ -56,3 +56,23 @@
       ```bash
       bash orio_terminal_docker.sh
       ```
+      
+5. **Running the System:**
+   - Run each of the following in a separate Docker terminal:
+      ```bash
+      roslaunch manipulation cameras.launch
+      ```
+      ```bash
+      cd src/devel_packages/orio
+      python3 state_machine_encore.py
+      ```
+      ```bash
+      cd src/devel_packages/orio/rfid
+      python3 db_manager.py
+      ```
+      ```bash
+      cd src/devel_packages/orio/rfid
+      python3 inventory_dashboard.py
+      ```
+   
+
