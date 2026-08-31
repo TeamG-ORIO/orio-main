@@ -1,3 +1,0 @@
-2026-04-16 00:37:56,859 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260416_003756.log
-2026-04-16 00:37:56,859 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260416_003756.log
-2026-04-16 00:38:09,216 WARNING  [Main] Setup cancelled by operator — exiting cleanly.

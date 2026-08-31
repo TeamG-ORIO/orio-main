@@ -52,7 +52,7 @@ layout {
                 pane name="State Machine" {
                     command "bash"
                     // Waits 15s to ensure cameras and grasp controllers are alive
-                    args "-c" "echo 'Waiting for nodes to initialize...'; sleep 15; docker exec -it orio_docker_container bash -c 'source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && python3 state_machine_integrated.py'; exec bash"
+                    args "-c" "echo 'Waiting for nodes to initialize...'; sleep 15; docker exec -it orio_docker_container bash -c 'source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && python3 state_machine.py'; exec bash"
                 }
             }
         }

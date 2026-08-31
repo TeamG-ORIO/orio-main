@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>orio</name>
+  <version>0.1.0</version>
+  <description>
+    ORIO dual-arm pick-place-label ROS nodes: the SMACH state machine, pneumatic
+    (vacuum) control, and diagnostics. Depends on orio_core for the pure logic.
+  </description>
+  <maintainer email="student@todo.todo">ORIO Team G</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>custom_msgs</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <exec_depend>orio_core</exec_depend>
+  <exec_depend>smach</exec_depend>
+  <exec_depend>smach_ros</exec_depend>
+
+  <export>
+  </export>
+</package>

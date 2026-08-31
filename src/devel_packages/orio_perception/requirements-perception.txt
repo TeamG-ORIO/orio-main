@@ -1,0 +1,14 @@
+# Host venv deps for the ORIO perception node (NOT the ROS/system python).
+# ROS deps (rospy, sensor_msgs, ...) come from the sourced ROS env, not pip.
+numpy
+scipy
+Pillow
+open3d
+torch
+segment-anything
+
+# GroundingDINO: editable install from the fork submodule (patched CUDA kernel):
+#   pip install -e GroundingDINO/
+
+# Model weights (download separately, git-ignored, ~1GB):
+#   weights/groundingdino_swint_ogc.pth, SAM_weights/sam_vit_b_01ec64.pth

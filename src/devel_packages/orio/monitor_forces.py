@@ -2,7 +2,7 @@
 """
 monitor_forces.py
 -----------------
-Run in a separate terminal while state_machine_integrated_waypts.py is running.
+Run in a separate terminal while state_machine.py is running.
 Displays live scrolling plots of:
   - Joint torques  (7 joints, Nm)    via fa.get_joint_torques()
   - EE force       (Fx Fy Fz, N)     via fa.get_ee_force_torque()

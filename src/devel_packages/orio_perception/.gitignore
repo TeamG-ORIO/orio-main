@@ -1,0 +1,9 @@
+# Per-machine perception runtime assets (see README) — never committed.
+venv/
+weights/
+SAM_weights/
+# runtime debug image dumps
+Xtion_imgs/
+ZED_imgs/
+Segmented_imgs/
+*.pcd

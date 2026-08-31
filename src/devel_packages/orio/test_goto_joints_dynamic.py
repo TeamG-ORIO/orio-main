@@ -21,7 +21,7 @@ import time
 import numpy as np
 
 # ── local imports (must be on PYTHONPATH) ─────────────────────────────────────
-sys.path.insert(0, "/home/ros_ws/src/devel_packages/prm")
+sys.path.insert(0, "/home/ros_ws/research/prm")
 import SimpleFranka
 import RobotUtil as rt
 

@@ -21,7 +21,7 @@ python3 pneumatic_control_recovery.py
 
 student@iam-abuela:~/16662_RobotAutonomy$ bash run_docker.sh
 root@iam-abuela:/home/ros_ws/src/devel_packages/orio# pip install ikpy
-root@iam-abuela:/home/ros_ws/src/devel_packages/orio# python3 state_machine_integrated.py 
+root@iam-abuela:/home/ros_ws/src/devel_packages/orio# python3 state_machine_integrated.py (state_machine_encore.py)
 
 
 

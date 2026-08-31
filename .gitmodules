@@ -1,6 +1,19 @@
-[submodule "src/git_packages/src/git_packages/openni2_camera"]
-	path = src/git_packages/src/git_packages/openni2_camera
-	url = https://github.com/ros-drivers/openni2_camera.git
-[submodule "src/git_packages/src/git_packages/zed-ros-wrapper"]
-	path = src/git_packages/src/git_packages/zed-ros-wrapper
-	url = https://github.com/stereolabs/zed-ros-wrapper.git
+[submodule "src/git_packages/openni2_camera"]
+	path = src/git_packages/openni2_camera
+	url = git@github.com:TeamG-ORIO/openni2_camera.git
+	branch = ros1
+[submodule "src/devel_packages/orio_rfid/RFID/python-mercuryapi"]
+	path = src/devel_packages/orio_rfid/RFID/python-mercuryapi
+	url = git@github.com:TeamG-ORIO/python-mercuryapi.git
+	branch = master
+[submodule "src/git_packages/zed-ros-wrapper"]
+	path = src/git_packages/zed-ros-wrapper
+	url = git@github.com:TeamG-ORIO/zed-ros-wrapper.git
+	branch = master
+[submodule "reference/control_pcs/franka-interface"]
+	path = reference/control_pcs/franka-interface
+	url = git@github.com:TeamG-ORIO/franka-interface.git
+[submodule "src/devel_packages/orio_perception/GroundingDINO"]
+	path = src/devel_packages/orio_perception/GroundingDINO
+	url = git@github.com:TeamG-ORIO/GroundingDINO.git
+	branch = akshitr/orio-local-patches

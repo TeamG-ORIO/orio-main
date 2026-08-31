@@ -1,14 +1,70 @@
-.vscode
+# ============================================================
+#  ORIO .gitignore  —  Phase 1: team-scalable git hygiene
+#  Principle: never track build products, bytecode, logs, or
+#  editor cruft. Track SOURCE (incl. docker/bringup scripts).
+# ============================================================
+
+# --- ROS / catkin build products ---
+build/
+build_isolated/
+devel/
+devel_isolated/
+install/
+.catkin_workspace
+
+# --- Logs ---
+logs/
+*.log
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# --- Data / runtime artifacts ---
 data/**
 !data/.gitkeep
-build/
 dataset/
-devel/
+*.npy
+*.bag
+
+# --- ML model weights (huge; download at setup, never commit) ---
+*.pth
+*.pt
+*.ckpt
+*.onnx
+
+# --- SQLite ---
+# Ignore mutable runtime DBs; track only the canonical seed. db_manager seeds the
+# runtime copy from seed_medical_inventory.db on first run (see orio_rfid).
+*.db
+*.sqlite
+*.sqlite3
+!src/devel_packages/orio_rfid/seed_medical_inventory.db
+
+# --- Regenerable debug captures ---
 depth_image.png
 depth_raw.npy
-Dockerfile.zed
 rgb_image.png
-save_one_frame.py
-save_zed_frame.py
-zed_run_docker.sh
-zed_terminal_docker.sh
+
+# --- Editor / OS cruft ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+__MACOSX/
+.DS_Store
+
+# frankapy: per-machine client, git-ignored (see orio_bringup README).
+src/git_packages/frankapy/
+
+# research/prm: local only, not pushed
+research/prm/
