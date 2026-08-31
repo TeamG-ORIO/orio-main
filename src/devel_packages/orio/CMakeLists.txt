@@ -8,13 +8,7 @@ find_package(catkin REQUIRED)
 
 catkin_package()
 
-## Node entrypoints.
-## NOTE (Phase 4): the demo is currently launched from the source directory
-## (`python3 state_machine.py`) because several scripts import sibling modules
-## and load data files by relative path. Running these via `rosrun orio <node>`
-## from the install space will require the scripts/ + config/ reorg and
-## path-robustness fixes tracked as a later step. Installing them here makes the
-## package well-formed and the nodes discoverable.
+## Node entrypoints (also run directly from source during the demo).
 catkin_install_python(PROGRAMS
   state_machine.py
   pneumatic_control_recovery.py

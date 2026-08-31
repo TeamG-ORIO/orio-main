@@ -1,8 +1,4 @@
-# ============================================================
-#  ORIO .gitignore  —  Phase 1: team-scalable git hygiene
-#  Principle: never track build products, bytecode, logs, or
-#  editor cruft. Track SOURCE (incl. docker/bringup scripts).
-# ============================================================
+# ORIO .gitignore — never track build products, bytecode, logs, or editor cruft.
 
 # --- ROS / catkin build products ---
 build/
