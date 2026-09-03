@@ -15,6 +15,9 @@ bash src/devel_packages/orio_bringup/docker/build.sh   # -> orio_docker
 
 Run: `bash orio_run_docker.sh` (state machine) and `bash zed_run_docker.sh` (cameras).
 
+`docker/Dockerfile.dexnet` builds a separate `orio/dexnet` image for DexNet 4.0 suction
+grasping — see [DEXNET.md](DEXNET.md).
+
 ### frankapy in the container
 
 frankapy is a **per-machine client** — not rebuilt here, not a tracked submodule.

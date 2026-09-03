@@ -2,6 +2,7 @@
 # One-command ORIO demo bring-up via tmuxifier.
 #   bash launch_demo.sh              # full demo
 #   bash launch_demo.sh --no-vacuum  # dry-run, no pneumatics
+#   bash launch_demo.sh --dexnet     # add the DexNet suction-planner pane
 # Env: ORIO_FRANKAPY, ORIO_PERCEPTION_ASSETS, ORIO_CONTAINER.
 # No `set -u`: tmuxifier init.sh is not nounset-safe.
 set -eo pipefail
@@ -14,6 +15,7 @@ export TMUXIFIER_LAYOUT_PATH="$ORIO_BRINGUP_TMUX/layouts"
 for arg in "$@"; do
     case "$arg" in
         --no-vacuum|--disable-pneumatics) export ORIO_NO_VACUUM=1 ;;
+        --dexnet) export ORIO_DEXNET=1 ;;
         -h|--help) sed -n '2,6p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac

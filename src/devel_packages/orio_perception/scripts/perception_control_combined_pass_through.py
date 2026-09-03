@@ -16,10 +16,11 @@ from PIL import Image
 from scipy.spatial.transform import Rotation as R_scipy
 
 # ROS Imports
-from sensor_msgs.msg import Image as RosImage
+from sensor_msgs.msg import Image as RosImage, CameraInfo
 from geometry_msgs.msg import PoseArray, Pose
 from std_msgs.msg import Float32
 from std_srvs.srv import Trigger, TriggerResponse
+from custom_msgs.srv import PlanDexnetGrasp
 
 # SAM & GroundingDINO
 from segment_anything import sam_model_registry, SamPredictor
@@ -73,6 +74,8 @@ PNP_TF_YAML     = os.path.join(_REPO_ROOT, "src/devel_packages/manipulation/conf
 PNP_CROP_Y1, PNP_CROP_Y2 = 40, 405
 PNP_CROP_X1, PNP_CROP_X2 = 115, 515
 
+# Fallback only; the node prefers the driver's camera_info at startup.
+PNP_FULL_WIDTH, PNP_FULL_HEIGHT = 640, 480
 PNP_INTRINSICS = o3d.camera.PinholeCameraIntrinsic(
     o3d.camera.PinholeCameraIntrinsicParameters.PrimeSenseDefault)
 
@@ -162,11 +165,250 @@ class CombinedPerceptionNode:
         self.lbl_pub2       = rospy.Publisher(LBL_ZONE2_TOPIC,      PoseArray, queue_size=1)
         self.depth_query_pub = rospy.Publisher('/grasp_point_depth', Float32,   queue_size=1)
 
+        # ── Grasp backend config ──────────────────────────────────────────────
+        self.grasp_backend = rospy.get_param('~grasp_backend', 'classical')
+        self.dexnet_cfg    = rospy.get_param('~dexnet', {})
+        self.classical_cfg = rospy.get_param('~classical', {})
+        self.camera_cfg    = rospy.get_param('~camera', {})
+        rospy.loginfo("Grasp backend: %s", self.grasp_backend)
+
+        self.pnp_intrinsics = self._resolve_pnp_intrinsics()
+
+        # A/B log: one CSV row per grasp attempt, either backend.
+        self.ab_log_path = rospy.get_param(
+            '~ab_log', os.path.join(HOME, 'grasp_attempts.csv'))
+        self._init_ab_log()
+
+        self._dexnet_srv = None
+        if self.grasp_backend == 'dexnet':
+            self._dexnet_srv = self._connect_dexnet()
+
         # ── Services ──────────────────────────────────────────────────────────
         rospy.Service('/compute_grasps',           Trigger, self.handle_pnp)
         rospy.Service('/compute_grasps_labelling', Trigger, self.handle_labelling)
         rospy.Service('/get_depth_at_grasp',       Trigger, self.handle_depth_at_grasp)
         rospy.loginfo("Both perception services ready.")
+
+    # ── Grasp backend helpers ─────────────────────────────────────────────────
+
+    def _resolve_pnp_intrinsics(self):
+        """Intrinsics for the PnP camera, preferring the driver's camera_info.
+
+        The hardcoded PrimeSenseDefault (fx=fy=525.0) is a generic reference, not this
+        device. DexNet deprojects depth pixels to 3D and estimates local surface
+        normals, so it is more sensitive to intrinsics error than the classical
+        RANSAC path, which averages over thousands of points.
+        """
+        if not self.camera_cfg.get('use_camera_info', True):
+            m = self.camera_cfg.get('manual_intrinsics')
+            if m:
+                rospy.loginfo("Using manual intrinsics: fx=%.2f fy=%.2f cx=%.2f cy=%.2f",
+                              m['fx'], m['fy'], m['cx'], m['cy'])
+                return o3d.camera.PinholeCameraIntrinsic(
+                    width=PNP_FULL_WIDTH, height=PNP_FULL_HEIGHT,
+                    fx=m['fx'], fy=m['fy'], cx=m['cx'], cy=m['cy'])
+            rospy.logwarn("use_camera_info is false but manual_intrinsics is unset; "
+                          "falling back to PrimeSense defaults")
+            return PNP_INTRINSICS
+
+        topic   = self.camera_cfg.get('info_topic', '/camera/rgb/camera_info')
+        timeout = float(self.camera_cfg.get('info_timeout', 5.0))
+        try:
+            info = rospy.wait_for_message(topic, CameraInfo, timeout=timeout)
+        except rospy.ROSException:
+            rospy.logwarn("No %s within %.1fs; falling back to PrimeSense defaults "
+                          "(fx=fy=525.0)", topic, timeout)
+            return PNP_INTRINSICS
+
+        rospy.loginfo("Camera intrinsics from %s: fx=%.2f fy=%.2f cx=%.2f cy=%.2f (%dx%d)",
+                      topic, info.K[0], info.K[4], info.K[2], info.K[5],
+                      info.width, info.height)
+        return o3d.camera.PinholeCameraIntrinsic(
+            width=info.width, height=info.height,
+            fx=info.K[0], fy=info.K[4], cx=info.K[2], cy=info.K[5])
+
+    def _cropped_intrinsics(self):
+        """PnP intrinsics shifted into the cropped-image frame."""
+        fx, fy = self.pnp_intrinsics.get_focal_length()
+        cx, cy = self.pnp_intrinsics.get_principal_point()
+        return o3d.camera.PinholeCameraIntrinsic(
+            width=PNP_CROP_X2 - PNP_CROP_X1,
+            height=PNP_CROP_Y2 - PNP_CROP_Y1,
+            fx=fx, fy=fy, cx=cx - PNP_CROP_X1, cy=cy - PNP_CROP_Y1)
+
+    def _connect_dexnet(self):
+        name    = self.dexnet_cfg.get('service', '/dexnet_grasp_planner/plan_grasp')
+        timeout = float(self.dexnet_cfg.get('service_timeout', 30.0))
+        rospy.loginfo("Waiting up to %.0fs for DexNet service %s ...", timeout, name)
+        try:
+            rospy.wait_for_service(name, timeout=timeout)
+        except rospy.ROSException:
+            rospy.logerr("DexNet service %s unavailable. Is the container running? "
+                         "(orio_bringup/docker/run_dexnet.sh)", name)
+            return None
+        rospy.loginfo("Connected to DexNet service %s", name)
+        return rospy.ServiceProxy(name, PlanDexnetGrasp)
+
+    # ── A/B logging ───────────────────────────────────────────────────────────
+
+    def _init_ab_log(self):
+        try:
+            if not os.path.exists(self.ab_log_path):
+                with open(self.ab_log_path, 'w') as f:
+                    f.write("stamp,backend,planned,q_value,tilt_deg,"
+                            "x,y,z,plan_time_s,reason\n")
+            rospy.loginfo("Grasp attempt log: %s", self.ab_log_path)
+        except OSError as exc:
+            rospy.logwarn("Could not open A/B log %s: %s", self.ab_log_path, exc)
+            self.ab_log_path = None
+
+    def _log_attempt(self, backend, planned, grasp_data, plan_time, reason=""):
+        """One CSV row per attempt. Rejections are logged too, with planned=0."""
+        if not self.ab_log_path:
+            return
+        q = tilt = float('nan')
+        x = y = z = float('nan')
+        if grasp_data:
+            q = grasp_data.get("score", float('nan'))
+            tilt = grasp_data.get("tilt_deg", float('nan'))
+            if np.isnan(tilt) and "rotation" in grasp_data:
+                # Classical path does not compute tilt; derive it from the pose so
+                # both backends are comparable in the log.
+                tilt = float(np.degrees(np.arccos(np.clip(
+                    -np.asarray(grasp_data["rotation"])[2, 2], -1.0, 1.0))))
+            x, y, z = grasp_data["center"]
+        try:
+            with open(self.ab_log_path, 'a') as f:
+                f.write("%.3f,%s,%d,%.4f,%.2f,%.4f,%.4f,%.4f,%.3f,%s\n" % (
+                    rospy.Time.now().to_sec(), backend, 1 if planned else 0,
+                    q, tilt, x, y, z, plan_time, reason.replace(",", ";")))
+        except OSError as exc:
+            rospy.logwarn("A/B log write failed: %s", exc)
+
+    # ── DexNet grasp planning ─────────────────────────────────────────────────
+
+    def _depth_to_metres(self, depth, depth_msg):
+        """Depth as float32 metres. decode_ros_images returns raw units."""
+        d = np.asarray(depth, dtype=np.float32)
+        if depth_msg.encoding == '16UC1':
+            d = d / DEPTH_UNIT_PNP
+        # 32FC1 from the openni2 driver is already metres.
+        return d
+
+    def _build_bin_mask(self, depth_m):
+        """Bin segmask from the depth band alone - no semantic segmentation.
+
+        The crop is already applied by the caller. DexNet needs a mask to avoid
+        ranking the bin floor as a great suction target; for bin picking a depth
+        band is sufficient and deterministic.
+        """
+        lo = float(self.dexnet_cfg.get('bin_depth_min', 0.60))
+        hi = float(self.dexnet_cfg.get('bin_depth_max', 1.20))
+        mask = ((depth_m >= lo) & (depth_m <= hi) & np.isfinite(depth_m))
+        return (mask.astype(np.uint8) * 255)
+
+    @staticmethod
+    def _to_image_msg(arr, encoding, frame_id):
+        msg = RosImage()
+        msg.header.frame_id = frame_id
+        msg.height, msg.width = arr.shape[0], arr.shape[1]
+        msg.encoding = encoding
+        msg.is_bigendian = 0
+        msg.step = arr.strides[0]
+        msg.data = arr.tobytes()
+        return msg
+
+    def _camera_info_msg(self, intr, frame_id):
+        fx, fy = intr.get_focal_length()
+        cx, cy = intr.get_principal_point()
+        info = CameraInfo()
+        info.header.frame_id = frame_id
+        info.height, info.width = intr.height, intr.width
+        info.K = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
+        return info
+
+    def _plan_grasp_dexnet(self, color_crop, depth_crop, depth_msg):
+        """Plan one suction grasp with DexNet. Returns (grasp_data, message)."""
+        if self._dexnet_srv is None:
+            return None, "DexNet service unavailable."
+
+        depth_m = self._depth_to_metres(depth_crop, depth_msg)
+        segmask = self._build_bin_mask(depth_m)
+        if not segmask.any():
+            return None, ("Bin mask empty - no depth in [%.2f, %.2f] m."
+                          % (self.dexnet_cfg.get('bin_depth_min', 0.60),
+                             self.dexnet_cfg.get('bin_depth_max', 1.20)))
+
+        intr = self._cropped_intrinsics()
+        frame = "pnp_camera"
+        colour = np.ascontiguousarray(color_crop[:, :, :3], dtype=np.uint8)
+
+        try:
+            resp = self._dexnet_srv(
+                self._to_image_msg(colour, "rgb8", frame),
+                self._to_image_msg(np.ascontiguousarray(depth_m), "32FC1", frame),
+                self._camera_info_msg(intr, frame),
+                self._to_image_msg(np.ascontiguousarray(segmask), "mono8", frame))
+        except rospy.ServiceException as exc:
+            return None, "DexNet service call failed: %s" % exc
+
+        g = resp.grasp
+        if not resp.success:
+            rospy.logwarn("DexNet rejected grasp (q=%.4f): %s", g.q_value, resp.message)
+            return None, resp.message
+
+        # Camera-frame pose -> world. The approach axis is the X column of the
+        # rotation gqcnn builds, not Z (see SuctionPoint2D.pose()).
+        quat = [g.pose.orientation.x, g.pose.orientation.y,
+                g.pose.orientation.z, g.pose.orientation.w]
+        rot_cam = R_scipy.from_quat(quat).as_matrix()
+        approach_cam = rot_cam[:, 0]
+
+        centre_cam = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
+        centre_world = self.tf_pnp[:3, :3].dot(centre_cam) + self.tf_pnp[:3, 3]
+        approach_world = self.tf_pnp[:3, :3].dot(approach_cam)
+        approach_world /= np.linalg.norm(approach_world)
+
+        # Approach points from the surface toward the camera; the gripper travels
+        # along its negation. Normalise so it points down onto the object (-Z world).
+        if approach_world[2] > 0:
+            approach_world = -approach_world
+
+        tilt_deg = float(np.degrees(np.arccos(np.clip(-approach_world[2], -1.0, 1.0))))
+        max_tilt = float(self.dexnet_cfg.get('max_tilt_deg', 45.0))
+        if tilt_deg > max_tilt:
+            msg = ("Rejected on tilt: %.1f deg > max_tilt_deg %.1f (q=%.4f)"
+                   % (tilt_deg, max_tilt, g.q_value))
+            rospy.logwarn(msg)
+            return None, msg
+
+        rotation = self._rotation_from_approach(approach_world)
+        rospy.loginfo("DexNet grasp q=%.4f tilt=%.1f deg at world (%.3f, %.3f, %.3f)",
+                      g.q_value, tilt_deg, *centre_world)
+        return {
+            "center": centre_world,
+            "rotation": rotation,
+            "normal": -approach_world,
+            "score": float(g.q_value),
+            "tilt_deg": tilt_deg,
+            "center_px": (float(g.center_px[0]), float(g.center_px[1])),
+        }, ""
+
+    @staticmethod
+    def _rotation_from_approach(approach_world):
+        """Full rotation from a suction approach axis, taken as tool Z.
+
+        Suction is rotationally symmetric about the approach vector, so the
+        remaining axes are chosen consistently rather than meaningfully.
+        """
+        z_axis = approach_world / np.linalg.norm(approach_world)
+        ref = np.array([1.0, 0.0, 0.0])
+        if abs(np.dot(ref, z_axis)) > 0.95:
+            ref = np.array([0.0, 1.0, 0.0])
+        x_axis = ref - np.dot(ref, z_axis) * z_axis
+        x_axis /= np.linalg.norm(x_axis)
+        y_axis = np.cross(z_axis, x_axis)
+        return np.column_stack([x_axis, y_axis, z_axis])
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -244,6 +486,47 @@ class CombinedPerceptionNode:
         except Exception:
             return None, None
 
+    def _handle_pnp_dexnet(self, res, color_crop, depth_crop):
+        """DexNet branch of handle_pnp. Publishes a length-1 PoseArray."""
+        t0 = rospy.Time.now()
+        with self._inference_lock:
+            grasp_data, message = self._plan_grasp_dexnet(
+                color_crop, depth_crop, self.pnp_depth_msg)
+        plan_time = (rospy.Time.now() - t0).to_sec()
+
+        if grasp_data is None:
+            self._log_attempt('dexnet', False, None, plan_time, message)
+            res.success = False
+            res.message = message or "DexNet produced no valid grasp."
+            return res
+
+        self._log_attempt('dexnet', True, grasp_data, plan_time)
+
+        pose_array_msg = PoseArray()
+        pose_array_msg.header.stamp = rospy.Time.now()
+        pose_array_msg.header.frame_id = self.target_frame
+
+        quat = R_scipy.from_matrix(grasp_data["rotation"]).as_quat()
+        p = Pose()
+        p.position.x, p.position.y, p.position.z = grasp_data["center"]
+        p.position.x += float(self.dexnet_cfg.get('offset_x', 0.0))
+        p.position.y += float(self.dexnet_cfg.get('offset_y', 0.0))
+        p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = quat
+        pose_array_msg.poses.append(p)
+
+        # Pixel coords for the depth-at-grasp service, in cropped-image space.
+        centre_px = grasp_data.get("center_px")
+        if centre_px is not None:
+            self._last_grasp_pixel_x = float(centre_px[0])
+            self._last_grasp_pixel_y = float(centre_px[1])
+            self._last_pnp_depth_msg = self.pnp_depth_msg
+
+        self.pnp_pub.publish(pose_array_msg)
+        res.success = True
+        res.message = ("DexNet grasp q=%.4f tilt=%.1f deg"
+                       % (grasp_data["score"], grasp_data["tilt_deg"]))
+        return res
+
     # ── Pick-and-place service ────────────────────────────────────────────────
 
     def handle_pnp(self, req):
@@ -266,6 +549,11 @@ class CombinedPerceptionNode:
 
         Image.fromarray(color_base).save(
             os.path.join(HOME, "Xtion_imgs", f"input_color_{rospy.Time.now().secs}.png"))
+
+        # DexNet plans straight from depth; it needs no segmentation, so it branches
+        # before GroundingDINO/SAM run. Those still serve the labelling path.
+        if self.grasp_backend == 'dexnet':
+            return self._handle_pnp_dexnet(res, color_base, depth_base)
 
         best_masks, boxes_xyxy, phrases, logits = self._detect_and_segment(color_base)
         if best_masks is None:
@@ -291,15 +579,8 @@ class CombinedPerceptionNode:
         Image.fromarray(debug_img).save(
             os.path.join(HOME, "Segmented_imgs", f"debug_masks_{rospy.Time.now().secs}.png"))
 
-        # Build cropped intrinsics
-        intr = PNP_INTRINSICS
-        cropped_intr = o3d.camera.PinholeCameraIntrinsic(
-            width  = PNP_CROP_X2 - PNP_CROP_X1,
-            height = PNP_CROP_Y2 - PNP_CROP_Y1,
-            fx=intr.get_focal_length()[0],   fy=intr.get_focal_length()[1],
-            cx=intr.get_principal_point()[0] - PNP_CROP_X1,
-            cy=intr.get_principal_point()[1] - PNP_CROP_Y1,
-        )
+        # Build cropped intrinsics (from camera_info when available)
+        cropped_intr = self._cropped_intrinsics()
 
         pose_array_msg = PoseArray()
         pose_array_msg.header.stamp    = rospy.Time.now()
@@ -335,11 +616,12 @@ class CombinedPerceptionNode:
                 quat = R_scipy.from_matrix(grasp_data["rotation"]).as_quat()
                 p = Pose()
                 p.position.x, p.position.y, p.position.z = grasp_data["center"]
-                # X and Y Offsets
-                p.position.x += OFFSET_X
-                p.position.y += OFFSET_Y
+                # X and Y Offsets (config-backed; defaults match the previous constants)
+                p.position.x += float(self.classical_cfg.get('offset_x', OFFSET_X))
+                p.position.y += float(self.classical_cfg.get('offset_y', OFFSET_Y))
                 p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = quat
                 pose_array_msg.poses.append(p)
+                self._log_attempt('classical', True, grasp_data, 0.0)
                 rospy.loginfo(p)
                 # Store the pixel-space grasp center for the depth-query service.
                 # grasp_data["center"] is in the cropped-image coordinate system before

@@ -17,3 +17,6 @@
 	path = src/devel_packages/orio_perception/GroundingDINO
 	url = git@github.com:TeamG-ORIO/GroundingDINO.git
 	branch = akshitr/orio-local-patches
+[submodule "src/devel_packages/gqcnn"]
+	path = src/devel_packages/gqcnn
+	url = https://github.com/BerkeleyAutomation/gqcnn.git

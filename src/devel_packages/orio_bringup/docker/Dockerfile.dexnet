@@ -1,0 +1,35 @@
+# DexNet 4.0 (FC-GQCNN-4.0-SUCTION) grasp planner.
+# NVIDIA's TF1 fork is used because stock TF 1.15 targets CUDA 10.0 and has no Ampere
+# (SM 8.6) kernels. 23.03 is the last -tf1- image NVIDIA published; it is Ubuntu 20.04 /
+# Python 3.8, matching ROS Noetic on the host so rospy and generated messages mount in.
+FROM nvcr.io/nvidia/tensorflow:23.03-tf1-py3
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libspatialindex-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+        "numpy<1.24" "scipy<1.11" \
+        autolab-core autolab-perception \
+        matplotlib opencv-python-headless scikit-learn scikit-image \
+        psutil gputil imageio rospkg
+
+# visualization pulls trimesh[easy], whose deps (lxml, shapely, manifold3d) do not build
+# on py38. It cannot be skipped: gqcnn/grasping/image_grasp_sampler.py imports
+# Visualizer2D at module level. Install it and its importable deps without resolution.
+# ruamel.yaml<0.18 is required: 0.18 removed yaml.load(), which autolab_core still calls.
+RUN pip install --no-cache-dir --no-deps \
+        visualization trimesh pyrender pyglet PyOpenGL freetype-py \
+    && pip install --no-cache-dir "shapely<2.1" networkx "ruamel.yaml<0.18"
+
+# gqcnn's setup.py appends tensorflow-gpu<=1.15.0, which has no cp38 wheel; --no-deps
+# keeps the container's 1.15.5+nv.
+COPY gqcnn /opt/gqcnn
+RUN pip install --no-deps -e /opt/gqcnn
+
+COPY orio_bringup/docker/dexnet_grasp_planner.py /opt/dexnet_grasp_planner.py
+
+ENV PYTHONPATH=/opt/ros/noetic/lib/python3/dist-packages:/catkin_ws/devel/lib/python3/dist-packages:$PYTHONPATH
+ENV MPLBACKEND=Agg
+
+CMD ["python", "/opt/dexnet_grasp_planner.py"]

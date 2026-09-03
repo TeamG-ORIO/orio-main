@@ -1,0 +1,15 @@
+# Motion params for pick-place-label.py. Defaults reproduce the historic behaviour:
+# approach straight down, ignoring the published grasp orientation.
+
+# Honour the grasp orientation from /grasp_poses. Enable together with
+# orio_perception's grasp_backend: dexnet.
+use_grasp_orientation: false
+
+# Refuse picks whose approach axis deviates further than this from vertical.
+# Set 0.0 to accept vertical grasps only - use this first to confirm the motion
+# refactor changed nothing, then raise to 45.
+max_tilt_deg: 45.0
+
+# Waypoint distances along the approach axis (world +Z when vertical).
+pre_grasp_dist: 0.10
+contact_dist: 0.05

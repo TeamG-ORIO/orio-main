@@ -1,11 +1,13 @@
 # tmuxifier session layout for the ORIO demo: 8 readiness-gated panes in one
-# tiled window. Launched by launch_demo.sh (exports the ORIO_* env vars).
+# tiled window (9 with ORIO_DEXNET=1). Launched by launch_demo.sh (exports the
+# ORIO_* env vars).
 
 REPO="${ORIO_REPO:-$HOME/16662_RobotAutonomy}"
 FRANKAPY="${ORIO_FRANKAPY:-$REPO/src/git_packages/frankapy}"   # control-PC start scripts
 CONTAINER="${ORIO_CONTAINER:-orio_docker_container}"
 WF="${ORIO_BRINGUP_TMUX:-$REPO/src/devel_packages/orio_bringup/tmux}/wait_for.sh"
 NO_VACUUM="${ORIO_NO_VACUUM:-}"
+DEXNET="${ORIO_DEXNET:-}"                                      # set to enable the DexNet pane
 
 # Perception source is in orio_perception; per-machine venv + weights are
 # git-ignored, found via these env roots.
@@ -23,9 +25,19 @@ CMD_SLEEPY="cd $FRANKAPY && source $WF && wait_for_roscore && bash ./bash_script
 
 CMD_DOCKER="cd $REPO && source $WF && wait_for_roscore && bash orio_run_docker.sh"
 
+# DexNet suction planner (own container: NVIDIA TF1 image, GPU). Long-running - the TF
+# graph takes ~25 s to load, so it starts once here rather than per pick.
+CMD_DEXNET="source $WF && wait_for_roscore && bash $REPO/src/devel_packages/orio_bringup/docker/run_dexnet.sh && docker logs -f orio_dexnet"
+
 CMD_CAMERAS="source $WF && wait_for_container $CONTAINER && docker exec -it $CONTAINER bash -c 'source /home/ros_ws/devel/setup.bash && roslaunch manipulation cameras.launch'"
 
-CMD_PERCEPTION="source $WF && wait_for_topic /camera/rgb/image_raw && wait_for_topic /zedm/zed_node/rgb/image_rect_color && source $PERC_VENV/bin/activate && ORIO_REPO=$REPO ORIO_PERCEPTION_ASSETS=$PERC_ASSETS ORIO_GROUNDINGDINO_DIR=$GDINO_DIR python3 $PERC_SCRIPTS/perception_control_combined_pass_through.py"
+if [ -n "$DEXNET" ]; then
+    WAIT_DEXNET="wait_for_service /dexnet_grasp_planner/plan_grasp && "
+else
+    WAIT_DEXNET=""
+fi
+
+CMD_PERCEPTION="source $WF && wait_for_topic /camera/rgb/image_raw && wait_for_topic /zedm/zed_node/rgb/image_rect_color && ${WAIT_DEXNET}source $PERC_VENV/bin/activate && ORIO_REPO=$REPO ORIO_PERCEPTION_ASSETS=$PERC_ASSETS ORIO_GROUNDINGDINO_DIR=$GDINO_DIR python3 $PERC_SCRIPTS/perception_control_combined_pass_through.py"
 
 if [ -n "$NO_VACUUM" ]; then
     CMD_PNEU="echo '[pneumatics] DISABLED (dry-run --no-vacuum): not starting pneumatic_control. Move the cup by hand; vacuum commands and sensor checks are skipped in the state machine.'"
@@ -41,11 +53,16 @@ CMD_SM="source $WF && wait_for_service /compute_grasps && docker exec -it $CONTA
 session_root "$REPO"
 
 if initialize_session "orio"; then
-    # 8 panes tiled into one window; re-tile between splits so they stay splittable.
+    # 8 panes (9 with DexNet) tiled into one window; re-tile between splits so they
+    # stay splittable.
     new_window "orio"
     run_cmd "$CMD_ROSCORE"
-    for cmd in "$CMD_DOC" "$CMD_SLEEPY" "$CMD_DOCKER" "$CMD_CAMERAS" \
-               "$CMD_PERCEPTION" "$CMD_PNEU" "$CMD_SM"; do
+    PANES=("$CMD_DOC" "$CMD_SLEEPY" "$CMD_DOCKER" "$CMD_CAMERAS")
+    if [ -n "$DEXNET" ]; then
+        PANES+=("$CMD_DEXNET")
+    fi
+    PANES+=("$CMD_PERCEPTION" "$CMD_PNEU" "$CMD_SM")
+    for cmd in "${PANES[@]}"; do
         split_v
         tmux select-layout -t "$session:$window" tiled
         run_cmd "$cmd"

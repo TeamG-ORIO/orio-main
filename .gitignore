@@ -35,6 +35,7 @@ dataset/
 *.pth
 *.pt
 *.ckpt
+*.ckpt.*
 *.onnx
 
 # --- SQLite ---
