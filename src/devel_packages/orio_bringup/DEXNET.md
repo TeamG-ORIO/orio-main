@@ -3,6 +3,12 @@
 Runtime-switchable alternative to the classical RANSAC/PCA grasp solver on the
 pick-and-place path. `FC-GQCNN-4.0-SUCTION`, GPU, ~44 ms warm inference.
 
+![Planned grasps on the sample bin scenes](../../../docs/images/dexnet-sample-grasps.png)
+
+Planned grasps on Berkeley's five sample scenes (q 0.939-0.989, tilt 18-42 deg). The
+policy favours smooth, broad, unoccluded surfaces - what a suction cup needs to seal.
+Regenerate with `orio_perception/test/visualize_grasps.py`.
+
 ## Why a separate container
 
 Stock TF 1.15 targets CUDA 10.0 and has no Ampere (SM 8.6) kernels, so it cannot use

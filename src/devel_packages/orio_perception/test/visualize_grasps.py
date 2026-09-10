@@ -41,6 +41,8 @@ def main():
     ap.add_argument("--json", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--samples", default=SAMPLES)
+    ap.add_argument("--dpi", type=int, default=125,
+                    help="125 for working renders, ~70 for the committed doc image")
     args = ap.parse_args()
 
     with open(args.json) as f:
@@ -110,7 +112,7 @@ def main():
         "bottom row shows depth with the bin segmask outlined"
         % (min(qs), max(qs), min(tilts), max(tilts)), fontsize=13)
     fig.tight_layout(rect=[0, 0, 1, 0.945])
-    fig.savefig(args.out, dpi=125)
+    fig.savefig(args.out, dpi=args.dpi)
     print("wrote %s" % args.out)
 
 

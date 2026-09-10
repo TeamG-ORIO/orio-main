@@ -6,4 +6,6 @@ SAM_weights/
 Xtion_imgs/
 ZED_imgs/
 Segmented_imgs/
+# regenerable test renders (see test/README.md)
+test/output/
 *.pcd
