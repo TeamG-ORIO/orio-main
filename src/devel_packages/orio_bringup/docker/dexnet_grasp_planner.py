@@ -47,25 +47,47 @@ class DexnetGraspPlanner(object):
 
         cfg = YamlConfig(config_file)
         self._inpaint_rescale_factor = cfg["inpaint_rescale_factor"]
-        policy_cfg = cfg["policy"]
-        policy_cfg["metric"]["gqcnn_model"] = model_dir
-        policy_cfg["metric"]["fully_conv_gqcnn_config"]["batch_size"] = 1
+        self._policy_cfg = cfg["policy"]
+        self._policy_cfg["metric"]["gqcnn_model"] = model_dir
+        self._policy_cfg["metric"]["fully_conv_gqcnn_config"]["batch_size"] = 1
 
+        self._policy = None
+        self._policy_shape = None
+        fc = self._policy_cfg["metric"]["fully_conv_gqcnn_config"]
         rospy.loginfo("Loading FC-GQCNN-4.0-SUCTION from %s", model_dir)
-        self._policy = FullyConvolutionalGraspingPolicySuction(policy_cfg)
-
-        net = self._policy._grasp_quality_fn._fcgqcnn
-        rospy.loginfo("Inference batch size: %d", net._batch_size)
-        if net._batch_size != 1:
-            rospy.logwarn("batch_size is %d, not 1 - the _parse_config patch did not "
-                          "take effect and inference will be ~30x slower",
-                          net._batch_size)
+        self._build_policy(int(fc["im_height"]), int(fc["im_width"]))
 
         self._min_q_value = float(rospy.get_param("~min_q_value", 0.0))
 
         self._srv = rospy.Service("~plan_grasp", PlanDexnetGrasp, self._handle)
         rospy.loginfo("DexNet grasp planner ready on %s (min_q_value=%.3f)",
                       rospy.resolve_name("~plan_grasp"), self._min_q_value)
+
+    def _build_policy(self, height, width):
+        """(Re)build the policy graph for a given input size.
+
+        The FC-GQCNN input placeholder is sized at graph construction, so an image
+        of a different shape cannot be fed to an existing graph. The network is fully
+        convolutional, so any size works - the graph just has to be built for it.
+        Rebuilding takes a few seconds, so the shape is cached and only rebuilt when
+        the requested size changes.
+        """
+        fc = self._policy_cfg["metric"]["fully_conv_gqcnn_config"]
+        fc["im_height"], fc["im_width"] = height, width
+        if self._policy is not None:
+            try:
+                self._policy._grasp_quality_fn._fcgqcnn.close_session()
+            except Exception:
+                pass
+        self._policy = FullyConvolutionalGraspingPolicySuction(self._policy_cfg)
+        self._policy_shape = (height, width)
+        net = self._policy._grasp_quality_fn._fcgqcnn
+        rospy.loginfo("Policy graph built for %dx%d, inference batch size: %d",
+                      width, height, net._batch_size)
+        if net._batch_size != 1:
+            rospy.logwarn("batch_size is %d, not 1 - the _parse_config patch did not "
+                          "take effect and inference will be ~30x slower",
+                          net._batch_size)
 
     @staticmethod
     def _decode(msg, dtype, channels=1):
@@ -94,6 +116,11 @@ class DexnetGraspPlanner(object):
 
         segmask_arr = self._decode(req.segmask, np.uint8)
         segmask = BinaryImage(np.ascontiguousarray(segmask_arr), frame=intr.frame)
+
+        if self._policy_shape != (depth_im.height, depth_im.width):
+            rospy.loginfo("Input is %dx%d, rebuilding policy graph...",
+                          depth_im.width, depth_im.height)
+            self._build_policy(depth_im.height, depth_im.width)
 
         # Both steps are mandatory: without inpainting q_value collapses to ~0.
         segmask = segmask.mask_binary(depth_im.invalid_pixel_mask().inverse())
