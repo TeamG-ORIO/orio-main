@@ -46,20 +46,5 @@ src/devel_packages/orio_perception/venv/bin/python \
 
 `test/output/` is gitignored — renders are regenerable, so they are not committed.
 
-The reference image in `docs/images/dexnet-sample-grasps.png`, linked from
-`orio_bringup/DEXNET.md`, is the one exception. Regenerate it from the committed
-baseline and palettise to keep the blob small:
-
-```bash
-src/devel_packages/orio_perception/venv/bin/python \
-    src/devel_packages/orio_perception/test/visualize_grasps.py \
-    --json src/devel_packages/orio_perception/test/sample_results.json \
-    --out /tmp/doc.png --dpi 90
-src/devel_packages/orio_perception/venv/bin/python -c \
-"from PIL import Image; Image.open('/tmp/doc.png').convert('RGB').convert(
-    'P', palette=Image.ADAPTIVE, colors=256).save(
-    'docs/images/dexnet-sample-grasps.png', optimize=True)"
-```
-
 Note the sample colour images are twice the depth resolution; grasp pixels are in depth
 coordinates and are scaled accordingly.

@@ -71,9 +71,3 @@
     rosrun manipulation demo_moveit.py
     ```
     The script initially displays a planned path on rviz. Please checkout the comments in the main function in the demo_moveit.py script to run this script on the robot.  
-
-### Other Useful Commands:
-- To grant edit permissions for files created inside the docker container (in the `/data` shared volume)
-   ```bash
-   bash claim_files.sh
-   ```
