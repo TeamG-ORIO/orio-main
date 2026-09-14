@@ -24,15 +24,15 @@ def main():
         user_input = input("\nEnter Command: ").strip().upper()
 
         if user_input == 'L1':
-            call_vacuum_service('/snaak/lbl_cup/on') # Sets IO2 LOW
+            call_vacuum_service('orio/lbl_cup/on') # Sets IO2 LOW
         elif user_input == 'L0':
-            call_vacuum_service('/snaak/lbl_cup/off') # Sets IO2 HIGH
+            call_vacuum_service('orio/lbl_cup/off') # Sets IO2 HIGH
         elif user_input == 'P1':
-            call_vacuum_service('/snaak/pnp_cup/on') # Sets IO4 LOW
+            call_vacuum_service('orio/pnp_cup/on') # Sets IO4 LOW
         elif user_input == 'P0':
-            call_vacuum_service('/snaak/pnp_cup/off') # Sets IO4 HIGH
+            call_vacuum_service('orio/pnp_cup/off') # Sets IO4 HIGH
         elif user_input == 'OFF':
-            call_vacuum_service('/snaak/vacuum/disable_all') # Sets both HIGH
+            call_vacuum_service('orio/vacuum/disable_all') # Sets both HIGH
         elif user_input == 'Q':
             break
         else:

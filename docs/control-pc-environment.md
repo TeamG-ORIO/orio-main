@@ -1,6 +1,6 @@
 # Control-PC environment (reference)
 
-The Franka real-time control PCs (`iam-doc` = robot 1, `iamsleepy` = robot 2) run
+The Franka real-time control PCs (`iam-doc` = robot 1, `iam-luisa` = robot 2) run
 **franka-interface** (C++ realtime controller), installed per-machine — not built
 in this workspace. Reachable via the `ssh_doc` / `ssh_ep` aliases.
 

@@ -26,7 +26,7 @@
    ```
 
 ### Running Demo Code:
-**Note:** Replace `[control-pc-name]` with the name of the control pc, for example, `iam-snowwhite`
+**Note:** Replace `[control-pc-name]` with the name of the control pc: `iam-doc` (robot 1) or `iam-luisa` (robot 2)
 1. Unlock robot joints
    ```bash
    ssh -X student@[control-pc-name]

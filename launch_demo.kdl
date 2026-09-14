@@ -23,9 +23,9 @@ layout {
                     command "bash"
                     args "-c" "cd ~/Documents/frankapy && bash ./bash_scripts/start_control_pc.sh -u student -i iam-doc; exec bash"
                 }
-                pane name="Franka Sleepy" {
+                pane name="Franka Luisa" {
                     command "bash"
-                    args "-c" "cd ~/Documents/frankapy && bash ./bash_scripts/start_control_pc_sleepy.sh -u iam-sleepy -i iamsleepy; exec bash"
+                    args "-c" "cd ~/16662_RobotAutonomy && bash src/devel_packages/orio_bringup/start_control_pc_luisa.sh; exec bash"
                 }
                 pane name="Docker Core" {
                     command "bash"

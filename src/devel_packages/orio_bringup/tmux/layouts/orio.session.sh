@@ -21,7 +21,7 @@ GDINO_DIR="${ORIO_GROUNDINGDINO_DIR:-$PERC_ASSETS/GroundingDINO}"
 CMD_ROSCORE="roscore"
 
 CMD_DOC="cd $FRANKAPY && source $WF && wait_for_roscore && bash ./bash_scripts/start_control_pc.sh -u student -i iam-doc"
-CMD_SLEEPY="cd $FRANKAPY && source $WF && wait_for_roscore && bash ./bash_scripts/start_control_pc_sleepy.sh -u iam-sleepy -i iamsleepy"
+CMD_LUISA="cd $REPO && source $WF && wait_for_roscore && bash src/devel_packages/orio_bringup/start_control_pc_luisa.sh"
 
 CMD_DOCKER="cd $REPO && source $WF && wait_for_roscore && bash orio_run_docker.sh"
 
@@ -37,7 +37,7 @@ else
     WAIT_DEXNET=""
 fi
 
-CMD_PERCEPTION="source $WF && wait_for_topic /camera/rgb/image_raw && wait_for_topic /zedm/zed_node/rgb/image_rect_color && ${WAIT_DEXNET}source $PERC_VENV/bin/activate && ORIO_REPO=$REPO ORIO_PERCEPTION_ASSETS=$PERC_ASSETS ORIO_GROUNDINGDINO_DIR=$GDINO_DIR python3 $PERC_SCRIPTS/perception_control_combined_pass_through.py"
+CMD_PERCEPTION="source $WF && wait_for_topic /camera/rgb/image_raw && wait_for_topic /zedm/zed_node/rgb/image_rect_color && ${WAIT_DEXNET}source $REPO/devel/setup.bash && source $PERC_VENV/bin/activate && ORIO_REPO=$REPO ORIO_PERCEPTION_ASSETS=$PERC_ASSETS ORIO_GROUNDINGDINO_DIR=$GDINO_DIR python3 $PERC_SCRIPTS/perception_control_combined_pass_through.py"
 
 if [ -n "$NO_VACUUM" ]; then
     CMD_PNEU="echo '[pneumatics] DISABLED (dry-run --no-vacuum): not starting pneumatic_control. Move the cup by hand; vacuum commands and sensor checks are skipped in the state machine.'"
@@ -57,7 +57,7 @@ if initialize_session "orio"; then
     # stay splittable.
     new_window "orio"
     run_cmd "$CMD_ROSCORE"
-    PANES=("$CMD_DOC" "$CMD_SLEEPY" "$CMD_DOCKER" "$CMD_CAMERAS")
+    PANES=("$CMD_DOC" "$CMD_LUISA" "$CMD_DOCKER" "$CMD_CAMERAS")
     if [ -n "$DEXNET" ]; then
         PANES+=("$CMD_DEXNET")
     fi
