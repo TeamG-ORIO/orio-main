@@ -1,0 +1,525 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arm Monitor</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --wash: rgba(11,11,11,0.05);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #4a3aa7;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --good-text: #006300; --critical-text: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --text: #ffffff; --text-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9;
+    --good-text: #0ca30c; --critical-text: #e66767;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --text: #ffffff; --text-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --wash: rgba(255,255,255,0.06);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9;
+  --good-text: #0ca30c; --critical-text: #e66767;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0; padding: 16px; background: var(--page); color: var(--text);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 16px; }
+h1 { font-size: 18px; font-weight: 600; margin: 0; }
+h2 { font-size: 16px; font-weight: 600; margin: 0; }
+h3 { font-size: 13px; font-weight: 600; margin: 0; color: var(--text); }
+.spacer { flex: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--ring); color: var(--text-2); font-size: 12px;
+  white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.chip[data-s="good"] .dot { background: var(--good); }
+.chip[data-s="warning"] .dot { background: var(--warning); }
+.chip[data-s="critical"] .dot { background: var(--critical); }
+.chip .icon { font-size: 11px; line-height: 1; }
+.seg { display: inline-flex; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--ring); background: var(--surface); }
+.seg button, .btn {
+  font: inherit; font-size: 12px; color: var(--text-2); background: none; border: 0; padding: 4px 10px;
+  border-radius: 8px; cursor: pointer;
+}
+.seg button[aria-pressed="true"] { color: var(--text); font-weight: 600; background: var(--wash); }
+.btn { box-shadow: inset 0 0 0 1px var(--ring); background: var(--surface); }
+.btn[aria-pressed="true"] { color: var(--text); font-weight: 600; background: var(--wash); }
+button:focus-visible, canvas:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); font-size: 12px; }
+
+#robots { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 16px; }
+.robot { background: var(--surface); border-radius: 12px; box-shadow: 0 0 0 1px var(--ring); padding: 16px; min-width: 0; }
+.robot-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 12px; }
+.robot-head .host { color: var(--muted); font-size: 12px; }
+.robot-head .chips { flex-basis: 100%; }
+.alert {
+  display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px; padding: 8px 12px; border-radius: 8px;
+  box-shadow: inset 3px 0 0 var(--critical), inset 0 0 0 1px var(--ring); color: var(--text); font-size: 13px;
+}
+.alert .icon { color: var(--critical-text); font-weight: 700; }
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(76px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.tile { padding: 6px 10px; border-radius: 8px; box-shadow: inset 0 0 0 1px var(--ring); min-width: 0; }
+.tile .label { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.tile .value { font-size: 17px; font-weight: 600; white-space: nowrap; }
+
+.table-wrap { overflow-x: auto; margin-bottom: 12px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+th { text-align: right; color: var(--muted); font-weight: 500; padding: 4px 6px; border-bottom: 1px solid var(--axis); white-space: nowrap; }
+td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--grid); white-space: nowrap; color: var(--text); }
+th:first-child, td:first-child { text-align: left; }
+th.range, td.range { text-align: left; width: 34%; min-width: 110px; }
+.key { display: inline-block; width: 12px; height: 2px; border-radius: 1px; vertical-align: middle; margin-right: 6px; }
+.track { position: relative; height: 12px; }
+.track::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; height: 2px; border-radius: 1px; background: var(--grid); }
+.track .zero { position: absolute; top: 2px; width: 1px; height: 8px; background: var(--axis); }
+.track .pos { position: absolute; top: 1px; width: 10px; height: 10px; margin-left: -5px; border-radius: 50%; box-shadow: 0 0 0 2px var(--surface); }
+.warn { color: var(--text); }
+.warn::before { content: "▲ "; color: var(--warning); font-size: 10px; }
+.dim { color: var(--muted); }
+
+.charts { display: grid; gap: 12px; }
+.chart-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin-bottom: 4px; }
+.chart-head .sub { color: var(--muted); font-size: 11px; }
+.legend { display: flex; flex-wrap: wrap; gap: 2px 10px; color: var(--text-2); font-size: 11px; margin-left: auto; }
+.plot { position: relative; height: 190px; }
+.plot canvas { display: block; width: 100%; height: 100%; border-radius: 4px; }
+.empty {
+  position: absolute; inset: 0 0 20px 44px; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px; text-align: center; padding: 0 12px; pointer-events: none;
+}
+.tooltip {
+  position: absolute; pointer-events: none; z-index: 2; min-width: 110px; padding: 6px 8px; border-radius: 8px;
+  background: var(--surface); box-shadow: 0 0 0 1px var(--ring), 0 4px 12px rgba(0,0,0,0.12); font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tooltip .when { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.tooltip .row { display: flex; align-items: center; gap: 6px; }
+.tooltip .row b { font-weight: 600; color: var(--text); min-width: 52px; text-align: right; }
+.tooltip .row span { color: var(--text-2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Arm monitor</h1>
+  <div class="chips">
+    <span class="chip" id="server-chip"><span class="dot"></span><span class="txt">Connecting…</span></span>
+    <span class="chip" id="ros-chip"><span class="dot"></span><span class="txt">ROS …</span></span>
+  </div>
+  <div class="spacer"></div>
+  <div class="controls">
+    <span>Window</span>
+    <div class="seg" id="window-seg" role="group" aria-label="Time window"></div>
+    <button class="btn" id="pause" aria-pressed="false">Pause</button>
+  </div>
+</header>
+<main id="robots"></main>
+
+<script>
+'use strict';
+const Q_MIN = [-2.8973, -1.7628, -2.8973, -3.0718, -2.8973, -0.0175, -2.8973];
+const Q_MAX = [2.8973, 1.7628, 2.8973, -0.0698, 2.8973, 3.7525, 2.8973];
+const TAU_MAX = [87, 87, 87, 87, 12, 12, 12];
+const JOINTS = ['J1', 'J2', 'J3', 'J4', 'J5', 'J6', 'J7'];
+const JOINT_COLORS = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6', '--s7'];
+const ROBOT_MODES = ['other', 'idle', 'move', 'guiding', 'reflex', 'user stopped', 'auto recovery'];
+const WINDOWS = [10, 30, 60, 120];
+const DESK_FRESH = 2, ROS_FRESH = 1, KEEP = 125;
+const DEG = 180 / Math.PI;
+
+let windowSec = 30, paused = false, pausedAt = 0, lastSnap = null, lastSnapAt = 0, rosStatus = '';
+const robots = {};
+
+// ---- helpers ----
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+let palette = {};
+function readPalette() {
+  const cs = getComputedStyle(document.documentElement);
+  for (const v of ['--surface', '--text', '--text-2', '--muted', '--grid', '--axis', ...JOINT_COLORS]) palette[v] = cs.getPropertyValue(v).trim();
+}
+readPalette();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { readPalette(); markDirty(); });
+new MutationObserver(() => { readPalette(); markDirty(); }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+function setChip(chip, state, text, title) {
+  chip.dataset.s = state || '';
+  chip.querySelector('.txt').textContent = text;
+  chip.title = title || text;
+  const icon = chip.querySelector('.icon');
+  if (icon) {
+    icon.textContent = { good: '✓', warning: '!', critical: '✕' }[state] || '';
+    icon.hidden = !icon.textContent;
+  }
+}
+function chip(extraIcon) {
+  const c = el('span', 'chip');
+  c.append(el('span', 'dot'));
+  if (extraIcon) c.append(el('span', 'icon'));
+  c.append(el('span', 'txt'));
+  return c;
+}
+function fmt(v, d) {
+  if (v == null || Number.isNaN(v)) return '–';
+  const s = v.toFixed(d);
+  return /^-0\.?0*$/.test(s) ? s.slice(1) : s.replace('-', '−');
+}
+function niceStep(span, n) {
+  const raw = span / n, mag = Math.pow(10, Math.floor(Math.log10(raw))), f = raw / mag;
+  return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * mag;
+}
+
+// ---- line chart ----
+class LineChart {
+  constructor(parent, opts) {
+    Object.assign(this, opts);
+    this.t = []; this.v = []; this.hoverX = null;
+    const box = el('div', 'chart');
+    const head = el('div', 'chart-head');
+    head.append(el('h3', null, this.title));
+    this.subEl = el('span', 'sub', '');
+    head.append(this.subEl);
+    const legend = el('div', 'legend');
+    this.names.forEach((n, i) => {
+      const item = el('span');
+      const k = el('span', 'key'); k.style.background = `var(${this.colors[i]})`;
+      item.append(k, document.createTextNode(n));
+      legend.append(item);
+    });
+    head.append(legend);
+    const plot = el('div', 'plot');
+    this.canvas = el('canvas');
+    this.canvas.tabIndex = 0;
+    this.canvas.setAttribute('role', 'img');
+    this.canvas.setAttribute('aria-label', `${this.title} over time; current values are in the joint table`);
+    this.empty = el('div', 'empty', 'Waiting for data…');
+    this.tip = el('div', 'tooltip'); this.tip.hidden = true;
+    plot.append(this.canvas, this.empty, this.tip);
+    box.append(head, plot);
+    parent.append(box);
+    const move = e => { const r = this.canvas.getBoundingClientRect(); this.hoverX = e.clientX - r.left; markDirty(); };
+    this.canvas.addEventListener('pointermove', move);
+    this.canvas.addEventListener('pointerdown', move);
+    this.canvas.addEventListener('pointerleave', () => { this.hoverX = null; markDirty(); });
+    this.canvas.addEventListener('focus', () => { this.hoverX = this.canvas.clientWidth - 31; markDirty(); });
+    this.canvas.addEventListener('blur', () => { this.hoverX = null; markDirty(); });
+    this.canvas.addEventListener('keydown', e => {
+      if (this.hoverX == null) return;
+      if (e.key === 'ArrowLeft') this.hoverX = Math.max(45, this.hoverX - 10);
+      else if (e.key === 'ArrowRight') this.hoverX = Math.min(this.canvas.clientWidth - 31, this.hoverX + 10);
+      else return;
+      e.preventDefault(); markDirty();
+    });
+  }
+  push(t, vals) {
+    if (this.t.length && t <= this.t[this.t.length - 1]) return;
+    this.t.push(t); this.v.push(vals);
+    let drop = 0;
+    while (drop < this.t.length && this.t[drop] < t - KEEP) drop++;
+    if (drop) { this.t.splice(0, drop); this.v.splice(0, drop); }
+  }
+  setEmpty(text) { this.emptyText = text; }
+  draw(tEnd) {
+    const c = this.canvas, dpr = window.devicePixelRatio || 1;
+    const W = c.clientWidth, H = c.clientHeight;
+    if (!W || !H) return;
+    if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const P = { l: 44, r: 30, t: 8, b: 20 }, pw = W - P.l - P.r, ph = H - P.t - P.b;
+    const t0 = tEnd - windowSec;
+    let i0 = 0;
+    while (i0 < this.t.length && this.t[i0] < t0) i0++;
+    i0 = Math.max(0, i0 - 1);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = i0; i < this.t.length; i++) for (const y of this.v[i]) if (y != null) { lo = Math.min(lo, y); hi = Math.max(hi, y); }
+    const hasData = lo <= hi && this.t.length && this.t[this.t.length - 1] >= t0;
+    this.empty.hidden = !!hasData;
+    if (!hasData) this.empty.textContent = this.emptyText || 'Waiting for data…';
+    if (!hasData) { this.tip.hidden = true; lo = -1; hi = 1; }
+    if (hi - lo < this.minSpan) { const m = (hi + lo) / 2; lo = m - this.minSpan / 2; hi = m + this.minSpan / 2; }
+    const step = niceStep(hi - lo, 4);
+    lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+    const X = t => P.l + (t - t0) / windowSec * pw, Y = y => P.t + (hi - y) / (hi - lo) * ph;
+
+    ctx.font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = palette['--muted'];
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    for (let y = lo; y <= hi + step / 2; y += step) {
+      const py = Math.round(Y(y)) + 0.5;
+      ctx.strokeStyle = Math.abs(y) < step / 1e6 ? palette['--axis'] : palette['--grid'];
+      ctx.beginPath(); ctx.moveTo(P.l, py); ctx.lineTo(P.l + pw, py); ctx.stroke();
+      ctx.fillText(Math.abs(y) < step / 1e6 ? '0' : String(+y.toFixed(6)).replace('-', '−'), P.l - 6, py);
+    }
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const xs = niceStep(windowSec, 5);
+    for (let s = 0; s <= windowSec + 1e-9; s += xs) ctx.fillText(s === 0 ? 'now' : `−${s} s`, X(tEnd - s), H - P.b + 5);
+    ctx.strokeStyle = palette['--axis'];
+    ctx.beginPath(); ctx.moveTo(P.l, P.t + ph + 0.5); ctx.lineTo(P.l + pw, P.t + ph + 0.5); ctx.stroke();
+    if (!hasData) return;
+
+    ctx.save();
+    ctx.beginPath(); ctx.rect(P.l, P.t - 2, pw, ph + 4); ctx.clip();
+    ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const ends = [];
+    this.names.forEach((_, k) => {
+      ctx.strokeStyle = palette[this.colors[k]];
+      ctx.beginPath();
+      let pen = false, last = null;
+      for (let i = i0; i < this.t.length; i++) {
+        const y = this.v[i][k];
+        if (y == null || (i > i0 && this.t[i] - this.t[i - 1] > 2)) { pen = false; if (y == null) continue; }
+        const px = X(this.t[i]), py = Y(y);
+        pen ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+        pen = true; last = [px, py];
+      }
+      ctx.stroke();
+      if (last) ends.push({ k, x: last[0], y: last[1] });
+    });
+    ctx.restore();
+
+    ends.sort((a, b) => a.y - b.y);
+    for (let i = 1; i < ends.length; i++) ends[i].ly = Math.max(ends[i].y, (ends[i - 1].ly ?? ends[i - 1].y) + 11);
+    if (ends.length) ends[0].ly = ends[0].ly ?? ends[0].y;
+    const overflow = Math.max(0, (ends.length ? ends[ends.length - 1].ly : 0) - (P.t + ph));
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.lineWidth = 1.5;
+    for (const e of ends) {
+      const ly = Math.max(P.t, (e.ly ?? e.y) - overflow);
+      ctx.strokeStyle = palette[this.colors[e.k]];
+      ctx.beginPath(); ctx.moveTo(P.l + pw + 2, ly); ctx.lineTo(P.l + pw + 8, ly); ctx.stroke();
+      ctx.fillStyle = palette['--text-2'];
+      ctx.fillText(this.names[e.k], P.l + pw + 10, ly);
+    }
+
+    if (this.hoverX == null || this.hoverX < P.l || this.hoverX > P.l + pw) { this.tip.hidden = true; return; }
+    const th = t0 + (this.hoverX - P.l) / pw * windowSec;
+    let best = -1, bd = Infinity;
+    for (let i = i0; i < this.t.length; i++) { const d = Math.abs(this.t[i] - th); if (d < bd) { bd = d; best = i; } }
+    if (best < 0 || bd > Math.max(1, windowSec / 60)) { this.tip.hidden = true; return; }
+    const px = Math.round(X(this.t[best])) + 0.5;
+    ctx.strokeStyle = palette['--axis']; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(px, P.t); ctx.lineTo(px, P.t + ph); ctx.stroke();
+    this.v[best].forEach((y, k) => {
+      if (y == null) return;
+      ctx.beginPath(); ctx.arc(px, Y(y), 4, 0, 2 * Math.PI);
+      ctx.fillStyle = palette[this.colors[k]]; ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = palette['--surface']; ctx.stroke();
+    });
+    this.tip.replaceChildren(el('div', 'when', `${fmt(this.t[best] - tEnd, 1)} s`));
+    const order = this.v[best].map((y, k) => [y, k]).filter(([y]) => y != null).sort((a, b) => b[0] - a[0]);
+    for (const [y, k] of order) {
+      const row = el('div', 'row');
+      const key = el('span', 'key'); key.style.background = palette[this.colors[k]]; key.style.marginRight = '0';
+      row.append(key, el('b', null, fmt(y, this.digits)), el('span', null, `${this.names[k]} ${this.unit}`));
+      this.tip.append(row);
+    }
+    this.tip.hidden = false;
+    const tw = this.tip.offsetWidth;
+    this.tip.style.left = `${px + 12 + tw > W ? px - 12 - tw : px + 12}px`;
+    this.tip.style.top = `${P.t}px`;
+  }
+}
+
+// ---- robot panel ----
+function buildRobot(num, host) {
+  const sec = el('section', 'robot');
+  const head = el('div', 'robot-head');
+  head.append(el('h2', null, `Robot ${num}`), el('span', 'host', host));
+  const chips = el('div', 'chips');
+  const r = { chips: { desk: chip(true), ros: chip(true), brakes: chip(false), mode: chip(true) } };
+  chips.append(r.chips.desk, r.chips.ros, r.chips.brakes, r.chips.mode);
+  head.append(chips);
+  r.alert = el('div', 'alert'); r.alert.hidden = true;
+  r.alertIcon = el('span', 'icon', '✕'); r.alertText = el('span');
+  r.alert.append(r.alertIcon, r.alertText);
+
+  const tiles = el('div', 'tiles');
+  r.tiles = {};
+  for (const [id, label] of [['x', 'EE x mm'], ['y', 'EE y mm'], ['z', 'EE z mm'],
+                             ['roll', 'Roll °'], ['pitch', 'Pitch °'], ['yaw', 'Yaw °'], ['f', '|F ext| N']]) {
+    const t = el('div', 'tile');
+    r.tiles[id] = el('div', 'value', '–');
+    t.append(el('div', 'label', label), r.tiles[id]);
+    tiles.append(t);
+  }
+
+  const wrap = el('div', 'table-wrap');
+  const table = el('table');
+  const thead = el('thead'), hr = el('tr');
+  for (const [h, cls] of [['Joint'], ['Angle °'], ['Range', 'range'], ['Vel °/s'], ['Torque Nm'], ['Ext Nm'], ['Brake']]) {
+    const th = el('th', cls, h); th.scope = 'col'; hr.append(th);
+  }
+  thead.append(hr);
+  const tbody = el('tbody');
+  r.rows = JOINTS.map((j, i) => {
+    const tr = el('tr');
+    const name = el('td');
+    const key = el('span', 'key'); key.style.background = `var(${JOINT_COLORS[i]})`;
+    name.append(key, document.createTextNode(j));
+    const cells = { angle: el('td'), range: el('td', 'range'), vel: el('td'), tau: el('td'), ext: el('td'), brake: el('td') };
+    const track = el('div', 'track'), pos = el('span', 'pos'), zero = el('span', 'zero');
+    pos.style.background = `var(${JOINT_COLORS[i]})`;
+    zero.style.left = `${(0 - Q_MIN[i]) / (Q_MAX[i] - Q_MIN[i]) * 100}%`;
+    if (Q_MIN[i] < 0 && Q_MAX[i] > 0) track.append(zero);
+    track.append(pos);
+    cells.range.append(track);
+    tr.append(name, cells.angle, cells.range, cells.vel, cells.tau, cells.ext, cells.brake);
+    tbody.append(tr);
+    return { ...cells, pos, track };
+  });
+  table.append(thead, tbody);
+  wrap.append(table);
+
+  const charts = el('div', 'charts');
+  r.angle = new LineChart(charts, { title: 'Joint angles', unit: '°', names: JOINTS, colors: JOINT_COLORS, digits: 1, minSpan: 2 });
+  r.tau = new LineChart(charts, { title: 'Joint torques', unit: 'Nm', names: JOINTS, colors: JOINT_COLORS, digits: 2, minSpan: 1 });
+  r.force = new LineChart(charts, { title: 'External force at EE', unit: 'N', names: ['Fx', 'Fy', 'Fz'], colors: ['--s1', '--s2', '--s3'], digits: 1, minSpan: 2 });
+  r.lastDesk = 0; r.lastRos = 0;
+
+  sec.append(head, r.alert, tiles, wrap, charts);
+  document.getElementById('robots').append(sec);
+  return r;
+}
+
+function update(snap) {
+  const rosChip = document.getElementById('ros-chip');
+  rosStatus = snap.ros_status;
+  setChip(rosChip, snap.ros_status === 'live' ? 'good' : snap.ros_status === 'no ROS master' ? '' : 'warning', `ROS: ${snap.ros_status}`);
+  for (const [num, d] of Object.entries(snap.robots)) {
+    const r = robots[num] || (robots[num] = buildRobot(num, d.host));
+    const desk = d.desk, ros = d.ros;
+    const deskLive = desk.age != null && desk.age < DESK_FRESH;
+    const rosLive = ros && ros.age < ROS_FRESH;
+
+    if (desk.error) setChip(r.chips.desk, 'critical', 'Desk offline', desk.error);
+    else if (deskLive) setChip(r.chips.desk, 'good', 'Desk live');
+    else setChip(r.chips.desk, 'warning', 'Desk stale');
+    if (rosLive) setChip(r.chips.ros, 'good', `ROS: ${ROBOT_MODES[ros.mode] || ros.mode}`, 'frankapy RobotState is streaming');
+    else setChip(r.chips.ros, '', 'ROS off', `No RobotState from robot ${num} (${rosStatus})`);
+    const b = desk.brakes;
+    if (!b) setChip(r.chips.brakes, '', 'Brakes –');
+    else if (b.every(x => x)) setChip(r.chips.brakes, '', 'Brakes open');
+    else if (b.every(x => !x)) setChip(r.chips.brakes, '', 'Brakes locked');
+    else setChip(r.chips.brakes, 'warning', `Brakes partial (${b.filter(x => x).length}/7 open)`);
+    if (!desk.mode) setChip(r.chips.mode, '', 'Mode –');
+    else setChip(r.chips.mode, desk.reason && desk.reason !== 'NOMINAL' ? 'warning' : '', `${desk.mode}${desk.reason && desk.reason !== 'NOMINAL' ? ' · ' + desk.reason : ''}`);
+
+    const errors = [...new Set([...(desk.errors || []), ...(rosLive ? ros.errors : [])])];
+    if (desk.joints_in_error) errors.push('jointsInError');
+    r.alert.hidden = !errors.length;
+    r.alertText.textContent = errors.length ? `Robot errors: ${errors.join(', ')}` : '';
+
+    const q = rosLive ? ros.q : deskLive ? desk.q : null;
+    const pose = rosLive ? ros.pose : deskLive ? desk.pose : null;
+    r.angle.subEl.textContent = rosLive ? 'from ROS' : deskLive ? 'from Desk' : '';
+    r.tau.subEl.textContent = r.force.subEl.textContent = rosLive ? 'from ROS' : '';
+    const noRos = rosStatus === 'live' ? `No RobotState from robot ${num}; is its frankapy controller running?`
+                                       : `Needs the frankapy stack running (ROS: ${rosStatus})`;
+    r.tau.setEmpty(noRos); r.force.setEmpty(noRos);
+    r.angle.setEmpty(desk.error ? `Desk offline: ${desk.error}` : 'Waiting for data…');
+
+    const setTile = (id, v, dgt) => { r.tiles[id].textContent = fmt(v, dgt); };
+    setTile('x', pose && pose.xyz[0] * 1000, 1); setTile('y', pose && pose.xyz[1] * 1000, 1); setTile('z', pose && pose.xyz[2] * 1000, 1);
+    setTile('roll', pose && pose.rpy[0], 1); setTile('pitch', pose && pose.rpy[1], 1); setTile('yaw', pose && pose.rpy[2], 1);
+    setTile('f', rosLive ? Math.hypot(ros.f_ext[0], ros.f_ext[1], ros.f_ext[2]) : null, 1);
+
+    r.rows.forEach((row, i) => {
+      const qi = q ? q[i] : null;
+      row.angle.textContent = fmt(qi == null ? null : qi * DEG, 1);
+      const frac = qi == null ? null : (qi - Q_MIN[i]) / (Q_MAX[i] - Q_MIN[i]);
+      row.pos.hidden = frac == null;
+      if (frac != null) row.pos.style.left = `${Math.min(1, Math.max(0, frac)) * 100}%`;
+      const near = frac != null && (frac < 0.05 || frac > 0.95);
+      row.range.classList.toggle('warn', near);
+      row.range.title = near ? `${JOINTS[i]} within 5% of its joint limit` : `${fmt(Q_MIN[i] * DEG, 0)}° to ${fmt(Q_MAX[i] * DEG, 0)}°`;
+      row.vel.textContent = rosLive ? fmt(ros.dq[i] * DEG, 1) : '–';
+      row.tau.textContent = rosLive ? fmt(ros.tau[i], 2) : '–';
+      row.tau.classList.toggle('warn', rosLive && Math.abs(ros.tau[i]) > 0.8 * TAU_MAX[i]);
+      row.ext.textContent = rosLive ? fmt(ros.tau_ext[i], 2) : '–';
+      row.brake.textContent = b ? (b[i] ? 'open' : 'locked') : '–';
+      row.brake.className = b && !b[i] ? 'dim' : '';
+    });
+
+    const deskT = desk.age != null ? snap.t - desk.age : 0;
+    const rosT = ros ? snap.t - ros.age : 0;
+    if (rosLive && rosT > r.lastRos + 1e-6) {
+      r.lastRos = rosT;
+      r.angle.push(rosT, ros.q.map(v => v * DEG));
+      r.tau.push(rosT, ros.tau);
+      r.force.push(rosT, ros.f_ext.slice(0, 3));
+    } else if (!rosLive && deskLive && desk.q && deskT > r.lastDesk + 1e-6) {
+      r.lastDesk = deskT;
+      r.angle.push(deskT, desk.q.map(v => v * DEG));
+    }
+  }
+  markDirty();
+}
+
+// ---- render loop ----
+let dirty = false;
+function markDirty() { dirty = true; }
+function frame() {
+  if (dirty && lastSnap) {
+    dirty = false;
+    const tEnd = paused ? pausedAt : lastSnap.t + (performance.now() - lastSnapAt) / 1000;
+    for (const r of Object.values(robots)) { r.angle.draw(tEnd); r.tau.draw(tEnd); r.force.draw(tEnd); }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+window.addEventListener('resize', markDirty);
+
+// ---- controls ----
+const seg = document.getElementById('window-seg');
+for (const w of WINDOWS) {
+  const bt = el('button', null, `${w} s`);
+  bt.setAttribute('aria-pressed', String(w === windowSec));
+  bt.addEventListener('click', () => {
+    windowSec = w;
+    for (const x of seg.children) x.setAttribute('aria-pressed', String(x === bt));
+    markDirty();
+  });
+  seg.append(bt);
+}
+const pauseBtn = document.getElementById('pause');
+pauseBtn.addEventListener('click', () => {
+  paused = !paused;
+  pausedAt = lastSnap ? lastSnap.t + (performance.now() - lastSnapAt) / 1000 : 0;
+  pauseBtn.setAttribute('aria-pressed', String(paused));
+  pauseBtn.textContent = paused ? 'Resume' : 'Pause';
+  markDirty();
+});
+
+// ---- connection ----
+function connect() {
+  const serverChip = document.getElementById('server-chip');
+  const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.onopen = () => setChip(serverChip, 'good', 'Server connected');
+  ws.onmessage = e => { lastSnap = JSON.parse(e.data); lastSnapAt = performance.now(); update(lastSnap); };
+  ws.onclose = () => { setChip(serverChip, 'critical', 'Server disconnected'); setTimeout(connect, 1000); };
+}
+connect();
+</script>
+</body>
+</html>
