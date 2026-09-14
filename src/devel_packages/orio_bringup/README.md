@@ -13,7 +13,8 @@ git submodule update --init --recursive
 bash src/devel_packages/orio_bringup/docker/build.sh   # -> orio_docker
 ```
 
-Run: `bash orio_run_docker.sh` (state machine) and `bash zed_run_docker.sh` (cameras).
+Run: `bash orio_run_docker.sh` (state machine); the cameras run in the same
+container via `roslaunch manipulation cameras.launch`.
 
 `docker/Dockerfile.dexnet` builds a separate `orio/dexnet` image for DexNet 4.0 suction
 grasping — see [DEXNET.md](DEXNET.md).
@@ -37,7 +38,7 @@ controller that runs on the robots) stays a reference mirror under
 
 ### ZED neural-depth weights
 
-Both run scripts bind-mount the host resources
+`orio_run_docker.sh` bind-mounts the host resources
 (`-v /usr/local/zed/resources/:/usr/local/zed/resources/`). They can't be baked
 at build time (the SDK needs a GPU to download them); on a fresh machine the SDK
 downloads + optimizes them on the first neural-mode run, then reuses them.
