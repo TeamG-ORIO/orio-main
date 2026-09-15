@@ -1,0 +1,6 @@
+# Arm 2 (labelling) base pose in arm 1's (pick-and-place) base frame. Same height, same y,
+# 49 in apart along x, facing each other.
+arm2_in_arm1:
+  xyz: [1.2446, 0.0, 0.0]   # m (49 in)
+  yaw_deg: 180.0
+  placeholder: false

@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
+import os
 import rospy
 from std_srvs.srv import Trigger, TriggerResponse
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 import serial
 import time
 import threading
 
+try:
+    from orio_core.events import TOPIC as EVENTS_TOPIC, EventSink
+except ImportError:  # orio_core not on this python's path: no run events, node still works
+    EVENTS_TOPIC, EventSink = None, None
+
 class VacuumControlNode:
     def __init__(self):
         rospy.init_node('vacuum_control')
-        
+
         # Setup serial connection
         self.serial_conn = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
         time.sleep(2.0) # Wait for ClearCore reboot
@@ -17,6 +23,13 @@ class VacuumControlNode:
         # Publishers for modular boolean state tracking
         self.lbl_state_pub = rospy.Publisher('orio/vacuum/lbl_has_item', Bool, queue_size=10)
         self.pnp_state_pub = rospy.Publisher('orio/vacuum/pnp_has_item', Bool, queue_size=10)
+
+        # Run events for the rerun recorder (docs/LOGGING.md); no-op when unavailable or ORIO_LOGGING=0.
+        if EventSink and os.environ.get('ORIO_LOGGING', '1') != '0':
+            ev_pub = rospy.Publisher(EVENTS_TOPIC, String, queue_size=20)
+            self.events = EventSink(lambda s: ev_pub.publish(String(data=s)), src='pneumatics')
+        else:
+            self.events = EventSink(lambda s: None, src='pneumatics', enabled=False) if EventSink else None
 
         # Services for Labelling Cup
         rospy.Service('orio/lbl_cup/on', Trigger, self.lbl_on_cb)
@@ -35,7 +48,7 @@ class VacuumControlNode:
 
         self.send_command("disable")
         rospy.loginfo("Vacuum Control Node Ready")
-        
+
     def serial_read_loop(self):
         """Continuously monitors the serial port for incoming events."""
         while not rospy.is_shutdown():
@@ -61,7 +74,7 @@ class VacuumControlNode:
                         # Optionally log command confirmations
                         elif line.startswith("CMD:"):
                             rospy.loginfo(line)
-                            
+
                 except Exception as e:
                     rospy.logerr(f"Serial read error: {e}")
             else:
@@ -70,6 +83,8 @@ class VacuumControlNode:
 
     def send_command(self, command):
         self.serial_conn.write((command + '\n').encode('utf-8'))
+        if self.events:
+            self.events.emit('vacuum_cmd', command)
 
     def lbl_on_cb(self, req):
         self.send_command("lbl_on")

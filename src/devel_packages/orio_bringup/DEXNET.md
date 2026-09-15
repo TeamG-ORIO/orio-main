@@ -85,16 +85,11 @@ convention issue.
 
 ## A/B data
 
-Every attempt from either backend appends a row to `grasp_attempts.csv` (override with
-`~ab_log`):
-
-```
-stamp,backend,planned,q_value,tilt_deg,x,y,z,plan_time_s,reason
-```
-
-Rejections are logged with `planned=0` and the reason, so tilt rejections and
-low-confidence rejections stay distinguishable. Success rate is counted separately —
-this log records what was *planned*, not whether the lift held.
+Every attempt from either backend lands in the run recording (`docs/LOGGING.md`):
+`/perception/pnp/{q_value,tilt_deg,plan_time,n_grasps,center}` plus a `result` line
+with backend and rejection reason, so tilt rejections and low-confidence rejections stay
+distinguishable. Success rate is counted separately — this records what was *planned*,
+not whether the lift held. Historic rows from the old CSV: `orio_perception/grasp_attempts.csv`.
 
 ## Notes
 

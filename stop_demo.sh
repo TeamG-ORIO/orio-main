@@ -33,7 +33,20 @@ else
     echo "[stop]   WARNING: cannot ssh to $LUISA; stop it there by hand" >&2
 fi
 
-# 2. The tmux session: roscore, cameras, perception, state machine, and the ssh
+# 2. Recorder + perception flush their .rrd on SIGINT; give them up to 5 s.
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    for p in $(tmux list-panes -s -t "$SESSION" -F '#{pane_id}:#{pane_title}' | grep -E ':(recorder|perception)$' | cut -d: -f1); do
+        tmux send-keys -t "$p" C-c
+    done
+    for _ in $(seq 10); do
+        busy=$(tmux list-panes -s -t "$SESSION" -F '#{pane_title}:#{pane_current_command}' | grep -cE '^(recorder|perception):python')
+        [ "$busy" -eq 0 ] && break
+        sleep 0.5
+    done
+    echo "[stop] rerun writers flushed"
+fi
+
+# 3. The tmux session: roscore, cameras, perception, state machine, and the ssh
 # sessions holding robot 1's controller (frankapy ties it to the connection).
 if tmux has-session -t "$SESSION" 2>/dev/null; then
     tmux kill-session -t "$SESSION" && echo "[stop] tmux session '$SESSION' closed"

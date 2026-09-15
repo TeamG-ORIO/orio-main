@@ -30,6 +30,7 @@ import groundingdino.datasets.transforms as T
 # Custom modules
 from grasp_solver import optimize_grasp_pose
 from opt_label_location import opt_label_loc
+from rerun_writer import PerceptionLog
 
 # ==============================================================================
 # SHARED PARAMETERS
@@ -174,10 +175,10 @@ class CombinedPerceptionNode:
 
         self.pnp_intrinsics = self._resolve_pnp_intrinsics()
 
-        # A/B log: one CSV row per grasp attempt, either backend.
-        self.ab_log_path = rospy.get_param(
-            '~ab_log', os.path.join(HOME, 'grasp_attempts.csv'))
-        self._init_ab_log()
+        # Run logging -> <ORIO_RUN_DIR>/perception.rrd (docs/LOGGING.md); worker thread, never blocks.
+        self.rlog = PerceptionLog()
+        rospy.loginfo("Run logging: %s", self.rlog.path or "disabled")
+        rospy.on_shutdown(self.rlog.close)
 
         self._dexnet_srv = None
         if self.grasp_backend == 'dexnet':
@@ -249,41 +250,17 @@ class CombinedPerceptionNode:
         rospy.loginfo("Connected to DexNet service %s", name)
         return rospy.ServiceProxy(name, PlanDexnetGrasp)
 
-    # ── A/B logging ───────────────────────────────────────────────────────────
+    @staticmethod
+    def _with_tilt(grasp_data):
+        """Classical grasps carry no tilt; derive it from the pose so both backends compare."""
+        if grasp_data and np.isnan(grasp_data.get("tilt_deg", np.nan)) and "rotation" in grasp_data:
+            grasp_data["tilt_deg"] = float(np.degrees(np.arccos(np.clip(
+                -np.asarray(grasp_data["rotation"])[2, 2], -1.0, 1.0))))
+        return grasp_data
 
-    def _init_ab_log(self):
-        try:
-            if not os.path.exists(self.ab_log_path):
-                with open(self.ab_log_path, 'w') as f:
-                    f.write("stamp,backend,planned,q_value,tilt_deg,"
-                            "x,y,z,plan_time_s,reason\n")
-            rospy.loginfo("Grasp attempt log: %s", self.ab_log_path)
-        except OSError as exc:
-            rospy.logwarn("Could not open A/B log %s: %s", self.ab_log_path, exc)
-            self.ab_log_path = None
-
-    def _log_attempt(self, backend, planned, grasp_data, plan_time, reason=""):
-        """One CSV row per attempt. Rejections are logged too, with planned=0."""
-        if not self.ab_log_path:
-            return
-        q = tilt = float('nan')
-        x = y = z = float('nan')
-        if grasp_data:
-            q = grasp_data.get("score", float('nan'))
-            tilt = grasp_data.get("tilt_deg", float('nan'))
-            if np.isnan(tilt) and "rotation" in grasp_data:
-                # Classical path does not compute tilt; derive it from the pose so
-                # both backends are comparable in the log.
-                tilt = float(np.degrees(np.arccos(np.clip(
-                    -np.asarray(grasp_data["rotation"])[2, 2], -1.0, 1.0))))
-            x, y, z = grasp_data["center"]
-        try:
-            with open(self.ab_log_path, 'a') as f:
-                f.write("%.3f,%s,%d,%.4f,%.2f,%.4f,%.4f,%.4f,%.3f,%s\n" % (
-                    rospy.Time.now().to_sec(), backend, 1 if planned else 0,
-                    q, tilt, x, y, z, plan_time, reason.replace(",", ";")))
-        except OSError as exc:
-            rospy.logwarn("A/B log write failed: %s", exc)
+    @staticmethod
+    def _depth_scale(depth_msg):
+        return DEPTH_UNIT_PNP if depth_msg.encoding == '16UC1' else 1.0
 
     # ── DexNet grasp planning ─────────────────────────────────────────────────
 
@@ -493,14 +470,14 @@ class CombinedPerceptionNode:
             grasp_data, message = self._plan_grasp_dexnet(
                 color_crop, depth_crop, self.pnp_depth_msg)
         plan_time = (rospy.Time.now() - t0).to_sec()
+        self.rlog.pnp(color_crop, depth_crop, self._depth_scale(self.pnp_depth_msg),
+                      grasps=[grasp_data] if grasp_data else [], backend='dexnet',
+                      plan_time=plan_time, reason=message)
 
         if grasp_data is None:
-            self._log_attempt('dexnet', False, None, plan_time, message)
             res.success = False
             res.message = message or "DexNet produced no valid grasp."
             return res
-
-        self._log_attempt('dexnet', True, grasp_data, plan_time)
 
         pose_array_msg = PoseArray()
         pose_array_msg.header.stamp = rospy.Time.now()
@@ -532,6 +509,7 @@ class CombinedPerceptionNode:
     def handle_pnp(self, req):
         res = TriggerResponse()
         rospy.loginfo("PnP grasp computation triggered!")
+        t_start = rospy.Time.now()
 
         if self.pnp_rgb_msg is None or self.pnp_depth_msg is None:
             res.success = False
@@ -559,6 +537,8 @@ class CombinedPerceptionNode:
         if best_masks is None:
             res.success = False
             res.message = "GroundingDINO found 0 objects."
+            self.rlog.pnp(color_base, depth_base, self._depth_scale(self.pnp_depth_msg),
+                          plan_time=(rospy.Time.now() - t_start).to_sec(), reason=res.message)
             return res
 
         # Save debug image with SAM masks and GroundingDINO bounding boxes
@@ -585,6 +565,7 @@ class CombinedPerceptionNode:
         pose_array_msg = PoseArray()
         pose_array_msg.header.stamp    = rospy.Time.now()
         pose_array_msg.header.frame_id = self.target_frame
+        planned = []
 
         for mask in best_masks:
             color_masked, depth_masked = color_base.copy(), depth_base.copy()
@@ -621,7 +602,7 @@ class CombinedPerceptionNode:
                 p.position.y += float(self.classical_cfg.get('offset_y', OFFSET_Y))
                 p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = quat
                 pose_array_msg.poses.append(p)
-                self._log_attempt('classical', True, grasp_data, 0.0)
+                planned.append(self._with_tilt(grasp_data))
                 rospy.loginfo(p)
                 # Store the pixel-space grasp center for the depth-query service.
                 # grasp_data["center"] is in the cropped-image coordinate system before
@@ -646,6 +627,9 @@ class CombinedPerceptionNode:
         else:
             res.success = False
             res.message = "Found objects but could not compute valid grasp poses."
+        self.rlog.pnp(color_base, depth_base, self._depth_scale(self.pnp_depth_msg),
+                      boxes_xyxy, phrases, logits, best_masks, grasps=planned, backend='classical',
+                      plan_time=(rospy.Time.now() - t_start).to_sec(), reason=res.message)
         return res
 
     # ── Depth-at-grasp service ────────────────────────────────────────────────
@@ -889,6 +873,9 @@ class CombinedPerceptionNode:
 
         res.success = bool((depth_val1 != 0) or (depth_val2 != 0))
         res.message = f"Zone1={'OK' if depth_val1 != 0 else 'FAIL'}, Zone2={'OK' if depth_val2 != 0 else 'FAIL'}"
+        self.rlog.lbl(color_base, best_masks, boxes_xyxy, phrases, logits, ok=res.success, reason=res.message, zones={
+            1: {'x': opt_x1, 'y': opt_y1, 'angle_deg': opt_ang_deg1, 'depth': float(depth_val1)} if opt_x1 is not None else None,
+            2: {'x': opt_x2, 'y': opt_y2, 'angle_deg': opt_ang_deg2, 'depth': float(depth_val2)} if opt_x2 is not None else None})
         return res
 
 

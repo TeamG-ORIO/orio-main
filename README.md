@@ -1,73 +1,64 @@
-# MRSD Team G: ORIO
-## Desktop Setup
+# orio_bringup
 
-### Install Prerequisites:
-- **Setup Docker:** 
-   - [Install Docker](https://docs.docker.com/engine/install/ubuntu/)
-   - [Install Nvidia Docker](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-   - (Optional) Add docker to [sudoers](https://docs.docker.com/engine/install/linux-postinstall)\
-      Do not forget to logout and login after adding docker to sudoers\
-      If not done, please run all docker commands with a `sudo` prefix.
+Docker image, run helpers, and tmux bring-up for the ORIO demo.
 
-- **Setup Frankapy:**\
-   Follow instructions from the official [frankapy](https://github.com/iamlab-cmu/frankapy) repository and clone the frankapy repository at `/home/student`
+## Docker image
 
+`docker/Dockerfile` builds the single `orio_docker` image: ROS Noetic + MoveIt +
+franka-ros, CUDA 11.8 + ZED SDK 4.1, OpenNI2, Azure Kinect, RealSense, ikpy,
+sllurp, PyTorch, and the `python-mercuryapi` submodule.
 
-### Setup the PC:
-1. Clone the [16662_RobotAutonomy](https://github.com/vib2810/16662_RobotAutonomy) repository at `/home/student`
-   ```bash
-   git clone git@github.com:vib2810/16662_RobotAutonomy.git
-   ```
+```bash
+git submodule update --init --recursive
+bash src/devel_packages/orio_bringup/docker/build.sh   # -> orio_docker
+```
 
-2. Build the Docker Container:
-   ```
-   cd 16662_RobotAutonomy
-   docker build -t frankapy_docker .
-   ```
+Run: `bash orio_run_docker.sh` (state machine); the cameras run in the same
+container via `roslaunch manipulation cameras.launch`.
 
-### Running Demo Code:
-**Note:** Replace `[control-pc-name]` with the name of the control pc: `iam-doc` (robot 1) or `iam-luisa` (robot 2)
-1. Unlock robot joints
-   ```bash
-   ssh -X student@[control-pc-name]
-   google-chrome
-   ```
-   In google chrome open `https://172.16.0.2/desk/` and press `Click to unlock joints`
+`docker/Dockerfile.dexnet` builds a separate `orio/dexnet` image for DexNet 4.0 suction
+grasping — see [DEXNET.md](DEXNET.md).
 
-2. Run `roscore` on the control pc. In a new terminal:
-   ```bash
-   roscore
-   ```
+### frankapy in the container
 
-3. Run the start_control_pc script from the frankapy package
-   ```bash
-   cd <frankapy package directory>
-   bash ./bash_scripts/start_control_pc.sh -u student -i [control-pc-name]
-   ```
-   This should launch 3 terminals which sets up frankapy to communicate with the robot. To reset frankapy communication, just kill the 3 terminals and rerun the script.
-   
-4. **Running the Docker Container:**
-   - Run the Docker Container. In a new terminal:
-      ```bash
-      bash run_docker.sh
-      ```
+frankapy is a **per-machine client** — not rebuilt here, not a tracked submodule.
+Supply it at `src/git_packages/frankapy` (git-ignored); `orio_run_docker.sh` mounts
+it at the image's PYTHONPATH (`/home/ros_ws/src/git_packages/frankapy`):
 
-   - Attach a terminal connected to the Docker Container:
-      ```bash
-      bash terminal_docker.sh
-      ```
+```bash
+git clone -b akshitr/widen-workspace-walls --recursive \
+  git@github.com:TeamG-ORIO/frankapy.git src/git_packages/frankapy
+```
 
-5. **Run the MoveIt Server:** <br>
-    In a new terminal
-    ```bash
-    bash terminal_docker.sh
-    roslaunch manipulation demo_frankapy.launch
-    ```
+The `akshitr/widen-workspace-walls` branch carries the demo's widened
+`WORKSPACE_WALLS` (a client-side check). Override the location with
+`FRANKAPY_DIR=/path/to/frankapy` for development. franka-interface (the C++
+controller that runs on the robots) stays a reference mirror under
+`reference/control_pcs/`.
 
-6. **Run the demo_moveit.py script:** <br>
-    In a new terminal
-    ```bash
-    bash terminal_docker.sh
-    rosrun manipulation demo_moveit.py
-    ```
-    The script initially displays a planned path on rviz. Please checkout the comments in the main function in the demo_moveit.py script to run this script on the robot.  
+### ZED neural-depth weights
+
+`orio_run_docker.sh` bind-mounts the host resources
+(`-v /usr/local/zed/resources/:/usr/local/zed/resources/`). They can't be baked
+at build time (the SDK needs a GPU to download them); on a fresh machine the SDK
+downloads + optimizes them on the first neural-mode run, then reuses them.
+
+## tmux bring-up
+
+`launch_demo.sh` (repo root) runs the whole demo in one tmuxifier session: 9
+readiness-gated panes (`tmux/wait_for.sh`) in a tiled window, including the rerun
+recorder (`logging/rerun/<run_id>/`, see `docs/LOGGING.md`).
+
+```bash
+bash launch_demo.sh              # full demo
+bash launch_demo.sh --no-vacuum  # dry-run, no pneumatics
+bash launch_demo.sh --no-logging # no recorder / run events
+bash launch_demo.sh --live       # recorder also streams to a running `rerun` viewer
+bash stop_demo.sh                # flushes the recording, then tears the session down
+```
+
+- `tmux/layouts/orio.session.sh` — session layout (panes are titled; `stop_demo.sh` uses the titles).
+- `tmux/wait_for.sh` — readiness gates (roscore / container / topic / service).
+
+tmuxifier install (once per machine):
+`git clone https://github.com/jimeh/tmuxifier.git ~/.tmuxifier`.

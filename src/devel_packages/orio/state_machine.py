@@ -11,12 +11,11 @@ from scipy.spatial.transform import Rotation as R
 from frankapy import FrankaArm
 from autolab_core import RigidTransform
 from geometry_msgs.msg import PoseArray
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from custom_msgs.srv import AddLabeledItem
 import sys, os
 import logging
-import datetime
 import threading
 import tkinter as tk
 from tkinter import ttk, messagebox
@@ -24,6 +23,11 @@ import random
 import pickle
 import yaml
 import CollisionChecker
+
+try:
+    from orio_core.events import TOPIC as EVENTS_TOPIC, EventSink
+except ImportError:  # orio_core not on path: run events disabled
+    EVENTS_TOPIC, EventSink = None, None
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -47,30 +51,62 @@ LBL_TF_YAML     = '../manipulation/config/zed_to_label_tf.yaml'
 
 # ──────────────────────────────────────────────────────────────────────────────────
 
-_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
-
-# Module-level logger — configured by _setup_file_logger() once the node starts.
+# Module-level logger; records go to rospy's rosout logger (terminal + /rosout, recorded per run).
 log = logging.getLogger("orio_fsm")
 
-def _setup_file_logger():
-    """Configure the orio_fsm logger with a timestamped file handler."""
-    os.makedirs(_LOG_DIR, exist_ok=True)
-    log_path = os.path.join(_LOG_DIR, f"orio_run_{datetime.datetime.now():%Y%m%d_%H%M%S}.log")
 
-    fmt = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
-    fh = logging.FileHandler(log_path)
-    fh.setFormatter(fmt)
+class _ToRosout(logging.Handler):
+    def emit(self, record):
+        logging.getLogger('rosout').handle(record)
 
+
+def _setup_logger():
     log.setLevel(logging.DEBUG)
     log.handlers.clear()
-    log.addHandler(sh)
-    log.addHandler(fh)
+    log.addHandler(_ToRosout())
     log.propagate = False
 
-    log.info(f"[Logger] File log started: {log_path}")
-    return log_path
+
+# Run events on /orio/events (docs/LOGGING.md). Null until _init_events() after rospy.init_node.
+class _NullTimed:
+    def __enter__(self):
+        self.data = {}
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _NullSink:
+    enabled = False
+
+    def emit(self, *a, **kw):
+        return False
+
+    def timed(self, *a, **kw):
+        return _NullTimed()
+
+
+events = _NullSink()
+
+
+def _init_events():
+    global events
+    if EventSink is None or os.environ.get('ORIO_LOGGING', '1') == '0':
+        return
+    pub = rospy.Publisher(EVENTS_TOPIC, String, queue_size=50)
+    events = EventSink(lambda s: pub.publish(String(data=s)), src='state_machine')
+
+
+def _instrument_goto(arm, name):
+    """Wrap arm.goto_joints so every command is a timed 'cmd' event (target + duration)."""
+    orig = arm.goto_joints
+
+    def goto_joints(joints, *a, **kw):
+        with events.timed('cmd', name) as ev:
+            ev.data.update(joints=[float(j) for j in joints], duration=kw.get('duration', a[0] if a else None))
+            return orig(joints, *a, **kw)
+    arm.goto_joints = goto_joints
 
 # ==============================================================================
 # GLOBAL EVENTS & SHARED STATE
@@ -108,6 +144,7 @@ def call_add_item_service(item_name, expiry):
         rospy.wait_for_service(service_name, timeout=5.0)
         proxy = rospy.ServiceProxy(service_name, AddLabeledItem)
         response = proxy(item_name=item_name, expiration_date=expiry)
+        events.emit('rfid', item_name, expiry=expiry, ok=bool(response.success), msg=response.message)
         if response.success:
             log.info("[RFID] Registered label — item='%s' expiry='%s' msg='%s'",
                      item_name, expiry, response.message)
@@ -133,7 +170,9 @@ def call_trigger_service(service_name):
     try:
         rospy.wait_for_service(service_name, timeout=5.0)
         proxy = rospy.ServiceProxy(service_name, Trigger)
-        response = proxy()
+        with events.timed('service', service_name) as ev:
+            response = proxy()
+            ev.data['ok'] = bool(response.success)
         log.info("[Service] %s → success=%s msg='%s'",
                       service_name, response.success,
                       getattr(response, 'message', ''))
@@ -163,6 +202,8 @@ class RobotHardware:
         log.info("[Hardware] Initializing Robot Hardware...")
         self.pick_and_place_arm = FrankaArm(with_gripper=False, old_gripper=False, robot_num=1, init_node=False)
         self.label_arm  = FrankaArm(with_gripper=False, old_gripper=False, robot_num=2, init_node=False)
+        _instrument_goto(self.pick_and_place_arm, 'arm1')
+        _instrument_goto(self.label_arm, 'arm2')
         log.info("[Hardware] Resetting both arms to home joints")
         self.pick_and_place_arm.reset_joints()
         self.label_arm.reset_joints()
@@ -348,6 +389,9 @@ class RobotHardware:
                  np.round(pre_angles[1:8], 4),
                  np.round(final_angles[1:8], 4),
                  pre_err, final_err)
+            events.emit('ik', f'arm{arm_number or 1}', target=list(task_pos), pre=pre_angles[1:8],
+                        final=final_angles[1:8], attempt=attempt + 1, err_pre=pre_err, err_final=final_err,
+                        label_zone=label_zone)
 
             return pre_angles[1:8], final_angles[1:8]
 
@@ -498,6 +542,7 @@ class ZoneManager:
         old_state = self.states[zone]
         self.states[zone] = new_state
         log.info("[ZoneManager] Zone %s: %s → %s", zone, old_state, new_state)
+        events.emit('zone', zone, old=old_state, new=new_state)
 
 # Globals
 manager = ZoneManager()
@@ -509,6 +554,8 @@ _item_expiry = ""
 
 # Cycle counter for output tracking
 _items_placed_output = 0
+# Pick counter: the 'pick' timeline in the run recording
+_pick_n = 0
 
 # ==============================================================================
 # SECTION 2: HUMAN RECOVERY GUI & HELPERS
@@ -705,6 +752,7 @@ def _safe_execute(state_name, fn, userdata):
         return fn(userdata)
     except Exception as exc:
         log.error("[%s] Unhandled exception: %s", state_name, exc)
+        events.emit('error', state_name, msg=str(exc), ok=False)
         userdata.recovery_failed_state = state_name
         userdata.recovery_error_msg    = str(exc)
         return 'failed'
@@ -733,6 +781,7 @@ class HumanRecoveryArm1(smach.State):
             vacuum_on_service='/orio/pnp_cup/on',
             vacuum_off_service='/orio/pnp_cup/off')
         log.info("[ARM1 Recovery] choice=%s", choice)
+        events.emit('recovery', 'arm1', failed_state=failed, error=err_msg, choice=choice)
         recovery_event_arm1.clear()
         log.info("[ARM1 Recovery] resuming")
         if choice == 'shutdown':
@@ -763,6 +812,7 @@ class HumanRecoveryArm2(smach.State):
             vacuum_on_service='/orio/lbl_cup/on',
             vacuum_off_service='/orio/lbl_cup/off')
         log.info("[ARM2 Recovery] choice=%s", choice)
+        events.emit('recovery', 'arm2', failed_state=failed, error=err_msg, choice=choice)
         recovery_event_arm2.clear()
         log.info("[ARM2 Recovery] resuming")
         
@@ -814,6 +864,9 @@ class FetchInput(smach.State):
                                           'recovery_failed_state', 'recovery_error_msg'])
 
     def _run(self, userdata):
+        global _pick_n
+        _pick_n += 1
+        events.emit('pick', n=_pick_n)
         log.info("[FetchInput] Entering state")
         hardware.latest_pose_msg = None
 
@@ -1276,8 +1329,9 @@ def _resolve_disable_pneumatics(argv):
 def main():
     global hardware, _item_name, _item_expiry, disable_pneumatics
     rospy.init_node('dual_arm_labeling_fsm')
-    log_path = _setup_file_logger()
-    log.info("[Main] Node started. Log file: %s", log_path)
+    _setup_logger()
+    _init_events()
+    log.info("[Main] Node started (run events %s)", "on" if events.enabled else "off")
 
     disable_pneumatics = _resolve_disable_pneumatics(rospy.myargv(argv=sys.argv))
     if disable_pneumatics:
@@ -1290,8 +1344,10 @@ def main():
     _item_name, _item_expiry = _show_item_setup_gui()
     if _item_name is None:
         log.warning("[Main] Setup cancelled by operator — exiting cleanly.")
+        events.emit('shutdown', 'operator_cancel')
         return
     log.info("[Main] Operator input — item='%s'  expiry='%s'", _item_name, _item_expiry)
+    events.emit('operator', 'setup', item=_item_name, expiry=_item_expiry, no_vacuum=disable_pneumatics)
 
     threading.Thread(target=_shutdown_listener, daemon=True).start()
 
@@ -1353,12 +1409,15 @@ def main():
         log.info("[Main] Starting state machine execution")
         outcome = top_sm.execute()
         log.info("[Main] State machine finished with outcome: %s", outcome)
+        events.emit('shutdown', 'finished', outcome=outcome)
     except (rospy.ROSInterruptException, KeyboardInterrupt):
         log.warning("[Main] Interrupt received — requesting clean shutdown")
+        events.emit('shutdown', 'interrupt')
         shutdown_event.set()
     finally:
         log.warning("[Main] Shutting down: turning off both vacuums")
         log.info("[Main] Total items placed at output: %d", _items_placed_output)
+        events.emit('summary', 'run', items_placed=_items_placed_output, picks=_pick_n)
         call_trigger_service('/orio/pnp_cup/off')
         call_trigger_service('/orio/lbl_cup/off')
         if 'sis' in locals():

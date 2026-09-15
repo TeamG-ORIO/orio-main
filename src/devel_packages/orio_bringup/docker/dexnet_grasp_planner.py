@@ -11,11 +11,17 @@ import os
 
 import numpy as np
 import rospy
+from std_msgs.msg import String
 
 from autolab_core import CameraIntrinsics, DepthImage, BinaryImage, ColorImage, RgbdImage, YamlConfig
 from gqcnn.grasping import FullyConvolutionalGraspingPolicySuction, RgbdImageState
 from custom_msgs.srv import PlanDexnetGrasp, PlanDexnetGraspResponse
 from custom_msgs.msg import DexnetGrasp
+
+try:
+    from orio_core.events import TOPIC as EVENTS_TOPIC, EventSink
+except ImportError:  # orio_core not mounted: no run events, service still works
+    EVENTS_TOPIC, EventSink = None, None
 
 import gqcnn.model.tf.fc_network_tf as _fcmod
 
@@ -58,6 +64,12 @@ class DexnetGraspPlanner(object):
         self._build_policy(int(fc["im_height"]), int(fc["im_width"]))
 
         self._min_q_value = float(rospy.get_param("~min_q_value", 0.0))
+
+        # Run events for the rerun recorder (docs/LOGGING.md).
+        self._events = None
+        if EventSink and os.environ.get("ORIO_LOGGING", "1") != "0":
+            ev_pub = rospy.Publisher(EVENTS_TOPIC, String, queue_size=20)
+            self._events = EventSink(lambda s: ev_pub.publish(String(data=s)), src="dexnet")
 
         self._srv = rospy.Service("~plan_grasp", PlanDexnetGrasp, self._handle)
         rospy.loginfo("DexNet grasp planner ready on %s (min_q_value=%.3f)",
@@ -150,7 +162,11 @@ class DexnetGraspPlanner(object):
         msg.pose.orientation.y = quat[2]
         msg.pose.orientation.z = quat[3]
 
-        if msg.q_value < self._min_q_value:
+        rejected = msg.q_value < self._min_q_value
+        if self._events:
+            self._events.emit("dexnet", "plan", q=msg.q_value, px=list(msg.center_px), depth=msg.depth,
+                              plan_time_s=elapsed, ok=not rejected)
+        if rejected:
             rospy.logwarn("Rejected grasp: q=%.4f < min_q_value=%.3f (%.3fs)",
                           msg.q_value, self._min_q_value, elapsed)
             return PlanDexnetGraspResponse(

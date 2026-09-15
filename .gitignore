@@ -11,6 +11,7 @@ install/
 # --- Logs ---
 logs/
 *.log
+logging/
 
 # --- Python ---
 __pycache__/

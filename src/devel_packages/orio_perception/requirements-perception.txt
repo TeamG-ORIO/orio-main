@@ -6,6 +6,8 @@ Pillow
 open3d
 torch
 segment-anything
+rerun-sdk==0.37.2   # run logging (perception writer + orio_logging/recorder.py)
+psutil
 
 # GroundingDINO: editable install from the fork submodule (patched CUDA kernel):
 #   pip install -e GroundingDINO/

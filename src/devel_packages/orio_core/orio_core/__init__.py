@@ -14,5 +14,6 @@ library — never in here.
 from . import robot_util  # noqa: F401
 from . import perception_geometry  # noqa: F401
 from . import planning  # noqa: F401
+from . import events  # noqa: F401
 
-__all__ = ["robot_util", "perception_geometry", "planning"]
+__all__ = ["robot_util", "perception_geometry", "planning", "events"]
