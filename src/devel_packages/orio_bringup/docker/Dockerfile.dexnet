@@ -1,11 +1,29 @@
 # DexNet 4.0 (FC-GQCNN-4.0-SUCTION) grasp planner.
 # NVIDIA's TF1 fork is used because stock TF 1.15 targets CUDA 10.0 and has no Ampere
 # (SM 8.6) kernels. 23.03 is the last -tf1- image NVIDIA published; it is Ubuntu 20.04 /
-# Python 3.8, matching ROS Noetic on the host so rospy and generated messages mount in.
+# Python 3.8, which is exactly ROS Noetic's platform, so we install rospy INTO the image
+# below rather than mounting it from the host. (run_dexnet.sh still mounts a host/repo
+# copy as a fallback for images built before this change; once everyone is on this image
+# that mount can be dropped.)
 FROM nvcr.io/nvidia/tensorflow:23.03-tf1-py3
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libspatialindex-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── ROS Noetic Python runtime (rospy + std_msgs) ────────────────────────────
+# Self-contained: the planner imports rospy and std_msgs. Noetic targets Ubuntu 20.04 /
+# Python 3.8, matching this base, so the ros-base packages install cleanly. rospy pulls
+# genpy, roslib, rospkg and the core message packages. This removes the historic
+# dependency on a populated host /opt/ros/noetic.
+RUN apt-get update && apt-get install -y --no-install-recommends curl gnupg lsb-release \
+    && curl -sSL "https://raw.githubusercontent.com/ros/rosdistro/master/ros.asc" \
+         | gpg --dearmor -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros/ubuntu $(lsb_release -sc) main" \
+         > /etc/apt/sources.list.d/ros1.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        ros-noetic-rospy ros-noetic-std-msgs ros-noetic-sensor-msgs \
+        ros-noetic-geometry-msgs ros-noetic-ros-comm \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir \

@@ -66,3 +66,6 @@ src/git_packages/frankapy/
 
 # research/prm: local only, not pushed
 research/prm/
+
+# Extracted ROS Noetic dist-packages for the dexnet container (see run_dexnet.sh)
+.ros_noetic_dist/

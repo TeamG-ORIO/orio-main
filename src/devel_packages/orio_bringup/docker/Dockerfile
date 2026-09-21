@@ -54,6 +54,10 @@ RUN pip3 install torch torchvision torchaudio --index-url https://download.pytor
 # mount src folder from desktop to /home/ros_ws/src
 COPY src/devel_packages /home/ros_ws/src/devel_packages
 
+# python-mercuryapi's LLRP code generation invokes xsltproc (libxslt), which is not in
+# the base image; without it `make` fails with "xsltproc: Command not found" (Error 127).
+RUN apt-get update && apt-get install -y xsltproc
+
 # Build and install python-mercuryapi inside the container
 RUN cd /home/ros_ws/src/devel_packages/orio_rfid/RFID/python-mercuryapi/ && \
     make && \
