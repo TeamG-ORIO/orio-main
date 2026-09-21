@@ -121,19 +121,31 @@ class CombinedPerceptionNode:
     def __init__(self):
         rospy.init_node('combined_perception_node')
 
-        # ── Load models once ──────────────────────────────────────────────────
-        rospy.loginfo("Loading AI Models (SAM & GroundingDINO)...")
-        self.sam = sam_model_registry[MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
-        self.sam.to(device=device)
-        self.predictor = SamPredictor(self.sam)
+        # Backend decides which models to load. DexNet plans from depth + a depth-band
+        # bin mask and never touches SAM/GroundingDINO, so skip loading them (they are
+        # only used by the classical grasp path and the labelling path). This avoids a
+        # ~440 MB weight download + GPU memory that would compete with DexNet's TF graph.
+        self.grasp_backend = rospy.get_param('~grasp_backend', 'classical')
+        rospy.loginfo("Grasp backend: %s", self.grasp_backend)
         self._inference_lock = threading.Lock()
-        self.gdino_model = load_model(CONFIG_PATH, WEIGHTS_PATH)
-        self.gdino_transform = T.Compose([
-            T.RandomResize([800], max_size=1333),
-            T.ToTensor(),
-            T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-        ])
-        rospy.loginfo("Models loaded.")
+
+        # ── Load models once (skipped for the dexnet backend) ──────────────────
+        self.sam = self.predictor = self.gdino_model = self.gdino_transform = None
+        if self.grasp_backend != 'dexnet':
+            rospy.loginfo("Loading AI Models (SAM & GroundingDINO)...")
+            self.sam = sam_model_registry[MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
+            self.sam.to(device=device)
+            self.predictor = SamPredictor(self.sam)
+            self.gdino_model = load_model(CONFIG_PATH, WEIGHTS_PATH)
+            self.gdino_transform = T.Compose([
+                T.RandomResize([800], max_size=1333),
+                T.ToTensor(),
+                T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+            ])
+            rospy.loginfo("Models loaded.")
+        else:
+            rospy.loginfo("DexNet backend: skipping SAM/GroundingDINO load "
+                          "(not used for depth-based suction grasps).")
 
         # ── Pick-and-place TF ─────────────────────────────────────────────────
         self.tf_pnp = self._load_tf(PNP_TF_YAML)
@@ -167,11 +179,10 @@ class CombinedPerceptionNode:
         self.depth_query_pub = rospy.Publisher('/grasp_point_depth', Float32,   queue_size=1)
 
         # ── Grasp backend config ──────────────────────────────────────────────
-        self.grasp_backend = rospy.get_param('~grasp_backend', 'classical')
+        # grasp_backend was already read (and logged) above to decide model loading.
         self.dexnet_cfg    = rospy.get_param('~dexnet', {})
         self.classical_cfg = rospy.get_param('~classical', {})
         self.camera_cfg    = rospy.get_param('~camera', {})
-        rospy.loginfo("Grasp backend: %s", self.grasp_backend)
 
         self.pnp_intrinsics = self._resolve_pnp_intrinsics()
 
@@ -412,6 +423,11 @@ class CombinedPerceptionNode:
         Serialised by _inference_lock so that labelling and PnP calls never
         share gdino_model, gdino_transform, or the SAM predictor concurrently.
         """
+        if self.gdino_model is None:
+            raise RuntimeError(
+                "SAM/GroundingDINO were not loaded (grasp_backend=dexnet). "
+                "The labelling/classical path needs them; start perception with "
+                "grasp_backend=classical to use it.")
         if color_img.shape[2] == 4:
             color_img = color_img[:, :, :3]
 

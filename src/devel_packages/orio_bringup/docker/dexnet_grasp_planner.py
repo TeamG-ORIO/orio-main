@@ -10,6 +10,7 @@ Python package, and with it TensorFlow, which host-side clients do not have.
 import os
 
 import numpy as np
+from scipy import ndimage
 import rospy
 from std_msgs.msg import String
 
@@ -64,6 +65,17 @@ class DexnetGraspPlanner(object):
         self._build_policy(int(fc["im_height"]), int(fc["im_width"]))
 
         self._min_q_value = float(rospy.get_param("~min_q_value", 0.0))
+
+        # Downscale the input before inference. At this camera height objects span
+        # ~100-130 px, larger than FC-GQCNN's ~30-70 px training range, which depresses
+        # q_value (see orio_perception/test/live_affordance.py, where RESCALE=0.5 lifted
+        # q from ~0.24 to ~0.9). The rescale is fully internal: intrinsics are scaled to
+        # match so the 3D grasp pose stays correct, and center_px is un-scaled back to the
+        # original resolution before returning, so callers see original-resolution pixels.
+        self._rescale = float(rospy.get_param("~rescale", 0.5))
+        if self._rescale <= 0:
+            self._rescale = 1.0
+        rospy.loginfo("Input rescale factor: %.3f", self._rescale)
 
         # Run events for the rerun recorder (docs/LOGGING.md).
         self._events = None
@@ -121,12 +133,26 @@ class DexnetGraspPlanner(object):
             raise rospy.ServiceException(
                 "depth_image encoding must be 32FC1, got %s" % req.depth_image.encoding)
         depth_arr = self._decode(req.depth_image, np.float32).astype(np.float32)
-        depth_im = DepthImage(depth_arr[:, :, None], frame=intr.frame)
-
         color_arr = self._decode(req.color_image, np.uint8, channels=3)
-        color_im = ColorImage(np.ascontiguousarray(color_arr), frame=intr.frame)
-
         segmask_arr = self._decode(req.segmask, np.uint8)
+
+        # Downscale for inference (see __init__). Depth uses nearest (order=0) to avoid
+        # inventing intermediate ranges; colour bilinear (order=1). Intrinsics scale with
+        # the image so the recovered 3D pose stays correct. center_px is un-scaled after.
+        s = self._rescale
+        if s != 1.0:
+            depth_arr = np.ascontiguousarray(ndimage.zoom(depth_arr, s, order=0))
+            color_arr = np.ascontiguousarray(
+                ndimage.zoom(color_arr, (s, s, 1), order=1).astype(np.uint8))
+            segmask_arr = np.ascontiguousarray(
+                (ndimage.zoom(segmask_arr, s, order=0) > 0).astype(np.uint8) * 255)
+            intr = CameraIntrinsics(
+                frame=intr.frame, fx=intr.fx * s, fy=intr.fy * s,
+                cx=intr.cx * s, cy=intr.cy * s,
+                height=depth_arr.shape[0], width=depth_arr.shape[1])
+
+        depth_im = DepthImage(depth_arr[:, :, None], frame=intr.frame)
+        color_im = ColorImage(np.ascontiguousarray(color_arr), frame=intr.frame)
         segmask = BinaryImage(np.ascontiguousarray(segmask_arr), frame=intr.frame)
 
         if self._policy_shape != (depth_im.height, depth_im.width):
@@ -150,7 +176,12 @@ class DexnetGraspPlanner(object):
         msg = DexnetGrasp()
         msg.q_value = float(action.q_value)
         msg.grasp_type = DexnetGrasp.SUCTION
-        msg.center_px = [float(grasp.center[0]), float(grasp.center[1])]
+        # Un-scale center_px back to the ORIGINAL image resolution so callers (e.g. the
+        # perception node's /get_depth_at_grasp, which samples the full-res depth) get
+        # pixels in their own coordinates. The 3D pose already used scaled intrinsics and
+        # needs no correction.
+        msg.center_px = [float(grasp.center[0]) / self._rescale,
+                         float(grasp.center[1]) / self._rescale]
         msg.angle = float(getattr(grasp, "angle", 0.0))
         msg.depth = float(grasp.depth)
         msg.pose.position.x = pose.translation[0]
