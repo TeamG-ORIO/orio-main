@@ -46,8 +46,11 @@ def build_node(module, log_path):
     }
     node.camera_cfg = {}
     node.tf_pnp = np.eye(4)          # identity: camera frame == world for the test
-    node.ab_log_path = log_path
-    node._init_ab_log()
+    # The orchestrator's A/B attempt log is optional here and has been removed from
+    # some revisions; set it up only if this build still has it.
+    if hasattr(node, "_init_ab_log"):
+        node.ab_log_path = log_path
+        node._init_ab_log()
     node._dexnet_srv = node._connect_dexnet()
     node.pnp_intrinsics = module.o3d.camera.PinholeCameraIntrinsic(**PHOXI)
     # The samples are full frames; disable cropping.
@@ -85,7 +88,8 @@ def main():
     for i in range(5):
         colour, depth = load_sample(i)
         grasp, message = node._plan_grasp_dexnet(colour, depth, FakeDepthMsg())
-        node._log_attempt("dexnet", grasp is not None, grasp, 0.0, message)
+        if hasattr(node, "_log_attempt"):
+            node._log_attempt("dexnet", grasp is not None, grasp, 0.0, message)
         if grasp is None:
             print("  scene %d  REJECTED  %s" % (i, message))
             failures.append("scene %d" % i)

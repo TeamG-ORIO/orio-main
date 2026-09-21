@@ -1,0 +1,82 @@
+# RViz config for visualize_dexnet_rviz.py.
+# Fixed Frame is 'world', which the script's static TF broadcaster provides. If you run
+# the node with --no-static-tf, set Global Options > Fixed Frame to the frame it prints.
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Global Options1
+        - /DexNet Cloud1
+        - /Grasp Markers1
+      Splitter Ratio: 0.5
+  - Class: rviz/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 160; 160; 164
+      Reference Frame: <Fixed Frame>
+    - Class: rviz/PointCloud2
+      Name: DexNet Cloud
+      Enabled: true
+      Topic: /dexnet_viz/cloud
+      Style: Points
+      Size (Pixels): 3
+      Color Transformer: RGB8
+      Position Transformer: XYZ
+      Queue Size: 1
+      Use Fixed Frame: true
+    - Class: rviz/MarkerArray
+      Name: Grasp Markers
+      Enabled: true
+      Marker Topic: /dexnet_viz/markers
+      Queue Size: 100
+      Namespaces:
+        {}
+    - Class: rviz/Pose
+      Name: Grasp Pose
+      Enabled: true
+      Topic: /dexnet_viz/pose
+      Shape: Axes
+      Axes Length: 0.06
+      Axes Radius: 0.006
+      Queue Size: 10
+  Global Options:
+    Background Color: 48; 48; 48
+    Default Light: true
+    Fixed Frame: world
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz/Interact
+    - Class: rviz/MoveCamera
+    - Class: rviz/Select
+    - Class: rviz/FocusCamera
+    - Class: rviz/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Name: Current View
+      Distance: 1.2
+      Focal Point:
+        X: 0
+        Y: 0
+        Z: 0.7
+      Pitch: 0.4
+      Yaw: 3.14
+      Near Clip Distance: 0.01
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 800
+  Width: 1200
+  Hide Left Dock: false
+  Hide Right Dock: false
