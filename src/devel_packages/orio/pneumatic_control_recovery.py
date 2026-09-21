@@ -16,8 +16,21 @@ class VacuumControlNode:
     def __init__(self):
         rospy.init_node('vacuum_control')
 
-        # Setup serial connection
-        self.serial_conn = serial.Serial('/dev/ttyACM0', 115200, timeout=1)
+        # Setup serial connection to the ClearCore vacuum controller. Its firmware is
+        # flashed once and persists, so no manual re-flash is needed; we just open the
+        # port. If the device is missing (unplugged, wrong port, or firmware lost so it
+        # never enumerates), fail loudly with an actionable message instead of a bare
+        # SerialException.
+        port = os.environ.get('ORIO_VACUUM_PORT', '/dev/ttyACM0')
+        try:
+            self.serial_conn = serial.Serial(port, 115200, timeout=1)
+        except serial.SerialException as exc:
+            rospy.logerr(
+                "Cannot open ClearCore vacuum controller on %s: %s. "
+                "Check it is plugged in (ls -l %s), on the right port "
+                "(set ORIO_VACUUM_PORT), and still flashed with "
+                "pneumatic_control/pneumatic_control.ino.", port, exc, port)
+            raise
         time.sleep(2.0) # Wait for ClearCore reboot
 
         # Publishers for modular boolean state tracking
