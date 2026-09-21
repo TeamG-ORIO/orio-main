@@ -160,15 +160,69 @@ class DexnetPickPlace:
         motion_fn(*args, **kwargs)   # issue asynchronously
         deadline = rospy.Time.now() + rospy.Duration(timeout)
         rate = rospy.Rate(20)
-        while not self.arm.is_skill_done():
+        # is_skill_done(ignore_errors=False) RAISES on a controller fault rather than
+        # silently swallowing it (the frankapy default hides the fault, waits for
+        # franka-interface to auto-recover, and reports the skill "done").
+        #
+        # IMPORTANT: most of what it raises is RECOVERABLE. This robot throws
+        # `joint_motion_generator_acceleration_discontinuity` on roughly half its motions —
+        # franka-interface runs its automatic error recovery and carries on, and picks do
+        # complete (a run with 48 such faults still placed its item). So we must NOT treat
+        # these as fatal, or no pick ever finishes. We log them, let frankapy wait out the
+        # recovery, and keep polling; only an unrecoverable fault (recovery never returns
+        # the controller to ready, so we hit the deadline below) aborts the pick.
+        faults = 0
+        while True:
+            try:
+                if self.arm.is_skill_done(ignore_errors=False):
+                    break
+            except Exception as exc:   # FrankaArmException / ...NotReadyException
+                faults += 1
+                if faults == 1:        # once per motion; the fault repeats while recovering
+                    rospy.logwarn("[Move] %s: controller fault (recovering): %s",
+                                  desc, str(exc).split('\n')[0])
+                # Block until franka-interface is ready again, then resume polling. If it
+                # never recovers, the deadline below turns this into a hard failure.
+                try:
+                    self.arm.wait_for_franka_interface()
+                except Exception:
+                    pass
             if rospy.Time.now() > deadline:
+                # Cancel the stuck skill before raising. frankapy keeps it marked active
+                # otherwise, and the loop's recovery reset_joints() then dies with
+                # "Cannot send another command when the previous skill is active!",
+                # taking the whole run down instead of just this pick.
+                self._abort_skill()
                 raise RuntimeError(
-                    "%s did not complete in %.1fs — the robot is not executing "
-                    "(control PC crashed / FCI not active / e-stop?). Aborting the pick."
-                    % (desc, timeout))
+                    "%s did not complete in %.1fs%s — the robot is not executing (control "
+                    "PC crashed / FCI not active / e-stop, or it never recovered from a "
+                    "fault). Aborting the pick."
+                    % (desc, timeout,
+                       "" if not faults else " after %d controller fault(s)" % faults))
             if rospy.is_shutdown():
+                self._abort_skill()
                 raise KeyboardInterrupt
             rate.sleep()
+
+    def _abort_skill(self):
+        """Best-effort cancel of an in-flight skill so the next command is accepted.
+
+        We deliberately do NOT call frankapy's stop_skill(): it ends with an unbounded
+        wait_for_skill() busy-loop, which hangs forever on exactly the dead-control-PC
+        case this abort exists for. Cancel the action goal directly and clear frankapy's
+        _in_skill flag ourselves, so the next _send_goal() is accepted instead of raising
+        "Cannot send another command when the previous skill is active!".
+        """
+        try:
+            if getattr(self.arm, '_connected', False) and getattr(self.arm, '_in_skill', False):
+                self.arm._client.cancel_goal()
+        except Exception as exc:  # noqa: BLE001 — never mask the original failure
+            rospy.logwarn("[Move] cancel_goal during abort failed: %s", exc)
+        try:
+            self.arm._in_skill = False
+        except Exception:
+            pass
+        rospy.sleep(0.5)          # let franka-interface settle before the next command
 
     # ── Vacuum verification (mirrors state_machine.py's assert_vacuum) ────────
     def assert_vacuum(self, expected_state, timeout=1.0):
@@ -305,18 +359,13 @@ class DexnetPickPlace:
         self._move(self.arm.reset_joints, duration=3, desc="transit to HOME (carrying item)")
         self.assert_vacuum(True)
 
-        # Drop at the OUTPUT box (over it, reaching in by item_depth + margin), via the
-        # L2_INTER waypoint — same as state_machine.py's PlaceOutput. Not the DROP_ZONE
-        # joint pose, which sat at the box edge.
-        rospy.loginfo("[Place] Approaching output via %s", OUTPUT_TRANSIT_POSE)
-        int_joints = self.pose_to_joints(OUTPUT_TRANSIT_POSE, depth_offset=item_depth)
-        self._move(self.arm.goto_joints, int_joints, duration=3,
-                   desc="goto %s" % OUTPUT_TRANSIT_POSE)
-
+        # Drop at the OUTPUT box (over it, reaching in by item_depth + margin). We go
+        # straight from HOME to OUTPUT, skipping the L2_INTER transit waypoint. Not the
+        # DROP_ZONE joint pose, which sat at the box edge.
         rospy.loginfo("[Place] Moving to %s (into the box)", OUTPUT_POSE)
         drop_joints = self.pose_to_joints(
             OUTPUT_POSE, depth_offset=item_depth + OUTPUT_DEPTH_MARGIN)
-        self._move(self.arm.goto_joints, drop_joints, duration=3,
+        self._move(self.arm.goto_joints, drop_joints, duration=4,
                    desc="goto %s" % OUTPUT_POSE)
         self.assert_vacuum(True)
         call_trigger_service('/orio/pnp_cup/off')
@@ -324,7 +373,7 @@ class DexnetPickPlace:
         self.assert_vacuum(False)
 
         rospy.loginfo("[Place] Item dropped; resetting to home")
-        self._move(self.arm.reset_joints, duration=2, desc="reset to home")
+        self._move(self.arm.reset_joints, duration=4, desc="reset to home")
 
     # ── Continuous loop ───────────────────────────────────────────────────────
     def run(self, confirm=False, max_declines=5):
@@ -339,7 +388,19 @@ class DexnetPickPlace:
         picked = 0
         declines = 0
         while not rospy.is_shutdown():
-            self._move(self.arm.reset_joints, desc="reset before scan")
+            # The pre-scan reset is the first thing to fail when the control PC is unwell.
+            # Handle it here rather than letting it escape as a traceback and kill the run:
+            # if the robot can't even get home, there's nothing useful left to do this loop.
+            try:
+                self._move(self.arm.reset_joints, desc="reset before scan")
+            except KeyboardInterrupt:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                rospy.logerr("[Loop] Cannot reset to home: %s", exc)
+                rospy.logerr("[Loop] The robot is not usable right now — stopping. "
+                             "Check the control PC (see the control_pc log). Total placed: %d",
+                             picked)
+                break
             grasp = self.request_grasp()
             if grasp is None:
                 declines += 1
