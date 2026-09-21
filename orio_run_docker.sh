@@ -10,7 +10,17 @@ if [ ! -d "$FRANKAPY_DIR/frankapy" ] || \
     echo "  Clone the fork: git clone -b akshitr/widen-workspace-walls --recursive git@github.com:TeamG-ORIO/frankapy.git src/git_packages/frankapy"
 fi
 
-docker run --privileged --rm -it \
+# Interactive by default (-it + a bash shell). A merged single-terminal launcher runs
+# this backgrounded with no TTY, where -it fails ("the input device is not a TTY") and an
+# interactive bash exits immediately. Set ORIO_NO_TTY=1 to run detached (-d) and keep the
+# container alive with `sleep infinity`, so the launcher can `docker exec` into it.
+if [ -n "${ORIO_NO_TTY:-}" ]; then
+    RUN_FLAGS="-d"; RUN_CMD=(bash -lc "sleep infinity")
+else
+    RUN_FLAGS="-it"; RUN_CMD=(bash)
+fi
+
+docker run --privileged --rm $RUN_FLAGS \
     --name="orio_docker_container" \
     --env="DISPLAY=$DISPLAY" \
     --env="QT_X11_NO_MITSHM=1" \
@@ -29,4 +39,4 @@ docker run --privileged --rm -it \
     -v "$(pwd)/research:/home/ros_ws/research" \
     -v "/usr/local/zed/resources/:/usr/local/zed/resources/" \
     --gpus all \
-    orio_docker bash
+    orio_docker "${RUN_CMD[@]}"

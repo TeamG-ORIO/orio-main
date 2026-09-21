@@ -5,6 +5,9 @@
 #   bash launch_demo.sh --dexnet     # add the DexNet suction-planner pane
 #   bash launch_demo.sh --no-logging # skip the rerun recorder + event logging
 #   bash launch_demo.sh --live       # recorder also streams to a running `rerun` viewer
+#   bash launch_demo.sh --session orio_dexnet_pnp   # single-arm DexNet pick-and-place (no labelling)
+#   bash launch_demo.sh --session orio_dexnet_pnp --confirm        # wait for Enter before each pick
+#   bash launch_demo.sh --session orio_dexnet_pnp --straight-down  # ignore grasp tilt, approach vertically
 # Env: ORIO_FRANKAPY, ORIO_PERCEPTION_ASSETS, ORIO_CONTAINER, ORIO_RUN_DIR.
 # No `set -u`: tmuxifier init.sh is not nounset-safe.
 set -eo pipefail
@@ -18,15 +21,22 @@ export ORIO_RUN_ID="${ORIO_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 export ORIO_RUN_DIR="${ORIO_RUN_DIR:-$REPO/logging/rerun/$ORIO_RUN_ID}"
 export ORIO_LOGGING="${ORIO_LOGGING:-1}"
 
-for arg in "$@"; do
-    case "$arg" in
+SESSION="orio"   # tmuxifier layout name (layouts/<name>.session.sh)
+while [ $# -gt 0 ]; do
+    case "$1" in
         --no-vacuum|--disable-pneumatics) export ORIO_NO_VACUUM=1 ;;
         --dexnet) export ORIO_DEXNET=1 ;;
         --no-logging) export ORIO_LOGGING=0 ;;
         --live) export ORIO_RERUN_LIVE=1 ;;
-        -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
-        *) echo "unknown option: $arg" >&2; exit 2 ;;
+        --session) shift; SESSION="$1" ;;
+        --session=*) SESSION="${1#*=}" ;;
+        # Pass-through flags for the orio_dexnet_pnp pick-and-place pane.
+        --confirm) export ORIO_PNP_CONFIRM=1 ;;
+        --straight-down) export ORIO_PNP_STRAIGHT_DOWN=1 ;;
+        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
+    shift
 done
 
 # Locate tmuxifier.
@@ -43,4 +53,4 @@ if ! command -v tmuxifier >/dev/null 2>&1; then
 fi
 
 eval "$(tmuxifier init -)"
-exec tmuxifier load-session orio
+exec tmuxifier load-session "$SESSION"
