@@ -1,0 +1,13 @@
+# Disable USB autosuspend for the ASUS Xtion / PrimeSense depth camera (1d27:0600).
+#
+# Why: Linux autosuspends idle USB devices (2s on this host). During the camera
+# driver's startup there is a brief gap before all video streams (color/depth/IR) are
+# open; if that gap crosses the timer, the kernel suspends the Xtion mid-startup, the IR
+# stream fails to open, and the device "disconnects" and re-enumerates. That is the
+# intermittent camera-flapping seen at bring-up (works on retry only because a fresh
+# enumeration sometimes beats the timer). Keeping the device powered on removes the race.
+#
+# Install: sudo cp this file to /etc/udev/rules.d/ then reload+trigger (see
+# install_xtion_udev.sh). Applies to any Xtion by vendor/product id, so it survives
+# reboots and replugs regardless of the USB device number.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1d27", ATTR{idProduct}=="0600", TEST=="power/control", ATTR{power/control}="on"

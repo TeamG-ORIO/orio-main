@@ -62,3 +62,9 @@ bash stop_demo.sh                # flushes the recording, then tears the session
 
 tmuxifier install (once per machine):
 `git clone https://github.com/jimeh/tmuxifier.git ~/.tmuxifier`.
+
+## Troubleshooting
+
+Machine-specific gotchas (USB/driver quirks, robot states, env issues) and their fixes
+are logged in `docs/TROUBLESHOOTING.md` — check there first when bring-up misbehaves in a
+way the code doesn't explain.
