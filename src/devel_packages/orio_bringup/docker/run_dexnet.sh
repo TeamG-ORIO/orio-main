@@ -29,9 +29,11 @@ exec docker run -d --name "$NAME" --restart unless-stopped \
     --gpus all --ipc=host --net=host \
     -e ROS_MASTER_URI="${ROS_MASTER_URI:-http://localhost:11311}" \
     -e ORIO_LOGGING="${ORIO_LOGGING:-1}" \
+    -e ORIO_AFFORDANCE_DIR="${ORIO_AFFORDANCE_DIR:-}" \
     -v "$REPO/devel/lib/python3/dist-packages:/catkin_ws/devel/lib/python3/dist-packages:ro" \
     -v "$REPO/src/devel_packages/orio_core:$REPO/src/devel_packages/orio_core:ro" \
     -v "$REPO/src/devel_packages/gqcnn/models:/opt/gqcnn/models:ro" \
+    -v "$REPO/logging:/home/ros_ws/logging" \
     -v "$REPO/src/devel_packages/orio_bringup/docker/dexnet_grasp_planner.py:/opt/dexnet_grasp_planner.py:ro" \
     "$IMAGE" \
     python /opt/dexnet_grasp_planner.py _min_q_value:="$MIN_Q" _rescale:="$RESCALE"

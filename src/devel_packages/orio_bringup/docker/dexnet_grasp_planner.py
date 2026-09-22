@@ -8,6 +8,7 @@ Python package, and with it TensorFlow, which host-side clients do not have.
 """
 
 import os
+import time
 
 import numpy as np
 from scipy import ndimage
@@ -77,6 +78,27 @@ class DexnetGraspPlanner(object):
             self._rescale = 1.0
         rospy.loginfo("Input rescale factor: %.3f", self._rescale)
 
+        # Affordance panel (docs/LOGGING.md): the six-panel diagnostic that
+        # orio_perception/test/live_affordance.py renders offline — workspace, depth,
+        # segmask, affordance map, affordance over scene, chosen grasp. It lives HERE and
+        # not in the perception node because the dense affordance tensor only exists
+        # inside the policy object; the service response carries just the chosen grasp.
+        #
+        # Off unless ORIO_AFFORDANCE_DIR is set (run_dexnet_pnp_single.sh --affordance
+        # points it at the run's grasp dir). It costs a SECOND forward pass per call plus
+        # a ~0.3 s matplotlib render, so it is opt-in rather than on by default.
+        self._afford_dir = os.environ.get("ORIO_AFFORDANCE_DIR", "").strip()
+        self._afford_n = 0
+        if self._afford_dir:
+            try:
+                if not os.path.isdir(self._afford_dir):
+                    os.makedirs(self._afford_dir)
+                rospy.loginfo("Affordance panels -> %s (adds a 2nd forward pass per call)",
+                              self._afford_dir)
+            except OSError as exc:
+                rospy.logwarn("Cannot use affordance dir %s: %s", self._afford_dir, exc)
+                self._afford_dir = ""
+
         # Run events for the rerun recorder (docs/LOGGING.md).
         self._events = None
         if EventSink and os.environ.get("ORIO_LOGGING", "1") != "0":
@@ -120,6 +142,130 @@ class DexnetGraspPlanner(object):
         shape = (msg.height, msg.width) if channels == 1 else (msg.height, msg.width,
                                                                channels)
         return arr.reshape(shape)
+
+    def _affordance_map(self, state):
+        """Dense per-pixel suction quality, the tensor the policy argmaxes over.
+
+        Reaches into the policy the same way orio_perception/test/live_affordance.py
+        does — there is no public accessor — so it tracks those internals and is wrapped
+        by its caller. This is a SECOND forward pass: the policy call itself does not
+        hand back the map.
+        """
+        _wrapped, raw_depth, raw_seg, _ci = self._policy._unpack_state(state)
+        images, depths = self._policy._gen_images_and_depths(raw_depth, raw_seg)
+        preds = self._policy._grasp_quality_fn.quality(images, depths)
+        # Channel 1::2 is P(success); _mask_predictions zeroes everything off-segmask.
+        return self._policy._mask_predictions(preds[:, :, :, 1::2], raw_seg)[0, :, :, 0]
+
+    def _save_affordance_panel(self, state, color_arr, grasp, q_value, rejected, elapsed):
+        """Render the six-panel affordance diagnostic for one plan_grasp call.
+
+        Same layout and visual language as live_affordance.py's render(), which was built
+        for offline single captures; here it runs per service call against the live frame.
+        Everything is in RESCALED (inference) pixels — the space the policy actually saw,
+        and the space the affordance map is indexed in — so the panels stay mutually
+        consistent. Never raises: a diagnostic image must not fail a pick.
+        """
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            from matplotlib.patches import Circle
+
+            succ = self._affordance_map(state)
+
+            self._afford_n += 1
+            px, py = float(grasp.center[0]), float(grasp.center[1])
+            approach = grasp.pose().rotation[:, 0]
+            if approach[2] < 0:
+                approach = -approach
+            tilt = float(np.degrees(np.arccos(np.clip(approach[2], -1.0, 1.0))))
+
+            ok = not rejected
+            col = "cyan" if ok else "red"
+            ax_col = "black" if ok else "darkred"
+            stride = self._policy._gqcnn_stride
+            recep = self._policy._gqcnn_recep_h
+
+            c = color_arr
+            # Depth and segmask come from the STATE, not the raw service inputs: by this
+            # point depth has been inpainted and the segmask intersected with the valid-
+            # pixel mask, and those are what the network actually ran on. Showing the raw
+            # inputs instead would overstate the mask and hide inpainting artefacts —
+            # exactly the things these panels exist to reveal.
+            d = np.asarray(state.rgbd_im.depth.data).squeeze()
+            segmask_arr = np.asarray(state.segmask.data).squeeze()
+            fig, ax = plt.subplots(2, 3, figsize=(17, 10.5))
+
+            ax[0, 0].imshow(c)
+            ax[0, 0].set_title("workspace %dx%d%s"
+                               % (c.shape[1], c.shape[0],
+                                  "" if self._rescale == 1.0
+                                  else "  scale %.2f" % self._rescale),
+                               fontweight="bold")
+
+            valid = d > 0
+            im = ax[0, 1].imshow(np.where(valid, d, np.nan), cmap="viridis")
+            ax[0, 1].set_title("depth (m)")
+            fig.colorbar(im, ax=ax[0, 1], fraction=0.046)
+
+            ov = c.copy()
+            ov[segmask_arr > 0] = [0, 255, 0]
+            ax[0, 2].imshow(ov)
+            ax[0, 2].set_title("segmask\n%d px" % int((segmask_arr > 0).sum()))
+
+            im = ax[1, 0].imshow(succ, cmap="inferno", vmin=0, vmax=1)
+            ax[1, 0].set_title("affordance map %dx%d\nstride %d, receptive field %d"
+                               % (succ.shape[1], succ.shape[0], stride, recep))
+            fig.colorbar(im, ax=ax[1, 0], fraction=0.046)
+
+            # Upsample the map back to image pixels: index i covers pixel i*stride+recep/2.
+            up = np.full(d.shape, np.nan)
+            ys = np.arange(succ.shape[0]) * stride + recep // 2
+            xs = np.arange(succ.shape[1]) * stride + recep // 2
+            blk = np.kron(succ[np.ix_(ys < d.shape[0], xs < d.shape[1])],
+                          np.ones((stride, stride)))
+            oy = ox = recep // 2
+            hh = min(blk.shape[0], d.shape[0] - oy)
+            ww = min(blk.shape[1], d.shape[1] - ox)
+            up[oy:oy + hh, ox:ox + ww] = blk[:hh, :ww]
+            ax[1, 1].imshow(c)
+            ax[1, 1].imshow(up, cmap="inferno", alpha=0.6, vmin=0, vmax=1)
+            ax[1, 1].set_title("affordance over scene")
+
+            Z = 60
+            xs0, ys0 = max(int(px) - Z, 0), max(int(py) - Z, 0)
+            ax[1, 2].imshow(c[ys0:ys0 + 2 * Z, xs0:xs0 + 2 * Z])
+            nx, ny = approach[0], approach[1]
+            L = 34
+            ax[1, 2].arrow(px - xs0 - nx * L, py - ys0 - ny * L, nx * L, ny * L,
+                           width=2, head_width=9, length_includes_head=True,
+                           color=col, ec="black", lw=0.5, zorder=3)
+            ax[1, 2].add_patch(Circle((px - xs0, py - ys0), 14, fill=False,
+                                      ec=col, lw=3, zorder=4))
+            ax[1, 2].add_patch(Circle((px - xs0, py - ys0), 3, color=col, zorder=5))
+            ax[1, 2].set_title("chosen grasp\nq=%.3f  tilt=%.1f deg  depth %.3f m"
+                               % (q_value, tilt, float(grasp.depth)),
+                               color=ax_col, fontweight="bold")
+
+            for a in ax.ravel():
+                a.axis("off")
+            stamp = time.strftime("%H%M%S", time.localtime())
+            fig.suptitle("DexNet 4.0 suction - call %04d @ %s%s   %s   "
+                         "q=%.3f, tilt %.1f deg  (%.2fs)"
+                         % (self._afford_n, stamp,
+                            "" if self._rescale == 1.0
+                            else "  (rescale %.2f)" % self._rescale,
+                            "ACCEPTED" if ok else "REJECTED", q_value, tilt, elapsed),
+                         fontsize=14, color=ax_col)
+            fig.tight_layout(rect=[0, 0, 1, 0.94])
+            out = os.path.join(self._afford_dir,
+                               "afford_%04d_%s.png" % (self._afford_n, stamp))
+            fig.savefig(out, dpi=105)
+            plt.close(fig)
+            rospy.loginfo("Affordance panel: %s", out)
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never fail a pick
+            rospy.logwarn("Could not write affordance panel: %s", exc)
 
     def _handle(self, req):
         intr = CameraIntrinsics(
@@ -194,6 +340,13 @@ class DexnetGraspPlanner(object):
         msg.pose.orientation.z = quat[3]
 
         rejected = msg.q_value < self._min_q_value
+
+        # Rejections get a panel too — a q=0.01 result is exactly when you want to see
+        # the affordance map and segmask, so this sits ahead of the early return below.
+        if self._afford_dir:
+            self._save_affordance_panel(state, color_arr, grasp,
+                                        msg.q_value, rejected, elapsed)
+
         if self._events:
             self._events.emit("dexnet", "plan", q=msg.q_value, px=list(msg.center_px), depth=msg.depth,
                               plan_time_s=elapsed, ok=not rejected)
