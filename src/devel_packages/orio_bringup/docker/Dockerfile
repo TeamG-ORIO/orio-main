@@ -42,6 +42,9 @@ RUN pip3 install numpy-quaternion numba && pip3 install --upgrade google-api-pyt
 RUN pip3 install --force-reinstall numpy==1.23.5
 
 RUN pip3 install ikpy sllurp
+# pyserial: pneumatic_control_recovery.py talks to the ClearCore vacuum controller
+# over /dev/ttyACM0 and now runs in THIS container (the host python3 has no rospy).
+RUN pip3 install pyserial
 
 # Install realsense camera
 ARG DEBIAN_FRONTEND=noninteractive

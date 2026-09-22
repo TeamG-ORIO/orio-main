@@ -72,3 +72,6 @@ research/prm/
 
 # Local credentials (Franka Desk user/password etc). Never commit — see COMMANDS.md.
 .env.local
+
+# --- Claude Code worktree copies (never commit) ---
+.claude/worktrees/
