@@ -35,12 +35,47 @@ bash run_dexnet_pnp_single.sh --vacuum --auto --straight-down
 
 ---
 
+## `reset_robot.sh`
+
+Resets one arm to its home joints from a single terminal. Brings up only what the reset
+needs (the ROS1 master container, that robot's control PC, `orio_docker_container`), runs
+`reset_joints.py` inside the container, then tears down **what it started**; anything
+already running is reused and left alone. Ctrl-C at any point runs the teardown.
+
+**Base command:**
+
+```bash
+bash reset_robot.sh
+```
+
+| Option | Description |
+| --- | --- |
+| `--robot N` | Which arm: `1` = iam-doc (default), `2` = iam-luisa. |
+| `--unlock` | Open the brakes first via `lock_arms.py --unlock N` (arm moves slightly). |
+| `--pose` | Use `reset_pose()` instead of `reset_joints()`. |
+| `--keep` | Leave roscore, the container and the control PC up afterwards (e.g. before a demo run). |
+| `--open-gripper` / `--close-gripper` | Also open/close the Franka Hand (robot 1 with a hand only; skipped by default). |
+| `-h`, `--help` | Print the usage header and exit. |
+
+**Examples:**
+
+```bash
+bash reset_robot.sh --unlock            # locked robot 1: unlock, then reset
+bash reset_robot.sh --robot 2 --keep    # reset robot 2, leave the stack running
+```
+
+The control PC's raw output goes to `logging/reset/<timestamp>.robotN.control_pc.log`.
+
+---
+
 ## `lock_arms.py`
 
 Locks or unlocks the Franka joint brakes via the Desk web API. Runs over ssh on each
 control PC. **Locks both robots by default**; pass `--unlock` to open the brakes instead
-(the arm will move slightly when unlocked). Credentials are read from the
-`ORIO_DESK_USER` / `ORIO_DESK_PASSWORD` environment variables, otherwise you are prompted.
+(the arm will move slightly when unlocked).
+
+Desk credentials load automatically from `.env.local` (git-ignored) — see the script's
+docstring if it's missing on a fresh clone.
 
 **Base command:**
 
