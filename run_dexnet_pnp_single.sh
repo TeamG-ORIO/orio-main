@@ -12,11 +12,29 @@
 #                                                 #   (Enter = execute, r = regenerate grasp, Ctrl-C = abort)
 #   bash run_dexnet_pnp_single.sh --vacuum        # start pneumatics (real suction)
 #   bash run_dexnet_pnp_single.sh --auto          # no per-pick Enter (auto-pick)
+#                                                 #   (an empty bin still waits for a refill)
 #   bash run_dexnet_pnp_single.sh --straight-down # ignore grasp tilt, approach vertically
+#   bash run_dexnet_pnp_single.sh --no-logging    # skip the rerun recorder for this run
+#   bash run_dexnet_pnp_single.sh --live          # also stream to a running `rerun` viewer
+#   bash run_dexnet_pnp_single.sh --no-affordance # skip the per-grasp affordance panels
 #
 # The iam-doc control PC (robot 1) is started over ssh; it opens its own gnome-terminal
-# windows separately (they run for the robot and cannot be merged here). Logging defaults
-# off (the rerun lib is broken on the perception image's py38); set ORIO_LOGGING=1 to try.
+# windows separately (they run for the robot and cannot be merged here).
+#
+# Run logging (docs/LOGGING.md) is ON by default: a sidecar recorder writes
+# logging/rerun/<run_id>/{recorder.rrd,run.json} — arm state, every node's log lines, and
+# the pick loop's own events (pick/cmd/ik/grasp/service). It runs on the HOST perception
+# venv (py3.10, rerun 0.37.2), not in a container, so the py38 rerun breakage that disables
+# perception's own image logging does not affect it. View with:
+#     rerun logging/rerun/<run_id>/recorder.rrd
+#
+# It also writes the six-panel affordance diagnostic per grasp to
+# logging/dexnet_pnp/<stamp>.affordance/ — workspace, depth, segmask, affordance map,
+# affordance over scene and the chosen grasp, the same figure
+# orio_perception/test/live_affordance.py produces offline, and the only per-grasp image
+# this launcher writes. It is rendered by the DexNet planner (only it can see the
+# affordance tensor), needs nothing from the host venv, and costs a second forward pass
+# plus a ~0.3 s render on every grasp. --no-affordance skips it; so does --no-logging.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,11 +56,26 @@ WF="$REPO/src/devel_packages/orio_bringup/tmux/wait_for.sh"
 # shellcheck disable=SC1090
 source "$WF"
 
-export ORIO_LOGGING="${ORIO_LOGGING:-0}"   # rerun broken on perception py38; default off
+# Run logging (docs/LOGGING.md). ON by default: the recorder is a host-side sidecar and
+# nothing in the pipeline depends on it. ORIO_LOGGING is ALSO exported into the containers,
+# where it gates the nodes' /orio/events publishing (cheap: one std_msgs/String per event).
+export ORIO_LOGGING="${ORIO_LOGGING:-1}"
+export ORIO_RUN_ID="${ORIO_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
+export ORIO_RUN_DIR="${ORIO_RUN_DIR:-$REPO/logging/rerun/$ORIO_RUN_ID}"
+export ORIO_RERUN_LIVE="${ORIO_RERUN_LIVE:-0}"
+# What the OPERATOR asked for, captured before anything can downgrade it. The recorder's
+# venv check below sets ORIO_LOGGING=0 when the host venv lacks rospy/rerun — that is a
+# statement about THIS HOST, not about what was wanted, and it must not reach the grasp
+# images, which are drawn by PIL inside the perception container and need neither.
+LOGGING_REQUESTED="$ORIO_LOGGING"
+# The recorder needs rerun + rospy, which live in the host perception venv (py3.10).
+PERC_DIR="$REPO/src/devel_packages/orio_perception"
+PERC_VENV="${ORIO_PERCEPTION_VENV:-${ORIO_PERCEPTION_ASSETS:-$PERC_DIR}/venv}"
 
 # ── Args ────────────────────────────────────────────────────────────────────
 USE_VACUUM=0
 CONFIRM=1
+AFFORDANCE=1
 PNP_EXTRA=()
 for arg in "$@"; do
     case "$arg" in
@@ -51,12 +84,20 @@ for arg in "$@"; do
         --auto)          CONFIRM=0 ;;
         --confirm)       CONFIRM=1 ;;
         --straight-down) PNP_EXTRA+=(--straight-down) ;;
-        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+        --no-logging)    export ORIO_LOGGING=0; LOGGING_REQUESTED=0 ;;
+        --logging)       export ORIO_LOGGING=1; LOGGING_REQUESTED=1 ;;
+        --live)          export ORIO_RERUN_LIVE=1 ;;
+        --affordance)    AFFORDANCE=1 ;;
+        --no-affordance) AFFORDANCE=0 ;;
+        -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
 [ "$USE_VACUUM" -eq 0 ] && PNP_EXTRA+=(--no-vacuum)
 [ "$CONFIRM" -eq 1 ]    && PNP_EXTRA+=(--confirm)
+# Drop every item at the same height: reach into the output box by the fixed margin only,
+# not by the grasp z as well. This launcher only; the tmux layout keeps per-item depth.
+PNP_EXTRA+=(--zero-item-depth)
 
 # ── Log filtering + saving ───────────────────────────────────────────────────
 # The whole script's output flows through one classifier that routes each line:
@@ -76,6 +117,15 @@ LOG_FILE="$LOG_DIR/$RUN_STAMP.log"
 # it's a different machine over ssh, outlives this launcher, and when diagnosing a crash
 # you want every line, not the merged stream's SHOW/SAVE/DROP triage. Paired by timestamp.
 CONTROL_PC_LOG="$LOG_DIR/$RUN_STAMP.control_pc.log"
+# The six-panel affordance diagnostic (workspace, depth, segmask, affordance map,
+# affordance over scene, chosen grasp) that orio_perception/test/live_affordance.py
+# renders offline — one per grasp, ON by default, --no-affordance to skip. Written by the
+# PLANNER, in the dexnet container, because the dense affordance tensor only exists inside
+# the policy object; the service response carries just the chosen grasp. The env var it
+# gets is therefore the path as the CONTAINER sees it ($REPO/logging is mounted there at
+# /home/ros_ws/logging). Costs a second forward pass + ~0.3 s render per grasp.
+AFFORDANCE_DIR="$LOG_DIR/$RUN_STAMP.affordance"
+AFFORDANCE_DIR_CONT="/home/ros_ws/logging/dexnet_pnp/$RUN_STAMP.affordance"
 
 # Route the whole script through the classifier. awk writes SHOW lines to stdout (fd 1 =
 # terminal, still live) and SHOW+SAVE lines to the log file (via >> in awk). The pick
@@ -83,15 +133,24 @@ CONTROL_PC_LOG="$LOG_DIR/$RUN_STAMP.control_pc.log"
 # stdout pipe, so the --confirm Enter prompt still works.
 exec > >(
     LOG_FILE="$LOG_FILE" awk '
-    function strip(s){ gsub(/\033\[[0-9;]*m/, "", s); return s }
+    function strip(s){ gsub(/\033\[[0-9;]*m/, "", s); gsub(/\r/, "", s); return s }
     {
         line = strip($0)
         show = 0; save = 0
+
+        # DROP FIRST: import-time noise that would otherwise be rescued by a SHOW rule
+        # below (the [check] prefix, or a bare "WARNING"). autolab_core is pip-installed,
+        # not built as a catkin package, so its optional ROS *service* helpers
+        # (publish_to_ros / delete_from_ros / rigid_transform_from_ros) are unavailable.
+        # Nothing in this repo or the vendored packages calls them — we use RigidTransform
+        # only as a pose container and do TF through tf2/frankapy. Harmless, one per run.
+        if (line ~ /autolab_core not installed as catkin package/) { next }
 
         # SHOW: signal + any error, regardless of source.
         if (line ~ /\[launcher\]|\[check\]|\[doc\]|\[Pick\]|\[Place\]|\[Loop\]|\[Grasp\]|\[Main\]|\[Hardware\]|Press Enter/) { show=1 }
         if (line ~ /GAVE UP|ERROR|Error|error|Traceback|has died|disconnected|CAMERA NOT DETECTED|FAIL|Rejected|refus|not ready|NOT ready|Aborting/) { show=1 }
         if (line ~ /Planned suction grasp|grasp q=/) { show=1 }
+        if (line ~ /Affordance panel/) { show=1 }
 
         # DROP: pure noise — never shown, never saved.
         else if (line ~ /tensorflow|cuda_gpu|dso_loader|NUMA node|StreamExecutor|gpu_device|libcu[a-z]+\.so|XLA service|Building (convolutional|fully|Softmax)|Converting fc layer|Advertised on topic|ikpy|is of type .fixed.|Detection max range|warnings\.warn/) { next }
@@ -100,8 +159,14 @@ exec > >(
         if (show) { save=1 }
         else { save=1; show=0 }
 
+        # Terminal gets CRLF, the log file plain LF. The pick loop runs under
+        # `docker exec -it`, so its pty is in cooked mode and the terminal stays in raw-ish
+        # output mode for the whole merged stream: there a bare \n is only a LINE FEED (down
+        # one row, SAME column), so lines would staircase to the right. The \r resets the
+        # column. We strip the CRs the pty adds in strip() and re-add exactly one here, so
+        # pty-borne and pipe-borne lines are terminated identically. The file wants no CRs.
         if (save && length(line)) { print line >> ENVIRON["LOG_FILE"]; fflush(ENVIRON["LOG_FILE"]) }
-        if (show && length(line)) { print line; fflush() }
+        if (show && length(line)) { printf "%s\r\n", line; fflush() }
     }'
 ) 2>&1
 echo "[launcher] logging this run to $LOG_FILE"
@@ -138,6 +203,19 @@ cleanup() {
     trap '' INT TERM HUP
     echo
     log "shutting down… (Ctrl-C again won't interrupt this)"
+    # Flush the rerun recorder FIRST, before anything it is recording goes away.
+    # It writes recorder.rrd + run.json on SIGINT; a plain kill in the PIDS loop below
+    # would drop rerun's batcher window (~200 ms) and, worse, skip run.json entirely.
+    # (This mirrors what stop_demo.sh does to the recorder pane in the tmux layout.)
+    if [ -n "${RECORDER_PID:-}" ] && kill -0 "$RECORDER_PID" 2>/dev/null; then
+        log "flushing run recorder…"
+        kill -INT "$RECORDER_PID" 2>/dev/null || true
+        for _ in $(seq 1 25); do          # up to ~5 s, same budget as stop_demo.sh
+            kill -0 "$RECORDER_PID" 2>/dev/null || break
+            sleep 0.2
+        done
+        kill -0 "$RECORDER_PID" 2>/dev/null && log "recorder still running — killing it."
+    fi
     # Stop the vacuum first if it was running (best effort).
     if [ "$USE_VACUUM" -eq 1 ]; then
         docker exec "$DEXNET_CONTAINER" bash -lc \
@@ -203,7 +281,13 @@ REMOTE_TEARDOWN
     docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" orio_perception orio_cameras \
         >/dev/null 2>&1 || true
     log "done. Full log saved to: $LOG_FILE"
+    [ "$ORIO_LOGGING" != "0" ] && [ -f "$ORIO_RUN_DIR/recorder.rrd" ] && \
+        log "rerun recording: $ORIO_RUN_DIR (view: rerun $ORIO_RUN_DIR/recorder.rrd)"
     [ -s "$CONTROL_PC_LOG" ] && log "control PC (iam-doc) log: $CONTROL_PC_LOG"
+    if [ -d "${AFFORDANCE_DIR:-}" ]; then
+        _n_aff=$(find "$AFFORDANCE_DIR" -name '*.png' 2>/dev/null | wc -l)
+        [ "$_n_aff" -gt 0 ] && log "affordance panels ($_n_aff): $AFFORDANCE_DIR"
+    fi
     # Give the tee (process substitution) a moment to flush the final lines to the file.
     sync; sleep 0.2
 }
@@ -224,6 +308,43 @@ docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" orio_perception orio_
 log "starting roscore…"
 run_bg roscore bash "$DOCKER_DIR/run_roscore.sh"
 wait_for_roscore 30 || { log "roscore did not start in 30s — check the [roscore] logs. Aborting."; exit 1; }
+
+# ── Run recorder (docs/LOGGING.md) ───────────────────────────────────────────
+# Sidecar: subscribes only, and nothing downstream depends on it — if it is absent, slow
+# or crashed, the run is unaffected. Started right after roscore so it captures the whole
+# bring-up (including a failure during it), and tracked in its OWN pid so teardown can
+# SIGINT it FIRST and let rerun flush the .rrd before the containers go away.
+RECORDER_PID=""
+if [ "$ORIO_LOGGING" != "0" ]; then
+    # The recorder needs BOTH rerun and rospy in one interpreter. Check before starting it:
+    # on a host with no ROS1 (this workstation is 22.04 — noetic is not installable, which
+    # is why the whole stack is containerised) the import fails and the recorder would die
+    # a few seconds in, having already printed a traceback into the merged stream. Checking
+    # here turns that into one clear, actionable line. See docs/LOGGING.md.
+    if [ ! -x "$PERC_VENV/bin/python3" ]; then
+        log "NOTE: no perception venv at $PERC_VENV — run logging is OFF for this run."
+        log "      (set ORIO_PERCEPTION_VENV, or pass --no-logging to silence this)"
+        ORIO_LOGGING=0
+    elif ! "$PERC_VENV/bin/python3" -c "import rospy, rerun" >/dev/null 2>&1; then
+        log "NOTE: $PERC_VENV lacks rospy and/or rerun — run logging is OFF for this run."
+        log "      The recorder needs both in ONE interpreter. rospy normally comes from a"
+        log "      sourced ROS1 env, which this host does not have (/opt/ros/noetic is empty)."
+        log "      To enable it, add the pure-python ROS1 packages to that venv:"
+        log "        $PERC_VENV/bin/pip install --extra-index-url https://rospypi.github.io/simple/ \\"
+        log "            rospy rosgraph_msgs std_msgs geometry_msgs sensor_msgs actionlib_msgs"
+        log "      (rerun 0.37.2 needs py>=3.9, so this cannot live in the py38 containers.)"
+        log "      Pass --no-logging to silence this."
+        ORIO_LOGGING=0
+    else
+        log "starting run recorder → $ORIO_RUN_DIR"
+        # Single arm here, so --robots 1: asking for arm 2 would log an empty arm and its
+        # 11 MB of static meshes, and place it via cell.yaml at a base that isn't in use.
+        ( "$PERC_VENV/bin/python3" "$REPO/src/devel_packages/orio_logging/recorder.py" \
+              --robots 1 2>&1 | prefix recorder ) &
+        RECORDER_PID=$!
+        PIDS+=("$RECORDER_PID")
+    fi
+fi
 
 # Gate: is iam-doc reachable over ssh AT ALL? If sshd is down/wedged (TCP connects but no
 # banner) or the host is unreachable, the control-PC taps below launch into the void and the
@@ -389,7 +510,17 @@ fi
 log "robot is ready."
 
 log "starting DexNet planner…"
-run_bg dexnet bash -lc "ORIO_LOGGING=$ORIO_LOGGING bash '$DOCKER_DIR/run_dexnet.sh' && docker logs -f $DEXNET_CONTAINER"
+# Gated on LOGGING_REQUESTED as well as the flag: the recorder's venv check may have
+# zeroed ORIO_LOGGING, and these panels are rendered in the dexnet container and need
+# nothing from the host venv. --no-logging and --no-affordance both turn them off.
+if [ "$AFFORDANCE" -eq 1 ] && [ "$LOGGING_REQUESTED" != "0" ]; then
+    mkdir -p "$AFFORDANCE_DIR"
+    export ORIO_AFFORDANCE_DIR="$AFFORDANCE_DIR_CONT"
+    log "affordance panels → $AFFORDANCE_DIR (adds a 2nd forward pass per grasp)"
+else
+    export ORIO_AFFORDANCE_DIR=""
+fi
+run_bg dexnet bash -lc "ORIO_LOGGING=$ORIO_LOGGING ORIO_AFFORDANCE_DIR='$ORIO_AFFORDANCE_DIR' bash '$DOCKER_DIR/run_dexnet.sh' && docker logs -f $DEXNET_CONTAINER"
 if ! wait_for_service /dexnet_grasp_planner/plan_grasp 60; then
     log "DexNet planner did not come up in 60s — check the [dexnet] logs above. Aborting."
     exit 1
@@ -433,7 +564,7 @@ xtion_failed() {  # $1 = log file for this attempt
         "$1" 2>/dev/null
 }
 
-CAM_ATTEMPTS="${ORIO_CAM_ATTEMPTS:-3}"
+CAM_ATTEMPTS="${ORIO_CAM_ATTEMPTS:-5}"
 cam_ok=0
 for attempt in $(seq 1 "$CAM_ATTEMPTS"); do
     log "starting Xtion (attempt $attempt/$CAM_ATTEMPTS)…"
@@ -492,7 +623,16 @@ run_bg perception bash -lc "ORIO_NO_TTY=1 ORIO_LOGGING=$ORIO_LOGGING bash '$DOCK
 
 if [ "$USE_VACUUM" -eq 1 ]; then
     log "starting pneumatics…"
-    run_bg pneumatics bash -lc "cd '$REPO/src/devel_packages/orio' && ORIO_LOGGING=$ORIO_LOGGING python3 pneumatic_control_recovery.py"
+    # Runs INSIDE the main container, not on the host: the host python3 has no rospy, so
+    # the node died on `import rospy` the moment it started, /orio/pnp_cup/{on,off} were
+    # never advertised, and every pick timed out on them while the arm ran the full motion
+    # with no suction (see the 20260922_150030 run). The ClearCore is reachable from in
+    # there — the container is --privileged with -v /dev:/dev, so /dev/ttyACM0 is the same
+    # device node. ORIO_VACUUM_PORT still overrides it.
+    run_bg pneumatics docker exec -e ORIO_LOGGING="$ORIO_LOGGING" \
+        -e ORIO_VACUUM_PORT="${ORIO_VACUUM_PORT:-/dev/ttyACM0}" "$CONTAINER" bash -c \
+        "source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && \
+         python3 -u pneumatic_control_recovery.py"
 else
     log "pneumatics DISABLED (dry-run): move the cup by hand."
 fi
@@ -503,11 +643,34 @@ if ! wait_for_service /compute_grasps 90; then
     exit 1
 fi
 
+# Gate: with --vacuum, the suction services must actually exist BEFORE the arm moves.
+# Without this the pick loop runs the whole motion — descend, grip, retract, transit,
+# drop — with the cup off, timing out ~8s on /orio/pnp_cup/on mid-pick and again on
+# /orio/pnp_cup/off at the place. That looks like a hardware/suction problem but is just
+# a node that never started, and the failure scrolls past ~50s before the first pick.
+# Fail here instead, while nothing is holding anything.
+if [ "$USE_VACUUM" -eq 1 ]; then
+    if ! wait_for_service /orio/pnp_cup/on 30; then
+        echo
+        log "VACUUM NOT AVAILABLE: /orio/pnp_cup/on never appeared — the pneumatics node"
+        log "is not running. Check the [pneumatics] logs above. Common causes:"
+        log "  - ClearCore not plugged in / on another port: ls -l /dev/ttyACM* and set"
+        log "    ORIO_VACUUM_PORT (default /dev/ttyACM0)."
+        log "  - The ClearCore lost its firmware (pneumatic_control/pneumatic_control.ino)"
+        log "    so it never enumerates as a serial device."
+        log "  - An import error in pneumatic_control_recovery.py (it needs the container's"
+        log "    ROS python, not the host's — the host python3 has no rospy)."
+        log "Aborting before the pick loop: picking with no suction moves the arm for nothing."
+        log "Re-run without --vacuum for a dry run."
+        exit 1
+    fi
+fi
+
 # ── Pick loop in the FOREGROUND so --confirm can read the keyboard ────────────
 log "starting pick-and-place loop (Ctrl-C OR closing this terminal stops everything)…"
 echo "[launcher] pnp flags: ${PNP_EXTRA[*]}"
 docker exec -e ORIO_LOGGING="$ORIO_LOGGING" -it "$CONTAINER" bash -c \
     "source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && \
-     python3 dexnet_pnp.py ${PNP_EXTRA[*]}"
+     python3 -u dexnet_pnp.py ${PNP_EXTRA[*]}"
 
 log "pick loop exited."
