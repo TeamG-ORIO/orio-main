@@ -23,7 +23,7 @@ bash run_dexnet_pnp_single.sh
 | `--vacuum` | Start the pneumatics for real suction. |
 | `--no-vacuum` | Dry-run with no suction; move the cup by hand (default). |
 | `--auto` | Auto-pick — no per-pick Enter prompt. |
-| `--confirm` | Wait for Enter before each pick (default). |
+| `--confirm` | Before each pick, wait for Enter to execute it, `r` to regenerate the grasp, or Ctrl-C to abort (default). |
 | `--straight-down` | Ignore grasp tilt and approach the object vertically. |
 | `-h`, `--help` | Print the script's usage header and exit. |
 

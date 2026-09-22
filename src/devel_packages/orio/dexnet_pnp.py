@@ -376,6 +376,29 @@ class DexnetPickPlace:
         self._move(self.arm.reset_joints, duration=4, desc="reset to home")
 
     # ── Continuous loop ───────────────────────────────────────────────────────
+    @staticmethod
+    def _confirm_pick():
+        """Ask the operator what to do with the planned grasp.
+
+        Returns 'execute' (Enter), 'regenerate' (r), or 'abort' (Ctrl-C / EOF / q).
+        Anything else re-prompts.
+        """
+        while True:
+            try:
+                answer = input("[Loop] Press Enter to execute this pick, "
+                               "'r' to regenerate the grasp (Ctrl-C to abort)... ")
+            except (EOFError, KeyboardInterrupt):
+                return 'abort'
+            answer = answer.strip().lower()
+            if answer == '':
+                return 'execute'
+            if answer in ('r', 'regen', 'regenerate'):
+                return 'regenerate'
+            if answer in ('q', 'quit', 'abort'):
+                return 'abort'
+            print("[Loop] Unrecognised input %r — Enter to execute, 'r' to regenerate, "
+                  "Ctrl-C to abort." % answer)
+
     def run(self, confirm=False, max_declines=5):
         """Pick-and-place until the planner declines max_declines times in a row.
 
@@ -417,12 +440,13 @@ class DexnetPickPlace:
             task_pos, target_ori = grasp
 
             if confirm:
-                try:
-                    input("[Loop] Press Enter to execute this pick "
-                          "(Ctrl-C to abort)... ")
-                except (EOFError, KeyboardInterrupt):
+                choice = self._confirm_pick()
+                if choice == 'abort':
                     rospy.loginfo("[Loop] Aborted by operator")
                     break
+                if choice == 'regenerate':
+                    rospy.loginfo("[Loop] Regenerating grasp — re-scanning…")
+                    continue
 
             try:
                 self.pick_and_place(task_pos, target_ori)
@@ -460,7 +484,8 @@ def main():
                         help="Poll the vacuum sensor after grasp/release and "
                              "fail the pick if it disagrees.")
     parser.add_argument('--confirm', action='store_true',
-                        help="Wait for Enter before each pick (safe for bring-up).")
+                        help="Before each pick, wait for Enter (execute), 'r' (regenerate "
+                             "the grasp), or Ctrl-C (abort). Safe for bring-up.")
     parser.add_argument('--max-declines', type=int, default=5,
                         help="Consecutive planner declines (low q / no grasp) before the "
                              "loop concludes the bin is empty and stops.")

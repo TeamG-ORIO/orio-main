@@ -9,6 +9,7 @@
 # Ctrl-C stops everything: background services are killed and the containers removed.
 #
 #   bash run_dexnet_pnp_single.sh                 # dry-run (no vacuum), confirm each pick
+#                                                 #   (Enter = execute, r = regenerate grasp, Ctrl-C = abort)
 #   bash run_dexnet_pnp_single.sh --vacuum        # start pneumatics (real suction)
 #   bash run_dexnet_pnp_single.sh --auto          # no per-pick Enter (auto-pick)
 #   bash run_dexnet_pnp_single.sh --straight-down # ignore grasp tilt, approach vertically
