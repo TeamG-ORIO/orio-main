@@ -5,7 +5,14 @@
     python3 lock_arms.py 2            # lock robot 2 only
     python3 lock_arms.py --unlock     # unlock both robots
 
-Credentials come from ORIO_DESK_USER / ORIO_DESK_PASSWORD, else a prompt.
+Credentials come from ORIO_DESK_USER / ORIO_DESK_PASSWORD, loaded automatically from
+`.env.local` at the repo root (git-ignored, so the Desk password never enters the repo).
+A real environment variable wins over the file; with neither, you are prompted.
+
+On a fresh clone, recreate it with the lab's Desk login:
+
+    printf 'export ORIO_DESK_USER=%s\nexport ORIO_DESK_PASSWORD=%s\n' <user> <pass> > .env.local
+
 Mirrors the Desk page's own brake button (System 3.0.2, pre control-token).
 """
 import argparse
@@ -19,6 +26,36 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+
+def _load_env_local():
+    """Load `.env.local` from the repo root into os.environ (if present).
+
+    Keeps the Desk password out of the repo (the file is git-ignored) while still letting
+    the script run without `source .env.local` first. An already-set environment variable
+    always wins, so an explicit `ORIO_DESK_PASSWORD=... python3 lock_arms.py` still works.
+    """
+    # .../src/devel_packages/orio_bringup/lock_arms.py -> repo root is 3 levels up.
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    env_file = os.environ.get('ORIO_ENV_FILE') or os.path.join(repo_root, '.env.local')
+    try:
+        with open(env_file) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('export '):
+                    line = line[len('export '):]
+                key, sep, value = line.partition('=')
+                if not sep:
+                    continue
+                key, value = key.strip(), value.strip().strip('"').strip("'")
+                os.environ.setdefault(key, value)   # never override a real env var
+    except OSError:
+        pass   # no .env.local — fall back to env vars / prompt
+
+
+_load_env_local()
 
 ROBOTS = {
     '1': os.environ.get('ORIO_DOC_HOST', 'student@iam-doc'),

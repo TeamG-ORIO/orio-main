@@ -69,3 +69,6 @@ research/prm/
 
 # Extracted ROS Noetic dist-packages for the dexnet container (see run_dexnet.sh)
 .ros_noetic_dist/
+
+# Local credentials (Franka Desk user/password etc). Never commit — see COMMANDS.md.
+.env.local
