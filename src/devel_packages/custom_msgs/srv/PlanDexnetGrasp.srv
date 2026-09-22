@@ -1,0 +1,9 @@
+# Plan a single suction grasp from a depth image and bin segmask.
+sensor_msgs/Image color_image
+sensor_msgs/Image depth_image
+sensor_msgs/CameraInfo camera_info
+sensor_msgs/Image segmask
+---
+DexnetGrasp grasp
+bool success
+string message

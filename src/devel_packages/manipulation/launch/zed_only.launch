@@ -1,0 +1,15 @@
+<launch>
+    <!-- ZED-M only. Split out of cameras.launch so bring-up can stagger the two cameras:
+         the ZED-M's HID interface shares USB Bus 001 with the Xtion, and launching both
+         at once makes them contend for bus bandwidth (the openni2 driver even warns "only
+         one camera per bus"). The Xtion's IR stream loses that race, errors, and the
+         device re-enumerates — the intermittent flap. run_dexnet_pnp_single.sh starts THIS
+         first, waits for it to publish, then starts xtion_only.launch on a quiet bus.
+         (See docs/TROUBLESHOOTING.md: "Xtion flaps at bring-up: USB bus contention".)
+
+         publish_urdf:=false removes the ZED's required robot_state_publisher node (it can
+         exit cleanly and take the whole launch down). We use only image/depth, not TF. -->
+    <include file="$(find zed_wrapper)/launch/zedm.launch">
+        <arg name="publish_urdf" value="false" />
+    </include>
+</launch>

@@ -1,0 +1,46 @@
+# ORIO perception in a ROS1 container (Option B).
+#
+# The perception node (perception_control_combined_pass_through.py) + recorder are
+# rospy/ROS1 processes that also need SAM + GroundingDINO + Open3D. On the original
+# 20.04 user PC they ran on the host beside native ROS1 Noetic. This machine is
+# 22.04 / ROS2 Humble with no host rospy, so perception runs here instead.
+#
+# Built ON TOP of orio_docker, which already carries ROS Noetic + rospy + the built
+# custom_msgs + torch 2.4.1+cu118, with CUDA 11.8 (nvcc) and gcc 9. That matched
+# toolchain lets GroundingDINO's _C deform-attn kernel compile natively for the
+# RTX 4090 (sm_89) - no host-side CUDA hacks needed.
+FROM orio_docker
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV MPLBACKEND=Agg
+
+# Several base-image python packages (PyYAML, blinker) were apt/distutils-installed, so
+# pip can't uninstall them when transformers/open3d (→dash→flask) pull newer ones. Force
+# them in first with --ignore-installed. Targeted, not a blanket flag, to avoid pip
+# reinstalling the pinned torch/numpy from the base image.
+RUN pip3 install --no-cache-dir --ignore-installed PyYAML blinker
+
+# Perception ML stack (the host-venv equivalent). numpy stays at the image's 1.23.5.
+# rerun-sdk is unpinned: py3.8 tops out at 0.22.1 (host recorder uses 0.37.2; only the
+# .rrd viewer version differs, core logging works). Set ORIO_LOGGING=0 to skip it.
+RUN pip3 install --no-cache-dir \
+        open3d \
+        segment-anything \
+        "transformers==4.44.2" \
+        rerun-sdk \
+        scikit-learn scikit-image
+
+# GroundingDINO runtime deps (its own requirements.txt omits transformers, pinned above).
+RUN pip3 install --no-cache-dir \
+        addict yapf timm opencv-python "supervision>=0.22.0" pycocotools
+
+# GroundingDINO fork (carries the local deform-attn fallback patch). Editable install
+# compiles the _C kernel against the in-image CUDA 11.8 / torch cu118 toolchain,
+# targeting the 4090. With _C present the patch is inert (kernel path is used).
+COPY src/devel_packages/orio_perception/GroundingDINO /opt/GroundingDINO
+ENV CUDA_HOME=/usr/local/cuda-11.8
+ENV TORCH_CUDA_ARCH_LIST="8.9"
+RUN cd /opt/GroundingDINO && pip3 install -e . --no-build-isolation
+
+WORKDIR /home/ros_ws
+CMD ["bash"]

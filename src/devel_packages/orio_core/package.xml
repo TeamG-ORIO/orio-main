@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>orio_core</name>
+  <version>0.1.0</version>
+  <description>
+    Pure, unit-testable core library for the ORIO project (kinematics, geometry,
+    perception math, planning). No ROS, no hardware, no side effects — importable
+    with no roscore running and testable with plain pytest.
+  </description>
+  <maintainer email="student@todo.todo">ORIO Team G</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>python3-numpy</exec_depend>
+  <!-- Optional: only robot_util.AnalyzeGraph needs networkx -->
+  <exec_depend>python3-networkx</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+  </export>
+</package>

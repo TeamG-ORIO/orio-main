@@ -33,7 +33,7 @@ import sys
 import time
 import numpy as np
 
-sys.path.insert(0, "/home/ros_ws/src/devel_packages/prm")
+sys.path.insert(0, "/home/ros_ws/research/prm")
 import SimpleFranka
 import RobotUtil as rt
 

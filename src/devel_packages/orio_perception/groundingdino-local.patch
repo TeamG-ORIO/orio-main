@@ -1,0 +1,69 @@
+# GroundingDINO local patches
+# upstream: https://github.com/IDEA-Research/GroundingDINO.git
+# base commit: 856dde20aee659246248e20734ef9ba5214f5e44  (v0.1.0-alpha2-62-g856dde2)
+# untracked: CATKIN_IGNORE groundingdino/version.py 
+
+diff --git a/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu b/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu
+index d04fae8..7bf3f49 100644
+--- a/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu
++++ b/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu
+@@ -32,7 +32,7 @@ at::Tensor ms_deform_attn_cuda_forward(
+     AT_ASSERTM(sampling_loc.is_contiguous(), "sampling_loc tensor has to be contiguous");
+     AT_ASSERTM(attn_weight.is_contiguous(), "attn_weight tensor has to be contiguous");
+ 
+-    AT_ASSERTM(value.type().is_cuda(), "value must be a CUDA tensor");
++    AT_ASSERTM(value.is_cuda(), "value must be a CUDA tensor");
+     AT_ASSERTM(spatial_shapes.type().is_cuda(), "spatial_shapes must be a CUDA tensor");
+     AT_ASSERTM(level_start_index.type().is_cuda(), "level_start_index must be a CUDA tensor");
+     AT_ASSERTM(sampling_loc.type().is_cuda(), "sampling_loc must be a CUDA tensor");
+@@ -62,7 +62,7 @@ at::Tensor ms_deform_attn_cuda_forward(
+     for (int n = 0; n < batch/im2col_step_; ++n)
+     {
+         auto columns = output_n.select(0, n);
+-        AT_DISPATCH_FLOATING_TYPES(value.type(), "ms_deform_attn_forward_cuda", ([&] {
++        AT_DISPATCH_FLOATING_TYPES(value.scalar_type(), "ms_deform_attn_forward_cuda", ([&] {
+             ms_deformable_im2col_cuda(at::cuda::getCurrentCUDAStream(),
+                 value.data<scalar_t>() + n * im2col_step_ * per_value_size,
+                 spatial_shapes.data<int64_t>(),
+@@ -98,7 +98,7 @@ std::vector<at::Tensor> ms_deform_attn_cuda_backward(
+     AT_ASSERTM(attn_weight.is_contiguous(), "attn_weight tensor has to be contiguous");
+     AT_ASSERTM(grad_output.is_contiguous(), "grad_output tensor has to be contiguous");
+ 
+-    AT_ASSERTM(value.type().is_cuda(), "value must be a CUDA tensor");
++    AT_ASSERTM(value.is_cuda(), "value must be a CUDA tensor");
+     AT_ASSERTM(spatial_shapes.type().is_cuda(), "spatial_shapes must be a CUDA tensor");
+     AT_ASSERTM(level_start_index.type().is_cuda(), "level_start_index must be a CUDA tensor");
+     AT_ASSERTM(sampling_loc.type().is_cuda(), "sampling_loc must be a CUDA tensor");
+@@ -132,7 +132,7 @@ std::vector<at::Tensor> ms_deform_attn_cuda_backward(
+     for (int n = 0; n < batch/im2col_step_; ++n)
+     {
+         auto grad_output_g = grad_output_n.select(0, n);
+-        AT_DISPATCH_FLOATING_TYPES(value.type(), "ms_deform_attn_backward_cuda", ([&] {
++        AT_DISPATCH_FLOATING_TYPES(value.scalar_type(), "ms_deform_attn_backward_cuda", ([&] {
+             ms_deformable_col2im_cuda(at::cuda::getCurrentCUDAStream(),
+                                     grad_output_g.data<scalar_t>(),
+                                     value.data<scalar_t>() + n * im2col_step_ * per_value_size,
+diff --git a/groundingdino/models/GroundingDINO/groundingdino.py b/groundingdino/models/GroundingDINO/groundingdino.py
+index cd97028..4807571 100644
+--- a/groundingdino/models/GroundingDINO/groundingdino.py
++++ b/groundingdino/models/GroundingDINO/groundingdino.py
+@@ -299,7 +299,7 @@ class GroundingDINO(nn.Module):
+         # import ipdb; ipdb.set_trace()
+         if isinstance(samples, (list, torch.Tensor)):
+             samples = nested_tensor_from_tensor_list(samples)
+-        if not hasattr(self, 'features') or not hasattr(self, 'poss'):
++        if not hasattr(self, 'features') and not hasattr(self, 'poss'):
+             self.set_image_tensor(samples)
+ 
+         srcs = []
+diff --git a/requirements.txt b/requirements.txt
+index 24aa11d..19015ec 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,6 +1,3 @@
+-torch
+-torchvision
+-transformers
+ addict
+ yapf
+ timm

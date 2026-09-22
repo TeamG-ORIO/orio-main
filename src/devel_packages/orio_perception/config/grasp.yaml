@@ -1,0 +1,47 @@
+# Grasp planning configuration for the pick-and-place path.
+# Loaded by orio_perception/launch/perception.launch.
+
+# Which backend /compute_grasps uses: dexnet | classical
+grasp_backend: classical
+
+dexnet:
+  service: /dexnet_grasp_planner/plan_grasp
+  service_timeout: 30.0        # s to wait for the planner at startup
+
+  # Bin mask: the static crop AND this depth band. Excludes the bin floor and
+  # anything above the rim. Tune both at bringup against a loaded bin.
+  bin_depth_min: 0.60          # m
+  bin_depth_max: 1.20          # m
+
+  min_q_value: 0.30            # reject grasps below this confidence
+
+  # Reject grasps whose approach axis deviates further than this from vertical.
+  # Set to 0 to accept only vertical grasps (parity with the classical path).
+  # pick-place-label.py gates on this too, via its own ~max_tilt_deg param.
+  max_tilt_deg: 45.0
+
+  # Motion offsets along the grasp normal, replacing the world-Z offsets used by
+  # the classical path. Mirror these into pick-place-label.py's ~pre_grasp_dist
+  # and ~contact_dist, which own the motion side.
+  pre_grasp_dist: 0.10         # m
+  contact_dist: 0.05           # m
+
+  # Lateral XY correction in the world frame. The classical path's 0.015 / -0.05 is a
+  # hand-tuned calibration residual, NOT a two-cup offset (grasp_solver already returns
+  # the cup midpoint). Since the residual belongs to the camera calibration and gripper
+  # rather than the algorithm, DexNet probably needs the same values - 0.0 is only a
+  # safe dry-run default. Resolve on hardware before trusting any A/B result.
+  offset_x: 0.0
+  offset_y: 0.0
+
+classical:
+  offset_x: 0.015              # existing hardcoded values, preserved
+  offset_y: -0.05
+
+camera:
+  # Read intrinsics from camera_info rather than the hardcoded PrimeSense defaults.
+  use_camera_info: true
+  info_topic: /camera/rgb/camera_info
+  info_timeout: 5.0            # s; falls back to PrimeSense defaults on timeout
+  # Used only when use_camera_info is false.
+  # manual_intrinsics: {fx: 525.0, fy: 525.0, cx: 319.5, cy: 239.5}

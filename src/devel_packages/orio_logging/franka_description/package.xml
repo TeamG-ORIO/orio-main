@@ -1,0 +1,8 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>franka_description</name>
+  <version>0.10.0</version>
+  <description>Franka Panda visual + collision meshes, vendored so rerun can resolve package:// URIs on the host.</description>
+  <maintainer email="team.g.orio.cmu@gmail.com">Team G ORIO</maintainer>
+  <license>Apache-2.0</license>
+</package>

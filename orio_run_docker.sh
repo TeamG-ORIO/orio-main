@@ -1,22 +1,42 @@
 #!/bin/bash
-xhost +local:root 
-docker container prune -f 
-docker run --privileged --rm -it \
+xhost +local:root
+docker container prune -f
+
+# frankapy: per-machine client (git-ignored); override with FRANKAPY_DIR.
+FRANKAPY_DIR="${FRANKAPY_DIR:-$(pwd)/src/git_packages/frankapy}"
+if [ ! -d "$FRANKAPY_DIR/frankapy" ] || \
+   [ ! -f "$FRANKAPY_DIR/catkin_ws/src/franka-interface-msgs/package.xml" ]; then
+    echo "WARNING: frankapy (or its nested franka-interface-msgs) missing at '$FRANKAPY_DIR'."
+    echo "  Clone the fork: git clone -b akshitr/widen-workspace-walls --recursive git@github.com:TeamG-ORIO/frankapy.git src/git_packages/frankapy"
+fi
+
+# Interactive by default (-it + a bash shell). A merged single-terminal launcher runs
+# this backgrounded with no TTY, where -it fails ("the input device is not a TTY") and an
+# interactive bash exits immediately. Set ORIO_NO_TTY=1 to run detached (-d) and keep the
+# container alive with `sleep infinity`, so the launcher can `docker exec` into it.
+if [ -n "${ORIO_NO_TTY:-}" ]; then
+    RUN_FLAGS="-d"; RUN_CMD=(bash -lc "sleep infinity")
+else
+    RUN_FLAGS="-it"; RUN_CMD=(bash)
+fi
+
+docker run --privileged --rm $RUN_FLAGS \
     --name="orio_docker_container" \
     --env="DISPLAY=$DISPLAY" \
     --env="QT_X11_NO_MITSHM=1" \
     --env="NVIDIA_DRIVER_CAPABILITIES=all" \
+    --env="ORIO_LOGGING=${ORIO_LOGGING:-1}" \
     --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
     --volume="$XAUTH:$XAUTH" \
     --network host \
     -v "$(pwd)/src/devel_packages:/home/ros_ws/src/devel_packages" \
     -v "$(pwd)/data:/home/ros_ws/data" \
-    -v "$(pwd)/guide_mode.py:/home/ros_ws/guide_mode.py" \
-    -v "$(pwd)/reset_joints.py:/home/ros_ws/reset_joints.py" \
     -v "/etc/timezone:/etc/timezone:ro" \
     -v "/etc/localtime:/etc/localtime:ro" \
     -v "/dev:/dev" \
     -v "$(pwd)/src/git_packages:/home/ros_ws/src/git_packages" \
+    -v "$FRANKAPY_DIR:/home/ros_ws/src/git_packages/frankapy" \
+    -v "$(pwd)/research:/home/ros_ws/research" \
     -v "/usr/local/zed/resources/:/usr/local/zed/resources/" \
     --gpus all \
-    orio_docker bash
+    orio_docker "${RUN_CMD[@]}"

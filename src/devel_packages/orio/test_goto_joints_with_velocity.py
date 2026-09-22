@@ -26,7 +26,7 @@ import time
 import numpy as np
 
 # ── local imports ──────────────────────────────────────────────────────────────
-sys.path.insert(0, "/home/ros_ws/src/devel_packages/prm")
+sys.path.insert(0, "/home/ros_ws/research/prm")
 import ikpy.chain
 import RobotUtil as rt
 

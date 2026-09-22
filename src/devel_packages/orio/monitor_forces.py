@@ -2,14 +2,14 @@
 """
 monitor_forces.py
 -----------------
-Run in a separate terminal while state_machine_integrated_waypts.py is running.
+Run in a separate terminal while state_machine.py is running.
 Displays live scrolling plots of:
   - Joint torques  (7 joints, Nm)    via fa.get_joint_torques()
   - EE force       (Fx Fy Fz, N)     via fa.get_ee_force_torque()
   - EE torque      (Tx Ty Tz, Nm)    via fa.get_ee_force_torque()
 
-One window per arm, three subplots each. All values are also saved to a
-timestamped CSV log in ./logs/.
+One window per arm, three subplots each. Recorded values live in the run's
+rerun recording (docs/LOGGING.md), not here.
 
 Usage:
     python3 monitor_forces.py [--rate HZ] [--robot 1] [--robot 2] [--window S]
@@ -18,9 +18,6 @@ Defaults: both arms, 10 Hz, 30 s scrolling window.
 """
 
 import argparse
-import csv
-import datetime
-import os
 import sys
 import threading
 import time
@@ -36,7 +33,6 @@ from frankapy import FrankaArm
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-_LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 JOINT_LABELS  = [f"J{i+1}" for i in range(7)]
 EE_F_LABELS   = ["Fx", "Fy", "Fz"]
@@ -79,31 +75,11 @@ class ArmBuffer:
         return t, jt, ef, et
 
 
-# ── CSV logging ───────────────────────────────────────────────────────────────
-
-def _open_csv(robot_nums):
-    os.makedirs(_LOG_DIR, exist_ok=True)
-    ts       = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    arms_tag = "_".join(f"arm{n}" for n in robot_nums)
-    path     = os.path.join(_LOG_DIR, f"forces_{arms_tag}_{ts}.csv")
-
-    f = open(path, "w", newline="")
-    header = ["timestamp_s", "arm"]
-    header += [f"jt_{l}" for l in JOINT_LABELS]
-    header += [f"ee_{l}" for l in EE_F_LABELS]
-    header += [f"ee_{l}" for l in EE_T_LABELS]
-    writer = csv.writer(f)
-    writer.writerow(header)
-    return f, writer, path
-
-
 # ── Background polling thread ─────────────────────────────────────────────────
 
-def _poll_loop(arms, buffers, csv_writer, csv_file, poll_interval, stop_event):
-    t0 = time.time()
+def _poll_loop(arms, buffers, poll_interval, stop_event):
     while not stop_event.is_set() and not rospy.is_shutdown():
         t_start = time.time()
-        ts = t_start - t0
 
         for n, fa in arms.items():
             try:
@@ -114,11 +90,6 @@ def _poll_loop(arms, buffers, csv_writer, csv_file, poll_interval, stop_event):
                 continue
 
             buffers[n].push(joint_t, ee_ft)
-
-            row = [f"{ts:.4f}", n] + list(joint_t) + list(ee_ft)
-            csv_writer.writerow(row)
-
-        csv_file.flush()
 
         elapsed    = time.time() - t_start
         sleep_time = poll_interval - elapsed
@@ -237,10 +208,6 @@ def main():
         print("No arms connected. Exiting.", file=sys.stderr)
         sys.exit(1)
 
-    # ── CSV log ──────────────────────────────────────────────────────────────
-    csv_file, csv_writer, log_path = _open_csv(list(arms.keys()))
-    print(f"Logging to: {log_path}\n")
-
     # ── Buffers ──────────────────────────────────────────────────────────────
     buffers = {n: ArmBuffer(buf_size) for n in arms}
 
@@ -248,7 +215,7 @@ def main():
     stop_event = threading.Event()
     poll_thread = threading.Thread(
         target=_poll_loop,
-        args=(arms, buffers, csv_writer, csv_file, poll_interval, stop_event),
+        args=(arms, buffers, poll_interval, stop_event),
         daemon=True,
     )
     poll_thread.start()
@@ -276,8 +243,6 @@ def main():
     finally:
         stop_event.set()
         poll_thread.join(timeout=2)
-        csv_file.close()
-        print(f"\nSaved: {log_path}")
 
 
 if __name__ == "__main__":

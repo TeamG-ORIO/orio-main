@@ -1,5 +1,0 @@
-2026-04-22 14:34:22,320 INFO     [Logger] File log started: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260422_143422.log
-2026-04-22 14:34:22,320 INFO     [Main] Node started. Log file: /home/ros_ws/src/devel_packages/orio/logs/orio_run_20260422_143422.log
-2026-04-22 14:34:28,613 INFO     [Main] Operator input — item='dss'  expiry='1234-56-78'
-2026-04-22 14:34:28,613 INFO     [Hardware] Initializing Robot Hardware...
-2026-04-22 14:34:29,151 INFO     [Hardware] Resetting both arms to home joints

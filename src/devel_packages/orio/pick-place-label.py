@@ -6,6 +6,7 @@ import ikpy.chain
 import numpy as np
 from frankapy import FrankaArm
 from autolab_core import RigidTransform
+from scipy.spatial.transform import Rotation as R_scipy
 from geometry_msgs.msg import PoseArray
 from std_srvs.srv import Trigger
 
@@ -31,20 +32,32 @@ def call_trigger_service(service_name):
         return False
 
 
-def compute_pick_joints(ik_chain, chain_length, task_pos):
+VERTICAL_ORI = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])
+
+
+def compute_pick_joints(ik_chain, chain_length, task_pos, task_ori=None,
+                        pre_dist=0.10, contact_dist=0.05):
     """
     Compute (pre_joints, final_joints) for a vision-guided pick-up.
     Mirrors pnp_test_forever.py exactly: fixed end-effector orientation,
     initial_guess[4]=-1.5, two IK calls where the first result seeds the second.
+
+    task_ori defaults to straight-down, which with the default distances reproduces
+    the original world-Z waypoints exactly. When a grasp orientation is supplied
+    (DexNet), the waypoints are offset along the tool approach axis instead, so the
+    cup travels down its own axis rather than sweeping in diagonally.
     """
-    target_ori = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])
+    target_ori = VERTICAL_ORI if task_ori is None else np.asarray(task_ori)
 
     initial_guess = [0.0] * chain_length
     if 4 < chain_length:
         initial_guess[4] = -1.5
 
-    pre_pos   = [task_pos[0], task_pos[1], task_pos[2] + 0.10]
-    final_pos = [task_pos[0], task_pos[1], task_pos[2] + 0.05]
+    # Tool Z is the approach direction; retreat is along its negation.
+    retreat = -target_ori[:, 2]
+    task_pos = np.asarray(task_pos, dtype=float)
+    pre_pos   = list(task_pos + retreat * pre_dist)
+    final_pos = list(task_pos + retreat * contact_dist)
 
     pre_angles = ik_chain.inverse_kinematics(
         target_position=pre_pos,
@@ -80,6 +93,18 @@ class PickPlaceLabelController:
                 active_mask[i] = True
         self.ik_chain.active_links_mask = active_mask
         self.chain_length = chain_length
+
+        # Grasp-orientation config. Defaults keep the historic behaviour: approach
+        # straight down and ignore the published grasp orientation.
+        self.use_grasp_orientation = rospy.get_param('~use_grasp_orientation', False)
+        self.max_tilt_deg   = float(rospy.get_param('~max_tilt_deg', 45.0))
+        self.pre_grasp_dist = float(rospy.get_param('~pre_grasp_dist', 0.10))
+        self.contact_dist   = float(rospy.get_param('~contact_dist', 0.05))
+        self.pick_up_ori    = None
+        if self.use_grasp_orientation:
+            rospy.loginfo("Grasp orientation enabled (max_tilt=%.1f deg, pre=%.3f m, "
+                          "contact=%.3f m)", self.max_tilt_deg, self.pre_grasp_dist,
+                          self.contact_dist)
 
         # Cartesian approach / retract deltas (world frame, ±Z)
         self.approach = RigidTransform(
@@ -150,8 +175,29 @@ class PickPlaceLabelController:
         rospy.loginfo("Object pose received! Computing pick joints...")
         p = self.latest_pose_msg.poses[0]
         task_pos = [p.position.x, p.position.y, p.position.z]
+
+        # The classical backend publishes an orientation the robot has always ignored,
+        # approaching straight down instead. Only honour it when use_grasp_orientation
+        # is set (DexNet), so the classical path is unchanged.
+        task_ori = None
+        if self.use_grasp_orientation:
+            q = [p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w]
+            if abs(np.linalg.norm(q) - 1.0) > 1e-3:
+                rospy.logwarn("Grasp quaternion not unit (%.4f); approaching vertically.",
+                              np.linalg.norm(q))
+            else:
+                task_ori = R_scipy.from_quat(q).as_matrix()
+                tilt = np.degrees(np.arccos(np.clip(-task_ori[2, 2], -1.0, 1.0)))
+                if tilt > self.max_tilt_deg:
+                    rospy.logwarn("Grasp tilt %.1f deg exceeds max_tilt_deg %.1f; "
+                                  "refusing the pick.", tilt, self.max_tilt_deg)
+                    return False
+                rospy.loginfo("Using grasp orientation, tilt %.1f deg", tilt)
+
+        self.pick_up_ori = task_ori
         self.pick_up_pre_joints, self.pick_up_final_joints = compute_pick_joints(
-            self.ik_chain, self.chain_length, task_pos
+            self.ik_chain, self.chain_length, task_pos, task_ori=task_ori,
+            pre_dist=self.pre_grasp_dist, contact_dist=self.contact_dist
         )
         return True
 
@@ -164,12 +210,29 @@ class PickPlaceLabelController:
         self.ppa.wait_for_skill()
         self.la.wait_for_skill()
 
-    def _par_delta(self, delta):
-        """Apply the same Cartesian delta to both arms simultaneously."""
-        self.ppa.goto_pose_delta(delta, block=False)
+    def _par_delta(self, delta, ppa_delta=None):
+        """Apply Cartesian deltas to both arms simultaneously.
+
+        ppa_delta overrides the pick arm's delta; the label arm always uses delta.
+        Both are still issued non-blocking before joining, so parallelism is kept.
+        """
+        self.ppa.goto_pose_delta(delta if ppa_delta is None else ppa_delta, block=False)
         self.la.goto_pose_delta(delta,  block=False)
         self.ppa.wait_for_skill()
         self.la.wait_for_skill()
+
+    def _pick_retract_delta(self):
+        """Retract for the vision-guided pick, along the grasp normal.
+
+        Retracting straight up from a tilted grasp shears the suction seal, which is
+        the likeliest way to drop an object right after picking it. Falls back to the
+        world-Z retract when no grasp orientation is available (classical backend).
+        """
+        if self.pick_up_ori is None:
+            return self.retract
+        retreat = -np.asarray(self.pick_up_ori)[:, 2] * self.contact_dist
+        return RigidTransform(translation=list(retreat),
+                              from_frame='world', to_frame='world')
 
     # ── Initialisation ─────────────────────────────────────────────────────────
 
@@ -230,8 +293,8 @@ class PickPlaceLabelController:
         rospy.sleep(1.0)
         call_trigger_service('/snaak/lbl_cup/off')  # la:  release (place) label
 
-        # Sub-task step 4 (parallel): both retract
-        self._par_delta(self.retract)
+        # Sub-task step 4 (parallel): both retract; ppa along the grasp normal
+        self._par_delta(self.retract, ppa_delta=self._pick_retract_delta())
 
         # Sub-task step 5 (parallel): ppa → LABEL_ZONE2 pre  |  la → SAFE_POS
         self._par_goto_joints(pre['ppa_LABEL_ZONE2'], self.safe_pos)
@@ -296,8 +359,8 @@ class PickPlaceLabelController:
         rospy.sleep(1.0)
         call_trigger_service('/snaak/lbl_cup/off')  # la:  release (place) label
 
-        # Sub-task step 4 (parallel): both retract
-        self._par_delta(self.retract)
+        # Sub-task step 4 (parallel): both retract; ppa along the grasp normal
+        self._par_delta(self.retract, ppa_delta=self._pick_retract_delta())
 
         # Sub-task step 5 (parallel): ppa → LABEL_ZONE1 pre  |  la → SAFE_POS
         self._par_goto_joints(pre['ppa_LABEL_ZONE1'], self.safe_pos)

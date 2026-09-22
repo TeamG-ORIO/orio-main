@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>orio_rfid</name>
+  <version>0.1.0</version>
+  <description>
+    ORIO RFID inventory subsystem: Impinj shelf scanner + Mercury labelling-station
+    readers, SQLite inventory database manager, and a Tkinter dashboard.
+  </description>
+  <maintainer email="student@todo.todo">ORIO Team G</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>custom_msgs</exec_depend>
+  <exec_depend>message_runtime</exec_depend>
+  <!-- python deps installed via pip/venv: sllurp (Impinj), python-mercuryapi (submodule) -->
+
+  <export>
+  </export>
+</package>
