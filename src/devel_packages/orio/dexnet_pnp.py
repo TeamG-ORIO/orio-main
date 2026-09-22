@@ -39,8 +39,13 @@ import rospy
 from frankapy import FrankaArm
 from geometry_msgs.msg import PoseArray
 from scipy.spatial.transform import Rotation as R
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
+
+try:
+    from orio_core.events import TOPIC as EVENTS_TOPIC, EventSink
+except ImportError:  # orio_core not on path: run events disabled
+    EVENTS_TOPIC, EventSink = None, None
 
 # ── Constants (match state_machine.py) ──────────────────────────────────────
 APPROACH_DISTANCE = 0.1                 # metres, world +Z offset contact → pre
@@ -50,8 +55,8 @@ URDF_FILE = "panda_arm_hand.urdf"
 
 # Where items go. state_machine.py's PlaceOutput drops at OUTPUT1/OUTPUT2 (over the output
 # box), reaching in by item_depth + this margin — NOT the DROP_ZONE joint pose, which sits
-# at the box edge. We use OUTPUT1 via IK for the same reason.
-OUTPUT_POSE = "OUTPUT1"
+# at the box edge. We use OUTPUT2 via IK for the same reason.
+OUTPUT_POSE = "OUTPUT2"
 OUTPUT_TRANSIT_POSE = "L2_INTER"        # intermediate waypoint before the drop
 OUTPUT_DEPTH_MARGIN = 0.15              # m added to item depth so the cup clears the rim
 
@@ -68,6 +73,39 @@ disable_pneumatics = False
 test_vacuum = False
 
 
+# Run events on /orio/events (docs/LOGGING.md). The host-side recorder turns these into
+# rerun entries; nothing here imports rerun (this runs on the container's Python 3.8).
+# Null until _init_events() runs after rospy.init_node.
+class _NullTimed:
+    def __enter__(self):
+        self.data = {}
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _NullSink:
+    enabled = False
+
+    def emit(self, *a, **kw):
+        return False
+
+    def timed(self, *a, **kw):
+        return _NullTimed()
+
+
+events = _NullSink()
+
+
+def _init_events():
+    global events
+    if EventSink is None or os.environ.get('ORIO_LOGGING', '1') == '0':
+        return
+    pub = rospy.Publisher(EVENTS_TOPIC, String, queue_size=50)
+    events = EventSink(lambda s: pub.publish(String(data=s)), src='dexnet_pnp')
+
+
 def _is_vacuum_service(name):
     return '/pnp_cup/' in name or '/lbl_cup/' in name
 
@@ -81,7 +119,9 @@ def call_trigger_service(service_name, timeout=5.0):
     try:
         rospy.wait_for_service(service_name, timeout=timeout)
         proxy = rospy.ServiceProxy(service_name, Trigger)
-        response = proxy()
+        with events.timed('service', service_name) as ev:
+            response = proxy()
+            ev.data['ok'] = bool(response.success)
         rospy.loginfo("[Service] %s → success=%s msg='%s'", service_name,
                       response.success, getattr(response, 'message', ''))
         return response.success
@@ -94,9 +134,12 @@ class DexnetPickPlace:
     """Single-arm pick-and-place hardware wrapper + control loop."""
 
     def __init__(self, use_grasp_orientation=True, max_tilt_deg=45.0,
-                 motion_timeout_margin=8.0):
+                 motion_timeout_margin=8.0, zero_item_depth=False):
         self.use_grasp_orientation = use_grasp_orientation
         self.max_tilt_deg = float(max_tilt_deg)
+        # When set, the drop reaches in by OUTPUT_DEPTH_MARGIN alone rather than also by
+        # the grasp z, so every item is released at the same height.
+        self.zero_item_depth = bool(zero_item_depth)
         # Extra seconds beyond a motion's `duration` before _move() gives up (covers
         # planning/settling); a dead control PC then errors instead of hanging forever.
         self.motion_timeout_margin = float(motion_timeout_margin)
@@ -157,6 +200,26 @@ class DexnetPickPlace:
         if timeout is None:
             timeout = float(duration) + self.motion_timeout_margin
         kwargs["block"] = False
+        # One timed 'cmd' event per motion (docs/LOGGING.md): target joints, the motion's
+        # own time budget, the measured wall time, the controller faults it recovered from,
+        # and ok=False if it raised (timeout / abort / shutdown). The event is emitted on
+        # exit from the `with`, i.e. AFTER the motion — nothing is added inside the loop.
+        # name='arm1' (not desc): the recorder uses a cmd event's NAME as an entity prefix
+        # (`<name>/cmd/target_joints`), so it must be the arm, with the motion described in
+        # the data. Passing desc here would scatter one entity per motion description.
+        with events.timed('cmd', 'arm1') as ev:
+            ev.data.update(desc=desc, duration=float(duration), timeout=float(timeout))
+            if args and np.ndim(args[0]) == 1:
+                ev.data['joints'] = [float(j) for j in args[0]]
+            faults = self._run_motion(motion_fn, args, kwargs, timeout, desc)
+            ev.data['faults'] = faults
+
+    def _run_motion(self, motion_fn, args, kwargs, timeout, desc):
+        """Issue the motion and poll it to completion; returns the recovered fault count.
+
+        Split out of _move() so the timed 'cmd' event wraps every exit path (normal
+        return, hard timeout, shutdown) without repeating the emit at each one.
+        """
         motion_fn(*args, **kwargs)   # issue asynchronously
         deadline = rospy.Time.now() + rospy.Duration(timeout)
         rate = rospy.Rate(20)
@@ -175,7 +238,7 @@ class DexnetPickPlace:
         while True:
             try:
                 if self.arm.is_skill_done(ignore_errors=False):
-                    break
+                    return faults
             except Exception as exc:   # FrankaArmException / ...NotReadyException
                 faults += 1
                 if faults == 1:        # once per motion; the fault repeats while recovering
@@ -261,13 +324,23 @@ class DexnetPickPlace:
             orientation_mode="all", initial_position=pre_angles)
 
         # FK residual validation, same threshold as state_machine.py.
+        errs = {}
         for name, angles, pos in (("pre", pre_angles, pre_pos),
                                   ("final", final_angles, final_pos)):
             fk = self.ik_chain.forward_kinematics(list(angles))
             err = np.linalg.norm(fk[:3, 3] - np.asarray(pos))
+            errs[name] = float(err)
             if err > 0.02:
+                # Emit before raising: a rejected solve is exactly the case worth seeing
+                # in the recording (the pick aborts and there is no 'cmd' event after it).
+                events.emit('ik', 'arm1', target=list(task_pos), pre=list(pre_angles[1:8]),
+                            final=list(final_angles[1:8]), err_pre=errs.get('pre'),
+                            err_final=errs.get('final'), ok=False, failed=name)
                 raise RuntimeError("IK %s residual %.4f m > 0.02 m for target %s"
                                    % (name, err, np.round(task_pos, 4)))
+        events.emit('ik', 'arm1', target=list(task_pos), pre=list(pre_angles[1:8]),
+                    final=list(final_angles[1:8]), err_pre=errs['pre'],
+                    err_final=errs['final'], ok=True)
         return pre_angles[1:8], final_angles[1:8]
 
     def pose_to_joints(self, tag, depth_offset=0.0):
@@ -293,6 +366,7 @@ class DexnetPickPlace:
         self.latest_pose_msg = None
         if not call_trigger_service('/compute_grasps'):
             rospy.logwarn("[Grasp] /compute_grasps failed")
+            events.emit('grasp', 'declined', reason='compute_grasps_failed', ok=False)
             return None
 
         deadline = rospy.Time.now() + rospy.Duration(wait_s)
@@ -301,12 +375,16 @@ class DexnetPickPlace:
 
         if self.latest_pose_msg is None or not self.latest_pose_msg.poses:
             rospy.loginfo("[Grasp] No grasp pose returned (bin empty?)")
+            events.emit('grasp', 'declined',
+                        reason='timeout' if self.latest_pose_msg is None else 'no_poses',
+                        wait_s=float(wait_s), ok=False)
             return None
 
         p = self.latest_pose_msg.poses[0]
         task_pos = [p.position.x, p.position.y, p.position.z]
         if any(np.isnan(v) for v in task_pos):
             rospy.logwarn("[Grasp] NaN in grasp pose %s", task_pos)
+            events.emit('grasp', 'declined', reason='nan_pose', ok=False)
             return None
 
         x, y, z = task_pos
@@ -315,9 +393,12 @@ class DexnetPickPlace:
                 PICK_BOUNDS['z_min'] <= z <= PICK_BOUNDS['z_max']):
             rospy.logwarn("[Grasp] pose (%.3f, %.3f, %.3f) outside safe bounds %s",
                           x, y, z, PICK_BOUNDS)
+            events.emit('grasp', 'declined', reason='out_of_bounds',
+                        pos=[x, y, z], ok=False)
             return None
 
         target_ori = None
+        tilt_deg = None          # stays None when approaching straight down
         if self.use_grasp_orientation:
             q = [p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w]
             if abs(np.linalg.norm(q) - 1.0) > 1e-3:
@@ -329,17 +410,25 @@ class DexnetPickPlace:
                 if tilt > self.max_tilt_deg:
                     rospy.logwarn("[Grasp] tilt %.1f deg > max_tilt_deg %.1f; "
                                   "refusing pick", tilt, self.max_tilt_deg)
+                    events.emit('grasp', 'declined', reason='tilt_exceeded',
+                                pos=[x, y, z], tilt_deg=float(tilt),
+                                max_tilt_deg=self.max_tilt_deg, ok=False)
                     return None
                 rospy.loginfo("[Grasp] using grasp orientation, tilt %.1f deg", tilt)
                 target_ori = ori
+                tilt_deg = float(tilt)
         rospy.loginfo("[Grasp] pick at (%.3f, %.3f, %.3f)", x, y, z)
+        events.emit('grasp', 'accepted', pos=[x, y, z], tilt_deg=tilt_deg,
+                    straight_down=target_ori is None,
+                    n_poses=len(self.latest_pose_msg.poses), ok=True)
         return task_pos, target_ori
 
     # ── One pick-and-place cycle ──────────────────────────────────────────────
     def pick_and_place(self, task_pos, target_ori):
         pre_joints, final_joints = self.compute_pick_joints(task_pos, target_ori)
         # Item depth (world z of the grasp) sets how far to reach into the output box.
-        item_depth = float(task_pos[2])
+        # --zero-item-depth pins it to 0 so the drop height is the same for every item.
+        item_depth = 0.0 if self.zero_item_depth else float(task_pos[2])
 
         rospy.loginfo("[Pick] Moving to pre-pick")
         self._move(self.arm.goto_joints, pre_joints, duration=3, desc="goto pre-pick")
@@ -353,14 +442,15 @@ class DexnetPickPlace:
         self._move(self.arm.goto_joints, pre_joints, duration=2, desc="retract")
         self.assert_vacuum(True)
 
-        # Transit via HOME so the arm lifts to a known safe posture before crossing to the
-        # drop, rather than sweeping directly from the bin.
-        rospy.loginfo("[Place] Transiting via HOME")
-        self._move(self.arm.reset_joints, duration=3, desc="transit to HOME (carrying item)")
+        # Transit via L2_INTER, a waypoint between the bin and the output box, so the arm
+        # crosses on a known path rather than sweeping straight there.
+        rospy.loginfo("[Place] Transiting via %s", OUTPUT_TRANSIT_POSE)
+        transit_joints = self.pose_to_joints(OUTPUT_TRANSIT_POSE)
+        self._move(self.arm.goto_joints, transit_joints, duration=3,
+                   desc="transit to %s (carrying item)" % OUTPUT_TRANSIT_POSE)
         self.assert_vacuum(True)
 
-        # Drop at the OUTPUT box (over it, reaching in by item_depth + margin). We go
-        # straight from HOME to OUTPUT, skipping the L2_INTER transit waypoint. Not the
+        # Drop at the OUTPUT box (over it, reaching in by item_depth + margin). Not the
         # DROP_ZONE joint pose, which sat at the box edge.
         rospy.loginfo("[Place] Moving to %s (into the box)", OUTPUT_POSE)
         drop_joints = self.pose_to_joints(
@@ -385,8 +475,19 @@ class DexnetPickPlace:
         """
         while True:
             try:
-                answer = input("[Loop] Press Enter to execute this pick, "
-                               "'r' to regenerate the grasp (Ctrl-C to abort)... ")
+                # Ordering matters here: the operator must SEE the [Grasp] lines for the
+                # pick they are about to confirm. rospy.loginfo writes to stderr and the
+                # prompt to stdout, and under the launcher's `docker exec | awk` pipeline
+                # neither is a tty, so both are block-buffered — without an explicit flush
+                # the grasp details surface only AFTER the answer. Flush stderr first, then
+                # emit the prompt as its OWN line: the launcher's awk classifier reads
+                # line-by-line, so a trailing prompt with no newline would sit unflushed in
+                # awk until the next line arrived.
+                sys.stderr.flush()
+                print("[Loop] Press Enter to execute this pick, "
+                      "'r' to regenerate the grasp (Ctrl-C to abort)...")
+                sys.stdout.flush()
+                answer = input()
             except (EOFError, KeyboardInterrupt):
                 return 'abort'
             answer = answer.strip().lower()
@@ -399,18 +500,51 @@ class DexnetPickPlace:
             print("[Loop] Unrecognised input %r — Enter to execute, 'r' to regenerate, "
                   "Ctrl-C to abort." % answer)
 
-    def run(self, confirm=False, max_declines=5):
-        """Pick-and-place until the planner declines max_declines times in a row.
+    @staticmethod
+    def _await_refill(declines, picked):
+        """Bin looks empty: ask the operator to refill it, and block until they answer.
 
-        A single decline (low q, no pose, out of bounds) does not end the run: the bin
-        may just need a re-scan (objects shift, a better frame helps). Only after
-        max_declines consecutive declines do we conclude the bin is empty / no reliable
-        grasp. A successful pick resets the counter.
+        Returns True to rescan (Enter) or False to end the run (q / Ctrl-C / EOF). Under
+        the launcher this runs inside `docker exec -it`, so stdin is the real terminal;
+        the flush/own-line handling matches _confirm_pick (see the note there).
+        """
+        while True:
+            try:
+                sys.stderr.flush()
+                print("[Loop] Bin appears empty (%d scans with no valid grasp). "
+                      "Total placed so far: %d." % (declines, picked))
+                print("[Loop] Add items to the bin, then press Enter to resume "
+                      "('q' or Ctrl-C to finish)...")
+                sys.stdout.flush()
+                answer = input()
+            except (EOFError, KeyboardInterrupt):
+                return False
+            answer = answer.strip().lower()
+            if answer == '':
+                return True
+            if answer in ('q', 'quit', 'abort', 'stop'):
+                return False
+            print("[Loop] Unrecognised input %r — Enter to resume, 'q' to finish." % answer)
+
+    def run(self, confirm=False, max_declines=5):
+        """Pick-and-place until the operator ends the run.
+
+        A single decline (low q, no pose, out of bounds) does not pause anything: the bin
+        may just need a re-scan (objects shift, a better frame helps). After max_declines
+        consecutive declines we conclude the bin is empty and ASK THE OPERATOR to refill
+        it, blocking until they press Enter (or 'q' to finish). A run is normally several
+        bins, so an empty one is a pause, not the end. A successful pick resets the counter.
         """
         rospy.loginfo("[Loop] Starting DexNet pick-and-place loop (Ctrl-C to stop)")
         picked = 0
         declines = 0
+        attempt = 0
         while not rospy.is_shutdown():
+            # 'pick' advances the recorder's `pick` timeline, so the whole recording can be
+            # scrubbed attempt by attempt. Emitted per ATTEMPT (before the scan), not per
+            # success, so declines and failures land on their own index too.
+            attempt += 1
+            events.emit('pick', n=attempt, placed=picked)
             # The pre-scan reset is the first thing to fail when the control PC is unwell.
             # Handle it here rather than letting it escape as a traceback and kill the run:
             # if the robot can't even get home, there's nothing useful left to do this loop.
@@ -419,19 +553,34 @@ class DexnetPickPlace:
             except KeyboardInterrupt:
                 raise
             except Exception as exc:  # noqa: BLE001
+                events.emit('error', 'reset_before_scan', msg=str(exc), ok=False)
                 rospy.logerr("[Loop] Cannot reset to home: %s", exc)
                 rospy.logerr("[Loop] The robot is not usable right now — stopping. "
                              "Check the control PC (see the control_pc log). Total placed: %d",
                              picked)
+                events.emit('shutdown', 'robot_unusable', picks=attempt, placed=picked)
                 break
             grasp = self.request_grasp()
             if grasp is None:
                 declines += 1
                 if declines >= max_declines:
-                    rospy.loginfo("[Loop] Planner declined %d times in a row — bin "
-                                  "empty or no reliable grasp. Stopping. Total placed: %d",
-                                  declines, picked)
-                    break
+                    # Bin looks empty. Don't end the run — the operator can refill it and
+                    # carry on, which is the normal case (a run is usually several bins).
+                    # Blocks on the terminal, so the arm is parked at home and idle.
+                    events.emit('operator', 'awaiting_refill', declines=declines,
+                                picks=attempt, placed=picked)
+                    rospy.loginfo("[Loop] Planner declined %d times in a row — bin empty "
+                                  "or no reliable grasp. Waiting for a refill.", declines)
+                    if not self._await_refill(declines, picked):
+                        rospy.loginfo("[Loop] Operator ended the run. Total placed: %d",
+                                      picked)
+                        events.emit('shutdown', 'bin_empty', declines=declines,
+                                    picks=attempt, placed=picked)
+                        break
+                    rospy.loginfo("[Loop] Resuming after refill.")
+                    events.emit('operator', 'refilled', pick=attempt, placed=picked)
+                    declines = 0      # fresh bin: start the streak over
+                    continue
                 rospy.logwarn("[Loop] Grasp declined (%d/%d) — re-scanning…",
                               declines, max_declines)
                 rospy.sleep(0.5)
@@ -441,8 +590,10 @@ class DexnetPickPlace:
 
             if confirm:
                 choice = self._confirm_pick()
+                events.emit('operator', choice, pick=attempt, pos=list(task_pos))
                 if choice == 'abort':
                     rospy.loginfo("[Loop] Aborted by operator")
+                    events.emit('shutdown', 'operator_abort', picks=attempt, placed=picked)
                     break
                 if choice == 'regenerate':
                     rospy.loginfo("[Loop] Regenerating grasp — re-scanning…")
@@ -451,11 +602,14 @@ class DexnetPickPlace:
             try:
                 self.pick_and_place(task_pos, target_ori)
                 picked += 1
+                events.emit('pick', 'placed', n=attempt, placed=picked, ok=True)
                 rospy.loginfo("[Loop] Placed item #%d", picked)
             except Exception as exc:  # noqa: BLE001 — log, drop cup, keep looping
+                events.emit('error', 'pick_and_place', pick=attempt, msg=str(exc), ok=False)
                 rospy.logerr("[Loop] Pick/place failed: %s", exc)
                 call_trigger_service('/orio/pnp_cup/off')
                 rospy.loginfo("[Loop] Continuing after failure")
+        events.emit('summary', 'run', picks=attempt, placed=picked)
         return picked
 
 
@@ -486,9 +640,14 @@ def main():
     parser.add_argument('--confirm', action='store_true',
                         help="Before each pick, wait for Enter (execute), 'r' (regenerate "
                              "the grasp), or Ctrl-C (abort). Safe for bring-up.")
+    parser.add_argument('--zero-item-depth', action='store_true',
+                        help="Ignore the grasp z when computing the drop height: reach "
+                             "into the output box by the fixed margin alone, so every "
+                             "item is released at the same height.")
     parser.add_argument('--max-declines', type=int, default=5,
                         help="Consecutive planner declines (low q / no grasp) before the "
-                             "loop concludes the bin is empty and stops.")
+                             "loop concludes the bin is empty and waits for you to refill "
+                             "it and press Enter.")
     parser.add_argument('--check-only', action='store_true',
                         help="Only check that robot 1 (franka-interface) is ready, then "
                              "exit 0 if ready / non-zero if not. No motion. Used as a "
@@ -509,20 +668,31 @@ def main():
             rospy.logerr("[Check] Robot 1 NOT ready: %s", exc)
             return 1
 
+    _init_events()
     disable_pneumatics = _resolve_disable_pneumatics(args)
     test_vacuum = args.check_vacuum and not disable_pneumatics
     if disable_pneumatics:
         rospy.logwarn("[Main] PNEUMATICS DISABLED — vacuum is a no-op (dry run). "
                       "Move the cup by hand.")
 
+    rospy.loginfo("[Main] Node started (run events %s)",
+                  "on" if events.enabled else "off")
+    events.emit('operator', 'setup', no_vacuum=disable_pneumatics,
+                straight_down=args.straight_down, confirm=args.confirm,
+                max_tilt_deg=args.max_tilt_deg, max_declines=args.max_declines,
+                check_vacuum=test_vacuum, zero_item_depth=args.zero_item_depth)
+
     controller = DexnetPickPlace(
         use_grasp_orientation=not args.straight_down,
-        max_tilt_deg=args.max_tilt_deg)
+        max_tilt_deg=args.max_tilt_deg,
+        zero_item_depth=args.zero_item_depth)
 
     try:
         placed = controller.run(confirm=args.confirm, max_declines=args.max_declines)
+        events.emit('shutdown', 'finished', placed=placed)
         rospy.loginfo("[Main] Finished. Total items placed: %d", placed)
     except (rospy.ROSInterruptException, KeyboardInterrupt):
+        events.emit('shutdown', 'interrupt')
         rospy.logwarn("[Main] Interrupt — stopping")
     finally:
         rospy.logwarn("[Main] Turning off pnp vacuum")
