@@ -45,3 +45,19 @@ that died logged only 2 kernel lines and no hung-task traces, despite hang detec
 active — so something killed it faster than it could log. A userspace mutex deadlock should
 not take the kernel with it. If the freezes continue, look at the PREEMPT_RT kernel
 (`5.4.3-rt1`, `rtprio 99` allowed for `@realtime`) or hardware, not the teardown.
+
+---
+
+## Xtion camera often fails to connect on the first try
+
+**What happens.** At bring-up the Xtion frequently fails to start and `/camera/rgb/image_raw`
+never publishes. The driver logs `Can't initialize stream of type 1` (the IR stream) and then
+`Device "1d27/0600@1/NN" disconnected`, with `NN` incrementing each attempt. The launcher
+retries and it usually succeeds within a few attempts, so runs still proceed.
+
+**Possible causes.** Not established. Two theories were investigated and ruled out: USB
+autosuspend (the device reports `power/control=on` and `runtime_suspended_time=0`, so it is
+never suspended) and USB bandwidth contention with the ZED (the Xtion is the only high-speed
+device on its bus, and staggering the two cameras did not stop it). The failure is always the
+IR stream specifically, and a retry usually works, which points at the cable, power delivery,
+or the camera itself rather than software — untested.
