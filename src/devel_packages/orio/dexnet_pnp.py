@@ -18,6 +18,13 @@ By default the arm honours DexNet's grasp orientation (tilted approach along the
 grasp normal), refusing picks steeper than --max-tilt-deg. Pass --straight-down
 to ignore the orientation and always approach vertically (the classical path).
 
+--offset-x / --offset-y (metres, world frame) shift the received grasp position
+before the arm moves. DexNet and the perception node are untouched: the pose on
+/grasp_poses is the raw one, the correction is applied here, right before IK.
+This is the calibration residual the classical path folded into its offsets
+(camera TF, default intrinsics, cup mounting); measure it on the robot and pass
+it in. Keep grasp.yaml's dexnet offset_x/offset_y at 0 so it is not applied twice.
+
 Runs INSIDE the main docker container, like state_machine.py:
     docker exec -it <container> bash -c \
       'source /home/ros_ws/devel/setup.bash \
@@ -134,9 +141,16 @@ class DexnetPickPlace:
     """Single-arm pick-and-place hardware wrapper + control loop."""
 
     def __init__(self, use_grasp_orientation=True, max_tilt_deg=45.0,
-                 motion_timeout_margin=8.0, zero_item_depth=False):
+                 motion_timeout_margin=8.0, zero_item_depth=False,
+                 grasp_offset=(0.0, 0.0)):
         self.use_grasp_orientation = use_grasp_orientation
         self.max_tilt_deg = float(max_tilt_deg)
+        # World-frame XY correction added to every grasp position received from
+        # perception, before the bounds check and IK (see the module docstring).
+        self.grasp_offset = np.array([float(grasp_offset[0]), float(grasp_offset[1]), 0.0])
+        if np.any(self.grasp_offset != 0.0):
+            rospy.loginfo("[Grasp] world XY offset applied after DexNet: (%+.3f, %+.3f) m",
+                          self.grasp_offset[0], self.grasp_offset[1])
         # When set, the drop reaches in by OUTPUT_DEPTH_MARGIN alone rather than also by
         # the grasp z, so every item is released at the same height.
         self.zero_item_depth = bool(zero_item_depth)
@@ -381,11 +395,18 @@ class DexnetPickPlace:
             return None
 
         p = self.latest_pose_msg.poses[0]
-        task_pos = [p.position.x, p.position.y, p.position.z]
-        if any(np.isnan(v) for v in task_pos):
-            rospy.logwarn("[Grasp] NaN in grasp pose %s", task_pos)
+        raw_pos = [p.position.x, p.position.y, p.position.z]
+        if any(np.isnan(v) for v in raw_pos):
+            rospy.logwarn("[Grasp] NaN in grasp pose %s", raw_pos)
             events.emit('grasp', 'declined', reason='nan_pose', ok=False)
             return None
+        # Calibration residual, applied AFTER DexNet: the planner and the published
+        # pose stay raw; only what the arm is sent to moves.
+        task_pos = [float(v) for v in np.asarray(raw_pos) + self.grasp_offset]
+        if np.any(self.grasp_offset != 0.0):
+            rospy.loginfo("[Grasp] DexNet pose (%.3f, %.3f, %.3f) + offset (%+.3f, %+.3f) "
+                          "-> (%.3f, %.3f, %.3f)", *raw_pos, self.grasp_offset[0],
+                          self.grasp_offset[1], *task_pos)
 
         x, y, z = task_pos
         if not (PICK_BOUNDS['x_min'] <= x <= PICK_BOUNDS['x_max'] and
@@ -418,7 +439,8 @@ class DexnetPickPlace:
                 target_ori = ori
                 tilt_deg = float(tilt)
         rospy.loginfo("[Grasp] pick at (%.3f, %.3f, %.3f)", x, y, z)
-        events.emit('grasp', 'accepted', pos=[x, y, z], tilt_deg=tilt_deg,
+        events.emit('grasp', 'accepted', pos=[x, y, z], raw_pos=list(raw_pos),
+                    offset=self.grasp_offset[:2].tolist(), tilt_deg=tilt_deg,
                     straight_down=target_ori is None,
                     n_poses=len(self.latest_pose_msg.poses), ok=True)
         return task_pos, target_ori
@@ -648,6 +670,13 @@ def main():
                         help="Consecutive planner declines (low q / no grasp) before the "
                              "loop concludes the bin is empty and waits for you to refill "
                              "it and press Enter.")
+    parser.add_argument('--offset-x', type=float, default=0.0, metavar='M',
+                        help="World-frame X correction (metres) added to every grasp "
+                             "position after DexNet returns it, before the arm moves.")
+    parser.add_argument('--offset-y', type=float, default=0.0, metavar='M',
+                        help="World-frame Y correction (metres), as --offset-x. Image-up "
+                             "in the affordance figure is world +Y, so an arm that lands "
+                             "image-up of the drawn grasp needs a negative value.")
     parser.add_argument('--check-only', action='store_true',
                         help="Only check that robot 1 (franka-interface) is ready, then "
                              "exit 0 if ready / non-zero if not. No motion. Used as a "
@@ -680,12 +709,14 @@ def main():
     events.emit('operator', 'setup', no_vacuum=disable_pneumatics,
                 straight_down=args.straight_down, confirm=args.confirm,
                 max_tilt_deg=args.max_tilt_deg, max_declines=args.max_declines,
-                check_vacuum=test_vacuum, zero_item_depth=args.zero_item_depth)
+                check_vacuum=test_vacuum, zero_item_depth=args.zero_item_depth,
+                offset_x=args.offset_x, offset_y=args.offset_y)
 
     controller = DexnetPickPlace(
         use_grasp_orientation=not args.straight_down,
         max_tilt_deg=args.max_tilt_deg,
-        zero_item_depth=args.zero_item_depth)
+        zero_item_depth=args.zero_item_depth,
+        grasp_offset=(args.offset_x, args.offset_y))
 
     try:
         placed = controller.run(confirm=args.confirm, max_declines=args.max_declines)

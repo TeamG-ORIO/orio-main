@@ -14,11 +14,35 @@ dexnet:
   bin_depth_max: 1.20          # m
 
   min_q_value: 0.30            # reject grasps below this confidence
+  # NOTE: the threshold is enforced by the planner container, which takes it from
+  # DEXNET_MIN_Q_VALUE (run_dexnet.sh) or run_dexnet_pnp_single.sh --min-q. This
+  # entry is not read by the perception node.
 
   # Reject grasps whose approach axis deviates further than this from vertical.
   # Set to 0 to accept only vertical grasps (parity with the classical path).
   # pick-place-label.py gates on this too, via its own ~max_tilt_deg param.
   max_tilt_deg: 45.0
+
+  # Item mask: narrow the depth band to (GroundingDINO+SAM item pixels) OR (pixels
+  # clearly above the table), so the bare table is never a grasp candidate. Thin
+  # items come in through the prompt, tall or piled items through height.
+  # enabled: false restores the depth-band-only mask and skips loading the models.
+  item_mask:
+    enabled: true
+    prompt: "medical item on black table"
+    erode_px: 3                # shrink detected items so grasps stay off their edges
+    above_table_min: 0.015     # m above the fitted table plane to count as an item
+
+  # Approach axis from a plane fitted to raw depth under the cup, replacing
+  # DexNet's per-pixel normal.
+  #   off      - DexNet's axis, untouched (previous behaviour)
+  #   shadow   - log plane vs DexNet tilt, still execute DexNet's axis
+  #   override - execute the plane's axis
+  plane_fit:
+    mode: override
+    radius: 0.03               # m, patch radius around the grasp (~1.5x cup radius)
+    min_inlier_frac: 0.7       # below this the patch is not treated as a plane
+    fallback: vertical         # override only, when no plane is found: vertical | dexnet
 
   # Motion offsets along the grasp normal, replacing the world-Z offsets used by
   # the classical path. Mirror these into pick-place-label.py's ~pre_grasp_dist
@@ -31,6 +55,9 @@ dexnet:
   # the cup midpoint). Since the residual belongs to the camera calibration and gripper
   # rather than the algorithm, DexNet probably needs the same values - 0.0 is only a
   # safe dry-run default. Resolve on hardware before trusting any A/B result.
+  # For run_dexnet_pnp_single.sh the correction is applied in the pick loop instead
+  # (--offset-x/--offset-y, or ORIO_PNP_OFFSET_X/Y), after the raw pose is published.
+  # Leave these at 0 when using that, or the offset is applied twice.
   offset_x: 0.0
   offset_y: 0.0
 

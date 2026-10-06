@@ -13,6 +13,7 @@ import os
 import yaml
 import threading
 from PIL import Image
+from scipy import ndimage
 from scipy.spatial.transform import Rotation as R_scipy
 
 # ROS Imports
@@ -29,6 +30,7 @@ import groundingdino.datasets.transforms as T
 
 # Custom modules
 from grasp_solver import optimize_grasp_pose
+import dexnet_geometry
 from opt_label_location import opt_label_loc
 from rerun_writer import PerceptionLog
 
@@ -65,7 +67,7 @@ DEPTH_SAMPLE_RADIUS_M   = 0.025 # sampling radius in metres (2.5 cm)
 # PICK-AND-PLACE PARAMETERS  (Xtion camera)
 # ==============================================================================
 PNP_RGB_TOPIC   = "/camera/rgb/image_raw"
-PNP_DEPTH_TOPIC = "/camera/depth/image_raw"
+PNP_DEPTH_TOPIC = "/camera/depth_registered/image_raw"
 PNP_POSE_TOPIC  = "/grasp_poses"
 # Repo root, env-anchored (ORIO_REPO), for the manipulation TF yamls.
 _REPO_ROOT      = os.environ.get("ORIO_REPO",
@@ -121,17 +123,20 @@ class CombinedPerceptionNode:
     def __init__(self):
         rospy.init_node('combined_perception_node')
 
-        # Backend decides which models to load. DexNet plans from depth + a depth-band
-        # bin mask and never touches SAM/GroundingDINO, so skip loading them (they are
+        # Backend decides which models to load. DexNet plans from depth + a segmask;
+        # with dexnet.item_mask.enabled off that mask is the depth band alone and
+        # SAM/GroundingDINO are never touched, so skip loading them (they are otherwise
         # only used by the classical grasp path and the labelling path). This avoids a
         # ~440 MB weight download + GPU memory that would compete with DexNet's TF graph.
         self.grasp_backend = rospy.get_param('~grasp_backend', 'classical')
         rospy.loginfo("Grasp backend: %s", self.grasp_backend)
-        self._inference_lock = threading.Lock()
+        use_item_mask = bool(rospy.get_param('~dexnet/item_mask/enabled', False))
+        # Re-entrant: the DexNet branch holds it while _detect_and_segment takes it again.
+        self._inference_lock = threading.RLock()
 
-        # ── Load models once (skipped for the dexnet backend) ──────────────────
+        # ── Load models once (skipped for dexnet without the item mask) ────────
         self.sam = self.predictor = self.gdino_model = self.gdino_transform = None
-        if self.grasp_backend != 'dexnet':
+        if self.grasp_backend != 'dexnet' or use_item_mask:
             rospy.loginfo("Loading AI Models (SAM & GroundingDINO)...")
             self.sam = sam_model_registry[MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
             self.sam.to(device=device)
@@ -145,7 +150,7 @@ class CombinedPerceptionNode:
             rospy.loginfo("Models loaded.")
         else:
             rospy.loginfo("DexNet backend: skipping SAM/GroundingDINO load "
-                          "(not used for depth-based suction grasps).")
+                          "(dexnet.item_mask.enabled is off).")
 
         # ── Pick-and-place TF ─────────────────────────────────────────────────
         self.tf_pnp = self._load_tf(PNP_TF_YAML)
@@ -183,6 +188,15 @@ class CombinedPerceptionNode:
         self.dexnet_cfg    = rospy.get_param('~dexnet', {})
         self.classical_cfg = rospy.get_param('~classical', {})
         self.camera_cfg    = rospy.get_param('~camera', {})
+        self.item_mask_cfg = self.dexnet_cfg.get('item_mask', {}) or {}
+        self.plane_fit_cfg = self.dexnet_cfg.get('plane_fit', {}) or {}
+        self._table_plane  = None  # last valid table plane (camera frame), see _above_table_mask
+        # Intermediates of the last _plan_grasp_dexnet call (masks, both approach axes),
+        # read by test/compare_dexnet_methods.py. Nothing in the node depends on it.
+        self._dexnet_debug = {}
+        rospy.loginfo("DexNet item mask: %s, plane fit: %s",
+                      "on" if self.item_mask_cfg.get('enabled', False) else "off",
+                      self.plane_fit_cfg.get('mode', 'off'))
 
         self.pnp_intrinsics = self._resolve_pnp_intrinsics()
 
@@ -295,6 +309,109 @@ class CombinedPerceptionNode:
         mask = ((depth_m >= lo) & (depth_m <= hi) & np.isfinite(depth_m))
         return (mask.astype(np.uint8) * 255)
 
+    def _above_table_mask(self, depth_m, intr, band):
+        """Pixels clearly above the table plane, or None if no plane is known yet.
+
+        The table is refitted on every frame and the last valid fit is kept, so a
+        pile that hides the table falls back to the plane seen earlier.
+        """
+        fx, fy = intr.get_focal_length()
+        cx, cy = intr.get_principal_point()
+        up_cam = self.tf_pnp[:3, :3].T.dot(np.array([0.0, 0.0, 1.0]))
+        plane = dexnet_geometry.fit_table_plane(depth_m, fx, fy, cx, cy, band, up_cam)
+        if plane is not None:
+            self._table_plane = plane
+        elif self._table_plane is not None:
+            rospy.logwarn("Table plane not found in this frame; reusing the last one.")
+        if self._table_plane is None:
+            return None
+        min_height = float(self.item_mask_cfg.get('above_table_min', 0.015))
+        return dexnet_geometry.above_plane_mask(
+            depth_m, fx, fy, cx, cy, self._table_plane, min_height)
+
+    def _build_grasp_mask(self, color_crop, depth_m, intr):
+        """Segmask sent to DexNet.
+
+        With dexnet.item_mask.enabled off this is the depth band alone. With it on,
+        the band is narrowed to (GroundingDINO+SAM item pixels) OR (pixels clearly
+        above the table), so thin items come in through colour, tall or piled items
+        through geometry, and the bare table is never a grasp candidate.
+        """
+        band_u8 = self._build_bin_mask(depth_m)
+        self._dexnet_debug.update(band=band_u8 > 0, mask=band_u8 > 0)
+        if not self.item_mask_cfg.get('enabled', False):
+            return band_u8
+        band = band_u8 > 0
+
+        items = np.zeros_like(band)
+        masks, boxes, _, _ = self._detect_and_segment(
+            color_crop, caption=self.item_mask_cfg.get('prompt'))
+        for m in (masks or []):
+            items |= m.astype(bool)
+        erode_px = int(self.item_mask_cfg.get('erode_px', 3))
+        if erode_px > 0 and items.any():
+            items = ndimage.binary_erosion(items, iterations=erode_px)
+
+        above = self._above_table_mask(depth_m, intr, band)
+        if above is None:
+            rospy.logwarn("No table plane yet; DexNet mask is the detected items only.")
+            above = np.zeros_like(band)
+
+        mask = (items | above) & band
+        rospy.loginfo("DexNet mask: %d detections, item px=%d, above-table px=%d, final px=%d",
+                      len(masks or []), int((items & band).sum()),
+                      int((above & band).sum()), int(mask.sum()))
+        self._dexnet_debug.update(items=items & band, above=above & band, mask=mask,
+                                  boxes=boxes, table_plane=self._table_plane)
+        return mask.astype(np.uint8) * 255
+
+    def _refine_approach(self, depth_m, intr, centre_px, centre_cam, approach_world):
+        """Check DexNet's approach axis against a plane fitted under the cup.
+
+        DexNet's axis is a per-pixel normal of the downsampled, inpainted depth and
+        is noisy; the plane uses the raw depth over the whole cup footprint.
+        dexnet.plane_fit.mode: off (DexNet's axis, untouched), shadow (log the
+        comparison, keep DexNet's axis) or override (use the plane's axis).
+
+        Returns (approach_world, source) with source in dexnet | plane | vertical.
+        """
+        mode = str(self.plane_fit_cfg.get('mode', 'off')).lower()
+        if mode not in ('shadow', 'override'):
+            return approach_world, "dexnet"
+
+        fx, fy = intr.get_focal_length()
+        cx, cy = intr.get_principal_point()
+        fit, reason = dexnet_geometry.fit_local_plane(
+            depth_m, fx, fy, cx, cy, centre_px, centre_cam,
+            radius_m=float(self.plane_fit_cfg.get('radius', 0.03)),
+            min_inlier_frac=float(self.plane_fit_cfg.get('min_inlier_frac', 0.7)))
+
+        def tilt(a):
+            return float(np.degrees(np.arccos(np.clip(-a[2], -1.0, 1.0))))
+
+        if fit is None:
+            fallback = str(self.plane_fit_cfg.get('fallback', 'vertical')).lower()
+            rospy.logwarn("Plane fit [%s]: no usable plane (%s); DexNet tilt %.1f deg",
+                          mode, reason, tilt(approach_world))
+            if mode == 'override' and fallback == 'vertical':
+                return np.array([0.0, 0.0, -1.0]), "vertical"
+            return approach_world, "dexnet"
+
+        # The plane normal points at the camera; the cup travels against it.
+        approach_plane = -self.tf_pnp[:3, :3].dot(fit["normal"])
+        approach_plane /= np.linalg.norm(approach_plane)
+        if approach_plane[2] > 0:
+            approach_plane = -approach_plane
+        disagreement = float(np.degrees(np.arccos(
+            np.clip(np.dot(approach_plane, approach_world), -1.0, 1.0))))
+        rospy.loginfo("Plane fit [%s]: plane tilt %.1f deg, DexNet tilt %.1f deg, "
+                      "disagreement %.1f deg (%d pts, inliers %.0f%%)",
+                      mode, tilt(approach_plane), tilt(approach_world), disagreement,
+                      fit["n_points"], 100 * fit["inlier_frac"])
+        if mode == 'override':
+            return approach_plane, "plane"
+        return approach_world, "dexnet"
+
     @staticmethod
     def _to_image_msg(arr, encoding, frame_id):
         msg = RosImage()
@@ -320,14 +437,17 @@ class CombinedPerceptionNode:
         if self._dexnet_srv is None:
             return None, "DexNet service unavailable."
 
+        self._dexnet_debug = {}
         depth_m = self._depth_to_metres(depth_crop, depth_msg)
-        segmask = self._build_bin_mask(depth_m)
+        intr = self._cropped_intrinsics()
+        segmask = self._build_grasp_mask(color_crop, depth_m, intr)
         if not segmask.any():
+            if self.item_mask_cfg.get('enabled', False):
+                return None, "Bin mask empty - no items detected and nothing above the table."
             return None, ("Bin mask empty - no depth in [%.2f, %.2f] m."
                           % (self.dexnet_cfg.get('bin_depth_min', 0.60),
                              self.dexnet_cfg.get('bin_depth_max', 1.20)))
 
-        intr = self._cropped_intrinsics()
         frame = "pnp_camera"
         colour = np.ascontiguousarray(color_crop[:, :, :3], dtype=np.uint8)
 
@@ -341,6 +461,7 @@ class CombinedPerceptionNode:
             return None, "DexNet service call failed: %s" % exc
 
         g = resp.grasp
+        self._dexnet_debug.update(q_value=float(g.q_value), planner_ok=bool(resp.success))
         if not resp.success:
             rospy.logwarn("DexNet rejected grasp (q=%.4f): %s", g.q_value, resp.message)
             return None, resp.message
@@ -362,6 +483,15 @@ class CombinedPerceptionNode:
         if approach_world[2] > 0:
             approach_world = -approach_world
 
+        approach_dexnet = approach_world
+        approach_world, approach_source = self._refine_approach(
+            depth_m, intr, g.center_px, centre_cam, approach_world)
+        self._dexnet_debug.update(
+            center_px=(float(g.center_px[0]), float(g.center_px[1])),
+            centre_cam=centre_cam, centre_world=centre_world,
+            approach_dexnet=approach_dexnet, approach=approach_world,
+            approach_source=approach_source)
+
         tilt_deg = float(np.degrees(np.arccos(np.clip(-approach_world[2], -1.0, 1.0))))
         max_tilt = float(self.dexnet_cfg.get('max_tilt_deg', 45.0))
         if tilt_deg > max_tilt:
@@ -371,14 +501,15 @@ class CombinedPerceptionNode:
             return None, msg
 
         rotation = self._rotation_from_approach(approach_world)
-        rospy.loginfo("DexNet grasp q=%.4f tilt=%.1f deg at world (%.3f, %.3f, %.3f)",
-                      g.q_value, tilt_deg, *centre_world)
+        rospy.loginfo("DexNet grasp q=%.4f tilt=%.1f deg (axis: %s) at world (%.3f, %.3f, %.3f)",
+                      g.q_value, tilt_deg, approach_source, *centre_world)
         return {
             "center": centre_world,
             "rotation": rotation,
             "normal": -approach_world,
             "score": float(g.q_value),
             "tilt_deg": tilt_deg,
+            "approach_source": approach_source,
             "center_px": (float(g.center_px[0]), float(g.center_px[1])),
         }, ""
 
@@ -411,8 +542,10 @@ class CombinedPerceptionNode:
         tf[:3, 3]  = [t['x'], t['y'], t['z']]
         return tf
 
-    def _detect_and_segment(self, color_img):
+    def _detect_and_segment(self, color_img, caption=None):
         """Run GroundingDINO + SAM on a uint8 RGB image.
+
+        caption overrides TEXT_PROMPT (the DexNet item mask uses its own prompt).
 
         Returns (best_masks, boxes_xyxy, phrases, logits) where best_masks is a
         list of boolean masks (one per detected object), boxes_xyxy is an int
@@ -425,9 +558,9 @@ class CombinedPerceptionNode:
         """
         if self.gdino_model is None:
             raise RuntimeError(
-                "SAM/GroundingDINO were not loaded (grasp_backend=dexnet). "
-                "The labelling/classical path needs them; start perception with "
-                "grasp_backend=classical to use it.")
+                "SAM/GroundingDINO were not loaded (grasp_backend=dexnet with "
+                "dexnet.item_mask.enabled off). The labelling/classical path needs "
+                "them; start perception with grasp_backend=classical to use it.")
         if color_img.shape[2] == 4:
             color_img = color_img[:, :, :3]
 
@@ -437,7 +570,7 @@ class CombinedPerceptionNode:
 
             with torch.no_grad():
                 boxes, logits, phrases = predict(
-                    model=self.gdino_model, image=image_transformed, caption=TEXT_PROMPT,
+                    model=self.gdino_model, image=image_transformed, caption=caption or TEXT_PROMPT,
                     box_threshold=BOX_THRESHOLD, text_threshold=TEXT_THRESHOLD,
                 )
 

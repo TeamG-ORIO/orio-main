@@ -17,6 +17,12 @@
 #   bash run_dexnet_pnp_single.sh --no-logging    # skip the rerun recorder for this run
 #   bash run_dexnet_pnp_single.sh --live          # also stream to a running `rerun` viewer
 #   bash run_dexnet_pnp_single.sh --no-affordance # skip the per-grasp affordance panels
+#   bash run_dexnet_pnp_single.sh --offset-x 0.00 --offset-y -0.015
+#                                                 # world-frame XY correction (metres) added to
+#                                                 #   each grasp AFTER DexNet, in the pick loop
+#                                                 #   (defaults: $ORIO_PNP_OFFSET_X/Y, else 0)
+#   bash run_dexnet_pnp_single.sh --min-q 0.2     # lowest DexNet q-value to accept a grasp
+#                                                 #   (default: $DEXNET_MIN_Q_VALUE, else 0.30)
 #
 # The iam-doc control PC (robot 1) is started over ssh; it opens its own gnome-terminal
 # windows separately (they run for the robot and cannot be merged here).
@@ -76,8 +82,21 @@ PERC_VENV="${ORIO_PERCEPTION_VENV:-${ORIO_PERCEPTION_ASSETS:-$PERC_DIR}/venv}"
 USE_VACUUM=0
 CONFIRM=1
 AFFORDANCE=1
+# World-frame XY correction (metres) the pick loop adds to every grasp position after
+# DexNet returns it. DexNet and the perception node never see it; it is the calibration
+# residual (camera TF, default Xtion intrinsics, cup mounting) the classical path carried
+# in grasp.yaml's classical.offset_x/y. Measure on the robot and set it here, via the
+# environment, or with --offset-x/--offset-y. Keep grasp.yaml's dexnet.offset_x/y at 0.
+PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.0}"
+PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:-0.0}"
+# Lowest q-value (DexNet's own confidence, 0..1) the planner accepts. Below it the planner
+# answers "rejected" and the pick loop re-scans; enough rejections in a row count as an
+# empty bin (see --max-declines in dexnet_pnp.py). Lower it to try low-confidence grasps
+# on hard piles, raise it to skip them. Passed to the planner container at start-up.
+MIN_Q="${DEXNET_MIN_Q_VALUE:-0.30}"
 PNP_EXTRA=()
-for arg in "$@"; do
+while [ $# -gt 0 ]; do
+    arg="$1"; shift
     case "$arg" in
         --vacuum)        USE_VACUUM=1 ;;
         --no-vacuum)     USE_VACUUM=0 ;;
@@ -89,12 +108,32 @@ for arg in "$@"; do
         --live)          export ORIO_RERUN_LIVE=1 ;;
         --affordance)    AFFORDANCE=1 ;;
         --no-affordance) AFFORDANCE=0 ;;
-        -h|--help) sed -n '2,37p' "$0"; exit 0 ;;
+        --offset-x)      [ $# -gt 0 ] || { echo "--offset-x needs a value in metres" >&2; exit 2; }
+                         PNP_OFFSET_X="$1"; shift ;;
+        --offset-y)      [ $# -gt 0 ] || { echo "--offset-y needs a value in metres" >&2; exit 2; }
+                         PNP_OFFSET_Y="$1"; shift ;;
+        --offset-x=*)    PNP_OFFSET_X="${arg#*=}" ;;
+        --offset-y=*)    PNP_OFFSET_Y="${arg#*=}" ;;
+        --min-q)         [ $# -gt 0 ] || { echo "--min-q needs a value in 0..1" >&2; exit 2; }
+                         MIN_Q="$1"; shift ;;
+        --min-q=*)       MIN_Q="${arg#*=}" ;;
+        -h|--help) sed -n '2,43p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
 [ "$USE_VACUUM" -eq 0 ] && PNP_EXTRA+=(--no-vacuum)
 [ "$CONFIRM" -eq 1 ]    && PNP_EXTRA+=(--confirm)
+for v in "$PNP_OFFSET_X" "$PNP_OFFSET_Y"; do
+    if ! [[ "$v" =~ ^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$ ]]; then
+        echo "offset must be a number in metres, got '$v'" >&2; exit 2
+    fi
+done
+# Always passed, so the "[launcher] pnp flags:" line records the correction in the run log.
+PNP_EXTRA+=(--offset-x "$PNP_OFFSET_X" --offset-y "$PNP_OFFSET_Y")
+if ! [[ "$MIN_Q" =~ ^(1(\.0+)?|0(\.[0-9]+)?|\.[0-9]+)$ ]]; then
+    echo "--min-q must be a number between 0 and 1, got '$MIN_Q'" >&2; exit 2
+fi
+export DEXNET_MIN_Q_VALUE="$MIN_Q"
 # Drop every item at the same height: reach into the output box by the fixed margin only,
 # not by the grasp z as well. This launcher only; the tmux layout keeps per-item depth.
 PNP_EXTRA+=(--zero-item-depth)
@@ -520,7 +559,8 @@ if [ "$AFFORDANCE" -eq 1 ] && [ "$LOGGING_REQUESTED" != "0" ]; then
 else
     export ORIO_AFFORDANCE_DIR=""
 fi
-run_bg dexnet bash -lc "ORIO_LOGGING=$ORIO_LOGGING ORIO_AFFORDANCE_DIR='$ORIO_AFFORDANCE_DIR' bash '$DOCKER_DIR/run_dexnet.sh' && docker logs -f $DEXNET_CONTAINER"
+log "DexNet min q-value: $MIN_Q"
+run_bg dexnet bash -lc "ORIO_LOGGING=$ORIO_LOGGING ORIO_AFFORDANCE_DIR='$ORIO_AFFORDANCE_DIR' DEXNET_MIN_Q_VALUE='$MIN_Q' bash '$DOCKER_DIR/run_dexnet.sh' && docker logs -f $DEXNET_CONTAINER"
 if ! wait_for_service /dexnet_grasp_planner/plan_grasp 60; then
     log "DexNet planner did not come up in 60s — check the [dexnet] logs above. Aborting."
     exit 1
