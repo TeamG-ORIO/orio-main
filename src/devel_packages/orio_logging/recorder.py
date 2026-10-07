@@ -43,6 +43,7 @@ JOINTS = [f'panda_joint{i}' for i in range(1, 8)]
 LOG_LEVELS = {Log.DEBUG: 'DEBUG', Log.INFO: 'INFO', Log.WARN: 'WARN', Log.ERROR: 'ERROR', Log.FATAL: 'CRITICAL'}
 PROCS = {'state_machine': 'state_machine.py', 'perception': 'perception_control_combined',
          'pneumatics': 'pneumatic_control', 'dexnet': 'dexnet_grasp_planner.py',
+         'suction': 'suction_grasp_planner.py',
          'cameras': 'cameras.launch'}
 
 

@@ -92,6 +92,9 @@ MIN_DEPTH_M         = 0.0
 OUTLIER_NEIGHBORS   = 10
 OUTLIER_STD_RATIO   = 5.0
 
+# Backends that plan through a PlanDexnetGrasp service (grasp.yaml's grasp_backend).
+PLANNER_BACKENDS = ('dexnet', 'suction')
+
 # Final grasp offsets in metres
 OFFSET_X = 0.015
 OFFSET_Y = -0.05
@@ -128,15 +131,17 @@ class CombinedPerceptionNode:
         # SAM/GroundingDINO are never touched, so skip loading them (they are otherwise
         # only used by the classical grasp path and the labelling path). This avoids a
         # ~440 MB weight download + GPU memory that would compete with DexNet's TF graph.
+        # The suction network plans from depth alone and never uses the item mask.
         self.grasp_backend = rospy.get_param('~grasp_backend', 'classical')
         rospy.loginfo("Grasp backend: %s", self.grasp_backend)
-        use_item_mask = bool(rospy.get_param('~dexnet/item_mask/enabled', False))
+        use_item_mask = (self.grasp_backend == 'dexnet'
+                         and bool(rospy.get_param('~dexnet/item_mask/enabled', False)))
         # Re-entrant: the DexNet branch holds it while _detect_and_segment takes it again.
         self._inference_lock = threading.RLock()
 
-        # ── Load models once (skipped for dexnet without the item mask) ────────
+        # ── Load models once (skipped for the planner backends without the item mask)
         self.sam = self.predictor = self.gdino_model = self.gdino_transform = None
-        if self.grasp_backend != 'dexnet' or use_item_mask:
+        if self.grasp_backend not in PLANNER_BACKENDS or use_item_mask:
             rospy.loginfo("Loading AI Models (SAM & GroundingDINO)...")
             self.sam = sam_model_registry[MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
             self.sam.to(device=device)
@@ -149,8 +154,8 @@ class CombinedPerceptionNode:
             ])
             rospy.loginfo("Models loaded.")
         else:
-            rospy.loginfo("DexNet backend: skipping SAM/GroundingDINO load "
-                          "(dexnet.item_mask.enabled is off).")
+            rospy.loginfo("%s backend: skipping SAM/GroundingDINO load "
+                          "(no item mask).", self.grasp_backend)
 
         # ── Pick-and-place TF ─────────────────────────────────────────────────
         self.tf_pnp = self._load_tf(PNP_TF_YAML)
@@ -185,16 +190,19 @@ class CombinedPerceptionNode:
 
         # ── Grasp backend config ──────────────────────────────────────────────
         # grasp_backend was already read (and logged) above to decide model loading.
-        self.dexnet_cfg    = rospy.get_param('~dexnet', {})
+        # dexnet_cfg is the config section of whichever planner backend is active
+        # (grasp.yaml's dexnet: or suction:); both planners serve PlanDexnetGrasp.
+        self.dexnet_cfg    = rospy.get_param('~suction' if self.grasp_backend == 'suction'
+                                             else '~dexnet', {})
         self.classical_cfg = rospy.get_param('~classical', {})
         self.camera_cfg    = rospy.get_param('~camera', {})
-        self.item_mask_cfg = self.dexnet_cfg.get('item_mask', {}) or {}
+        self.item_mask_cfg = (self.dexnet_cfg.get('item_mask', {}) or {}) if use_item_mask else {}
         self.plane_fit_cfg = self.dexnet_cfg.get('plane_fit', {}) or {}
         self._table_plane  = None  # last valid table plane (camera frame), see _above_table_mask
         # Intermediates of the last _plan_grasp_dexnet call (masks, both approach axes),
         # read by test/compare_dexnet_methods.py. Nothing in the node depends on it.
         self._dexnet_debug = {}
-        rospy.loginfo("DexNet item mask: %s, plane fit: %s",
+        rospy.loginfo("Planner item mask: %s, plane fit: %s",
                       "on" if self.item_mask_cfg.get('enabled', False) else "off",
                       self.plane_fit_cfg.get('mode', 'off'))
 
@@ -206,7 +214,7 @@ class CombinedPerceptionNode:
         rospy.on_shutdown(self.rlog.close)
 
         self._dexnet_srv = None
-        if self.grasp_backend == 'dexnet':
+        if self.grasp_backend in PLANNER_BACKENDS:
             self._dexnet_srv = self._connect_dexnet()
 
         # ── Services ──────────────────────────────────────────────────────────
@@ -263,16 +271,19 @@ class CombinedPerceptionNode:
             fx=fx, fy=fy, cx=cx - PNP_CROP_X1, cy=cy - PNP_CROP_Y1)
 
     def _connect_dexnet(self):
-        name    = self.dexnet_cfg.get('service', '/dexnet_grasp_planner/plan_grasp')
+        suction = self.grasp_backend == 'suction'
+        name    = self.dexnet_cfg.get('service', '/suction_grasp_planner/plan_grasp' if suction
+                                      else '/dexnet_grasp_planner/plan_grasp')
         timeout = float(self.dexnet_cfg.get('service_timeout', 30.0))
-        rospy.loginfo("Waiting up to %.0fs for DexNet service %s ...", timeout, name)
+        rospy.loginfo("Waiting up to %.0fs for %s service %s ...", timeout, self.grasp_backend, name)
         try:
             rospy.wait_for_service(name, timeout=timeout)
         except rospy.ROSException:
-            rospy.logerr("DexNet service %s unavailable. Is the container running? "
-                         "(orio_bringup/docker/run_dexnet.sh)", name)
+            rospy.logerr("%s service %s unavailable. Is the container running? "
+                         "(orio_bringup/docker/%s)", self.grasp_backend, name,
+                         "run_suction.sh" if suction else "run_dexnet.sh")
             return None
-        rospy.loginfo("Connected to DexNet service %s", name)
+        rospy.loginfo("Connected to %s service %s", self.grasp_backend, name)
         return rospy.ServiceProxy(name, PlanDexnetGrasp)
 
     @staticmethod
@@ -432,15 +443,27 @@ class CombinedPerceptionNode:
         info.K = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
         return info
 
-    def _plan_grasp_dexnet(self, color_crop, depth_crop, depth_msg):
-        """Plan one suction grasp with DexNet. Returns (grasp_data, message)."""
+    def _plan_grasp_dexnet(self, color_crop, depth_crop, depth_msg, color_full=None, depth_full=None):
+        """Plan one suction grasp with the planner service (DexNet or the suction
+        network). Returns (grasp_data, message).
+
+        The suction network gets the full frame: its height map covers the whole bin,
+        which reaches past the PnP crop. Its segmask is unused, so none is built.
+        """
+        suction = self.grasp_backend == 'suction'
         if self._dexnet_srv is None:
-            return None, "DexNet service unavailable."
+            return None, "%s service unavailable." % self.grasp_backend
 
         self._dexnet_debug = {}
-        depth_m = self._depth_to_metres(depth_crop, depth_msg)
-        intr = self._cropped_intrinsics()
-        segmask = self._build_grasp_mask(color_crop, depth_m, intr)
+        if suction:
+            color_crop, depth_crop = color_full, depth_full
+            depth_m = self._depth_to_metres(depth_crop, depth_msg)
+            intr = self.pnp_intrinsics
+            segmask = np.full(depth_m.shape, 255, np.uint8)
+        else:
+            depth_m = self._depth_to_metres(depth_crop, depth_msg)
+            intr = self._cropped_intrinsics()
+            segmask = self._build_grasp_mask(color_crop, depth_m, intr)
         if not segmask.any():
             if self.item_mask_cfg.get('enabled', False):
                 return None, "Bin mask empty - no items detected and nothing above the table."
@@ -458,20 +481,22 @@ class CombinedPerceptionNode:
                 self._camera_info_msg(intr, frame),
                 self._to_image_msg(np.ascontiguousarray(segmask), "mono8", frame))
         except rospy.ServiceException as exc:
-            return None, "DexNet service call failed: %s" % exc
+            return None, "%s service call failed: %s" % (self.grasp_backend, exc)
 
         g = resp.grasp
         self._dexnet_debug.update(q_value=float(g.q_value), planner_ok=bool(resp.success))
         if not resp.success:
-            rospy.logwarn("DexNet rejected grasp (q=%.4f): %s", g.q_value, resp.message)
+            rospy.logwarn("%s rejected grasp (q=%.4f): %s", self.grasp_backend, g.q_value, resp.message)
             return None, resp.message
 
         # Camera-frame pose -> world. The approach axis is the X column of the
-        # rotation gqcnn builds, not Z (see SuctionPoint2D.pose()).
+        # rotation gqcnn builds, not Z (see SuctionPoint2D.pose()). The suction
+        # planner follows the same convention and puts its cup line in Y.
         quat = [g.pose.orientation.x, g.pose.orientation.y,
                 g.pose.orientation.z, g.pose.orientation.w]
         rot_cam = R_scipy.from_quat(quat).as_matrix()
         approach_cam = rot_cam[:, 0]
+        cup_line_world = self.tf_pnp[:3, :3].dot(rot_cam[:, 1]) if suction else None
 
         centre_cam = np.array([g.pose.position.x, g.pose.position.y, g.pose.position.z])
         centre_world = self.tf_pnp[:3, :3].dot(centre_cam) + self.tf_pnp[:3, 3]
@@ -500,9 +525,12 @@ class CombinedPerceptionNode:
             rospy.logwarn(msg)
             return None, msg
 
-        rotation = self._rotation_from_approach(approach_world)
-        rospy.loginfo("DexNet grasp q=%.4f tilt=%.1f deg (axis: %s) at world (%.3f, %.3f, %.3f)",
-                      g.q_value, tilt_deg, approach_source, *centre_world)
+        rotation = self._rotation_from_approach(approach_world, cup_line_world)
+        rospy.loginfo("%s grasp q=%.4f tilt=%.1f deg (axis: %s) at world (%.3f, %.3f, %.3f)",
+                      self.grasp_backend, g.q_value, tilt_deg, approach_source, *centre_world)
+        centre_px = (float(g.center_px[0]), float(g.center_px[1]))
+        if suction:  # full frame -> the PnP crop, which everything downstream uses
+            centre_px = (centre_px[0] - PNP_CROP_X1, centre_px[1] - PNP_CROP_Y1)
         return {
             "center": centre_world,
             "rotation": rotation,
@@ -510,19 +538,28 @@ class CombinedPerceptionNode:
             "score": float(g.q_value),
             "tilt_deg": tilt_deg,
             "approach_source": approach_source,
-            "center_px": (float(g.center_px[0]), float(g.center_px[1])),
+            "center_px": centre_px,
         }, ""
 
     @staticmethod
-    def _rotation_from_approach(approach_world):
+    def _rotation_from_approach(approach_world, cup_line_world=None):
         """Full rotation from a suction approach axis, taken as tool Z.
 
-        Suction is rotationally symmetric about the approach vector, so the
-        remaining axes are chosen consistently rather than meaningfully.
+        A single cup is rotationally symmetric about the approach vector, so without
+        a cup line the remaining axes are chosen consistently rather than meaningfully.
+        With one (the suction network's two cups), tool Y lies along it: on the robot
+        the cups sit along the flange's Y axis (tool X along the cup line, as
+        grasp_solver.py assumes, turned them 90 deg off). Of the two signs, the one
+        that keeps tool X nearest world +X, the straight-down tool X, is taken, so
+        the wrist turns at most 90 deg.
         """
         z_axis = approach_world / np.linalg.norm(approach_world)
         ref = np.array([1.0, 0.0, 0.0])
-        if abs(np.dot(ref, z_axis)) > 0.95:
+        if cup_line_world is not None:
+            ref = np.cross(np.asarray(cup_line_world, dtype=float), z_axis)  # X = Y x Z
+            if ref[0] < 0:
+                ref = -ref
+        elif abs(np.dot(ref, z_axis)) > 0.95:
             ref = np.array([0.0, 1.0, 0.0])
         x_axis = ref - np.dot(ref, z_axis) * z_axis
         x_axis /= np.linalg.norm(x_axis)
@@ -612,20 +649,20 @@ class CombinedPerceptionNode:
         except Exception:
             return None, None
 
-    def _handle_pnp_dexnet(self, res, color_crop, depth_crop):
-        """DexNet branch of handle_pnp. Publishes a length-1 PoseArray."""
+    def _handle_pnp_dexnet(self, res, color_crop, depth_crop, color_full=None, depth_full=None):
+        """Planner-service branch of handle_pnp (dexnet or suction). Publishes a length-1 PoseArray."""
         t0 = rospy.Time.now()
         with self._inference_lock:
             grasp_data, message = self._plan_grasp_dexnet(
-                color_crop, depth_crop, self.pnp_depth_msg)
+                color_crop, depth_crop, self.pnp_depth_msg, color_full, depth_full)
         plan_time = (rospy.Time.now() - t0).to_sec()
         self.rlog.pnp(color_crop, depth_crop, self._depth_scale(self.pnp_depth_msg),
-                      grasps=[grasp_data] if grasp_data else [], backend='dexnet',
+                      grasps=[grasp_data] if grasp_data else [], backend=self.grasp_backend,
                       plan_time=plan_time, reason=message)
 
         if grasp_data is None:
             res.success = False
-            res.message = message or "DexNet produced no valid grasp."
+            res.message = message or "%s produced no valid grasp." % self.grasp_backend
             return res
 
         pose_array_msg = PoseArray()
@@ -649,8 +686,8 @@ class CombinedPerceptionNode:
 
         self.pnp_pub.publish(pose_array_msg)
         res.success = True
-        res.message = ("DexNet grasp q=%.4f tilt=%.1f deg"
-                       % (grasp_data["score"], grasp_data["tilt_deg"]))
+        res.message = ("%s grasp q=%.4f tilt=%.1f deg"
+                       % (self.grasp_backend, grasp_data["score"], grasp_data["tilt_deg"]))
         return res
 
     # ── Pick-and-place service ────────────────────────────────────────────────
@@ -671,16 +708,17 @@ class CombinedPerceptionNode:
             res.message = "Failed to decode PnP camera images."
             return res
 
+        color_full, depth_full = color_base, depth_base
         color_base = color_base[PNP_CROP_Y1:PNP_CROP_Y2, PNP_CROP_X1:PNP_CROP_X2]
         depth_base = depth_base[PNP_CROP_Y1:PNP_CROP_Y2, PNP_CROP_X1:PNP_CROP_X2]
 
         Image.fromarray(color_base).save(
             os.path.join(HOME, "Xtion_imgs", f"input_color_{rospy.Time.now().secs}.png"))
 
-        # DexNet plans straight from depth; it needs no segmentation, so it branches
-        # before GroundingDINO/SAM run. Those still serve the labelling path.
-        if self.grasp_backend == 'dexnet':
-            return self._handle_pnp_dexnet(res, color_base, depth_base)
+        # The planner backends plan straight from depth; they need no segmentation, so
+        # they branch before GroundingDINO/SAM run. Those still serve the labelling path.
+        if self.grasp_backend in PLANNER_BACKENDS:
+            return self._handle_pnp_dexnet(res, color_base, depth_base, color_full, depth_full)
 
         best_masks, boxes_xyxy, phrases, logits = self._detect_and_segment(color_base)
         if best_masks is None:

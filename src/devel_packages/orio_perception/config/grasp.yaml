@@ -1,7 +1,9 @@
 # Grasp planning configuration for the pick-and-place path.
 # Loaded by orio_perception/launch/perception.launch.
 
-# Which backend /compute_grasps uses: dexnet | classical
+# Which backend /compute_grasps uses: suction | dexnet | classical
+#   suction - the orio-grasping height-map network (orio_bringup/docker/run_suction.sh)
+#   dexnet  - DexNet 4.0 FC-GQCNN (orio_bringup/docker/run_dexnet.sh)
 grasp_backend: classical
 
 dexnet:
@@ -58,6 +60,33 @@ dexnet:
   # For run_dexnet_pnp_single.sh the correction is applied in the pick loop instead
   # (--offset-x/--offset-y, or ORIO_PNP_OFFSET_X/Y), after the raw pose is published.
   # Leave these at 0 when using that, or the offset is applied twice.
+  offset_x: 0.0
+  offset_y: 0.0
+
+# The suction network's planner. Same service contract and the same keys as dexnet:
+# above (the shared code reads whichever section is active), minus the bin depth band
+# and item mask: it plans from the full depth frame, which it turns into the top-down
+# height map it was trained on, and needs no segmask. Its score threshold is set on the
+# planner (SUCTION_MIN_SCORE, run_dexnet_pnp_single.sh --min-q).
+suction:
+  service: /suction_grasp_planner/plan_grasp
+  service_timeout: 30.0        # s to wait for the planner at startup
+
+  # The network's training labels give zero access beyond 35 deg of tilt.
+  max_tilt_deg: 35.0
+
+  # The network already uses a plane fitted over a 16 mm disc of the height map, and
+  # its seal/hold scores assume that normal, so the raw-depth plane fit is off by default.
+  plane_fit:
+    mode: "off"                # off | shadow | override, as for dexnet
+    radius: 0.03
+    min_inlier_frac: 0.7
+    fallback: vertical
+
+  pre_grasp_dist: 0.10         # m
+  contact_dist: 0.05           # m
+
+  # Lateral XY correction in the world frame; see dexnet.offset_x/y.
   offset_x: 0.0
   offset_y: 0.0
 

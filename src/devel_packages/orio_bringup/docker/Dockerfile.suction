@@ -1,0 +1,60 @@
+# Suction grasp planner (the orio-grasping height-map network), replacing DexNet.
+# The network needs Python >= 3.11 (orio_grasping reads its config with tomllib) and
+# PyTorch, so it cannot share the py3.8 Noetic images. rospy and the message packages are
+# pure Python and come from rospypi; custom_msgs is mounted from the host devel space and
+# the orio-grasping repo (code, config.toml, calibration, checkpoints) is mounted
+# read-only by run_suction.sh, so nothing from the repos is baked in.
+#
+# Build (no context needed):
+#   docker build -t orio/suction:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.suction
+FROM pytorch/pytorch:2.4.1-cuda12.1-cudnn9-devel
+
+RUN pip install --no-cache-dir \
+        "segmentation-models-pytorch==0.5.0" \
+        numpy scipy matplotlib pillow opencv-python-headless \
+    && pip install --no-cache-dir --extra-index-url https://rospypi.github.io/simple/ \
+        rospy std_msgs sensor_msgs geometry_msgs
+
+# rosgraph's RospyLogger.findCaller loops forever on Python 3.11 when no frame matches
+# (its walk stops advancing at the outermost frame), so the first rospy.loginfo hangs the
+# node. Stop the walk there instead; only the caller name in log records is affected.
+RUN python - <<'PATCH'
+import rosgraph.roslogging as m
+p = m.__file__
+s = open(p).read()
+old = """                break
+            if f.f_back:
+                f = f.f_back
+"""
+new = """                break
+            if not f.f_back:
+                break
+            f = f.f_back
+"""
+assert s.count(old) == 1, "rosgraph findCaller changed; re-check the patch"
+open(p, "w").write(s.replace(old, new))
+PATCH
+
+# rospypi's rospy ships without ROS's python_logging.conf, and without one rospy drops
+# every rospy.loginfo/logwarn. This is Noetic's file, streaming to the console (as with
+# roslaunch's output="screen") and to the node's log file.
+RUN mkdir -p /etc/ros && printf '%s\n' \
+        '[loggers]' 'keys=root, rosout' \
+        '[handlers]' 'keys=fileHandler,streamHandler' \
+        '[formatters]' 'keys=defaultFormatter' \
+        '[logger_root]' 'level=INFO' 'handlers=fileHandler' \
+        '[logger_rosout]' 'level=INFO' 'handlers=streamHandler' 'propagate=1' 'qualname=rosout' \
+        '[handler_fileHandler]' 'class=handlers.RotatingFileHandler' 'level=DEBUG' \
+        'formatter=defaultFormatter' "args=(os.environ['ROS_LOG_FILENAME'],'a', 50000000, 4)" \
+        '[handler_streamHandler]' 'class=rosgraph.roslogging.RosStreamHandler' 'level=DEBUG' \
+        'formatter=defaultFormatter' 'args=(True,)' \
+        '[formatter_defaultFormatter]' 'format=[%(name)s][%(levelname)s] %(asctime)s: %(message)s' \
+        > /etc/ros/python_logging.conf
+ENV ROS_PYTHON_LOG_CONFIG_FILE=/etc/ros/python_logging.conf
+
+ENV PYTHONPATH=/catkin_ws/devel/lib/python3/dist-packages
+ENV MPLBACKEND=Agg
+# Detached container: unbuffered, so `docker logs -f` shows lines as they happen.
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python", "/opt/suction_grasp_planner.py"]

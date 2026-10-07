@@ -1,7 +1,7 @@
 #!/bin/bash
 # Shut down the ORIO demo started by launch_demo.sh.
 #   bash stop_demo.sh              # stop the demo, leave containers up
-#   bash stop_demo.sh --containers # also stop orio/dexnet + the luisa container
+#   bash stop_demo.sh --containers # also stop orio, the grasp planners + the luisa container
 # Robot 2 goes first: its controller is stopped over ssh, and killing the tmux
 # session would take away the pane that manages it.
 set -uo pipefail
@@ -10,6 +10,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SESSION="${ORIO_SESSION:-orio}"
 CONTAINER="${ORIO_CONTAINER:-orio_docker_container}"
 DEXNET_CONTAINER="${DEXNET_CONTAINER_NAME:-orio_dexnet}"
+SUCTION_CONTAINER="${SUCTION_CONTAINER_NAME:-orio_suction}"
 LUISA="${ORIO_LUISA_HOST:-snaak@iam-luisa}"
 
 STOP_CONTAINERS=0
@@ -55,8 +56,8 @@ else
 fi
 
 if [ "$STOP_CONTAINERS" -eq 1 ]; then
-    # orio_dexnet runs with --restart unless-stopped, so it needs an explicit stop.
-    for c in "$CONTAINER" "$DEXNET_CONTAINER"; do
+    # The planner containers run with --restart unless-stopped, so they need an explicit stop.
+    for c in "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER"; do
         if [ -n "$(docker ps -q -f "name=^${c}$" 2>/dev/null)" ]; then
             docker stop "$c" >/dev/null 2>&1 && echo "[stop] container $c stopped"
         fi

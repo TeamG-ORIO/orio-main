@@ -1,11 +1,12 @@
-# tmuxifier session layout for the DexNet pick-and-place test (no labelling).
+# tmuxifier session layout for the suction pick-and-place test (no labelling).
 #
-# A stripped-down copy of orio.session.sh: single arm (robot 1 = iam-doc), DexNet
-# grasp backend, drop in DROP_ZONE. Removed vs. the full demo:
+# A stripped-down copy of orio.session.sh: single arm (robot 1 = iam-doc), a grasp
+# planner backend, drop in DROP_ZONE. Removed vs. the full demo:
 #   * the luisa pane (robot 2 / label_arm control PC)
 #   * the label-arm half of the pipeline
 #   * state_machine.py  →  replaced by dexnet_pnp.py
-# DexNet is forced on and perception runs with grasp_backend=dexnet.
+# The planner is ORIO_PLANNER: suction (default, the orio-grasping network) or dexnet;
+# perception runs with the matching grasp_backend.
 #
 # Launched the same way as the full demo (via launch_demo.sh, which exports the
 # ORIO_* env vars), just pointing tmuxifier at this layout.
@@ -45,15 +46,23 @@ CMD_DOC="cd $FRANKAPY && source $WF && wait_for_roscore && bash ./bash_scripts/s
 
 CMD_DOCKER="cd $REPO && source $WF && wait_for_roscore && ORIO_LOGGING=$LOGGING bash orio_run_docker.sh"
 
-# DexNet suction planner (own container: NVIDIA TF1 image, GPU). Long-running - the TF
-# graph takes ~25 s to load, so it starts once here rather than per pick.
-CMD_DEXNET="source $WF && wait_for_roscore && ORIO_LOGGING=$LOGGING bash $REPO/src/devel_packages/orio_bringup/docker/run_dexnet.sh && docker logs -f orio_dexnet"
+# Grasp planner (own container, GPU), long-running: started once here rather than per
+# pick. suction: the orio-grasping network (orio/suction image). dexnet: DexNet 4.0 (NVIDIA
+# TF1 image; the TF graph takes ~25 s to load).
+PLANNER="${ORIO_PLANNER:-suction}"
+if [ "$PLANNER" = "dexnet" ]; then
+    PLANNER_RUN=run_dexnet.sh; PLANNER_CONTAINER=orio_dexnet
+else
+    PLANNER=suction; PLANNER_RUN=run_suction.sh; PLANNER_CONTAINER=orio_suction
+fi
+PLANNER_SERVICE="/${PLANNER}_grasp_planner/plan_grasp"
+CMD_PLANNER="source $WF && wait_for_roscore && ORIO_LOGGING=$LOGGING bash $REPO/src/devel_packages/orio_bringup/docker/$PLANNER_RUN && docker logs -f $PLANNER_CONTAINER"
 
 CMD_CAMERAS="source $WF && wait_for_container $CONTAINER && docker exec -it $CONTAINER bash -c 'source /home/ros_ws/devel/setup.bash && roslaunch manipulation cameras.launch'"
 
-# Perception runs in the ROS1 perception container with the DexNet grasp backend,
-# gated on the planner service so it does not start before DexNet is ready.
-CMD_PERCEPTION="source $WF && wait_for_topic /camera/rgb/image_raw && wait_for_topic /zedm/zed_node/rgb/image_rect_color && wait_for_service /dexnet_grasp_planner/plan_grasp && $LOG_ENV bash $REPO/src/devel_packages/orio_bringup/docker/run_perception.sh dexnet"
+# Perception runs in the ROS1 perception container with the planner's grasp backend,
+# gated on the planner service so it does not start before the planner is ready.
+CMD_PERCEPTION="source $WF && wait_for_topic /camera/rgb/image_raw && wait_for_topic /zedm/zed_node/rgb/image_rect_color && wait_for_service $PLANNER_SERVICE && $LOG_ENV bash $REPO/src/devel_packages/orio_bringup/docker/run_perception.sh $PLANNER"
 
 if [ -n "$NO_VACUUM" ]; then
     CMD_PNEU="echo '[pneumatics] DISABLED (dry-run --no-vacuum): not starting pneumatic_control. Move the cup by hand; vacuum commands and sensor checks are skipped in dexnet_pnp.'"
@@ -89,8 +98,8 @@ if initialize_session "orio_dexnet_pnp"; then
         PANES+=("$CMD_RECORDER"); TITLES+=(recorder)
     fi
     # No luisa pane: robot 2 / label_arm is not used in this test.
-    PANES+=("$CMD_DOC" "$CMD_DOCKER" "$CMD_CAMERAS" "$CMD_DEXNET")
-    TITLES+=(doc docker cameras dexnet)
+    PANES+=("$CMD_DOC" "$CMD_DOCKER" "$CMD_CAMERAS" "$CMD_PLANNER")
+    TITLES+=(doc docker cameras "$PLANNER")
     PANES+=("$CMD_PERCEPTION" "$CMD_PNEU" "$CMD_PNP")
     TITLES+=(perception pneumatics dexnet_pnp)
     for i in "${!PANES[@]}"; do

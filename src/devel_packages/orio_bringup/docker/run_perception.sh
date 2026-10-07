@@ -8,11 +8,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 NAME="${ORIO_PERCEPTION_CONTAINER:-orio_perception}"
 IMAGE="${ORIO_PERCEPTION_IMAGE:-orio/perception:latest}"
 
-# Optional grasp backend (dexnet|classical), via $1 or ORIO_GRASP_BACKEND. When set,
-# perception starts through perception.launch (which loads grasp.yaml and the dexnet
-# sub-config) with grasp_backend overridden; otherwise it runs the node directly, the
-# historic classical path. dexnet needs this because running the node bare loads no
-# params, so ~dexnet stays empty and the planner is never wired up.
+# Optional grasp backend (suction|dexnet|classical), via $1 or ORIO_GRASP_BACKEND. When
+# set, perception starts through perception.launch (which loads grasp.yaml and the planner
+# sub-configs) with grasp_backend overridden; otherwise it runs the node directly, the
+# historic classical path. The planner backends need this because running the node bare
+# loads no params, so ~suction / ~dexnet stay empty and the planner is never wired up.
 BACKEND="${1:-${ORIO_GRASP_BACKEND:-}}"
 
 if [ ! -f "$REPO/src/devel_packages/orio_perception/weights/groundingdino_swint_ogc.pth" ] || \
