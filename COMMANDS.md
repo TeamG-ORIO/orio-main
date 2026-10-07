@@ -1,3 +1,10 @@
+<!--
+  NOTE FOR ANYONE EDITING THIS FILE (people and AI assistants):
+  Keep every command description very short and in simple, plain language.
+  Say what the command does for the user. Use a few short sentences or bullets.
+  Do not explain internals, and do not copy wording from the script's comments.
+  Put details in the options table or in docs/, not here.
+-->
 # Commands Reference
 
 Commonly used commands with usage examples. Run all commands from the repo root.
@@ -6,44 +13,20 @@ Commonly used commands with usage examples. Run all commands from the repo root.
 
 ## `run_dexnet_pnp_single.sh`
 
-For the state of the DexNet integration as a whole (architecture, conventions, what has
-been measured, open items) see `docs/DEXNET.md`.
+Starts the suction pick-and-place system in one terminal and picks items from the bin.
+Press **Ctrl-C** to stop picking. The cameras, planner and robot connection keep running,
+so the next run starts fast. To stop everything, run `bash stop_dexnet_pnp.sh`.
+Each run saves a log to `logging/dexnet_pnp/<timestamp>.log`.
 
-Brings up the whole DexNet pick-and-place stack in a **single terminal**. Every
-service runs in the background with its output merged into your terminal (each line tagged
-`[module]`), while the pick loop runs in the foreground so its "Press Enter to pick" prompt
-can read the keyboard. Press **Ctrl-C** to stop everything (services are killed and
-containers removed). A full log of each run is saved to `logging/dexnet_pnp/<timestamp>.log`.
-
-When the bin runs out (five scans with no valid grasp), the loop does not stop: it parks
-the arm at home and asks you to add more items and press Enter. Press `q` or Ctrl-C at
-that prompt to finish the run. This happens in `--auto` runs too.
-
-Each run is also recorded for the `rerun` viewer in `logging/rerun/<timestamp>/` — arm
-motion, every service's log lines, and the pick loop's own grasps, moves and IK solves.
-Open it with `rerun logging/rerun/<timestamp>/recorder.rrd`. Recording needs `rospy` and
-`rerun` in the perception venv; if they are missing the script says so, tells you what to
-install, and carries on without recording (see `docs/LOGGING.md`).
-
-Every grasp also saves a six-panel figure to
-`logging/dexnet_pnp/<timestamp>.affordance/`, showing the workspace, the depth map, the
-mask of what counted as the bin, a heat map of how good the network thought every spot
-was, that heat map laid over the scene, and a close-up of the point it picked. This is
-the same figure `live_affordance.py` makes offline, and it is what to look at when you
-want to know *why* a grasp scored the way it did. Scans that were rejected get one too,
-so you can see what the camera was looking at when nothing was picked. The script prints
-the folder and the picture count when it stops.
-
-You get these even when the message above says run logging is off: that message is about
-the `rerun` recording, which needs the perception venv, while these are drawn inside the
-DexNet container and need nothing extra.
-
-They do make each pick slower, because the network runs a second time for every grasp.
-To turn them off:
+Before the first run, build the planner image:
 
 ```bash
-bash run_dexnet_pnp_single.sh --no-affordance
+docker build -t orio/suction:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.suction
 ```
+
+- When the bin is empty, the arm goes home and asks you to refill it. Press Enter to go on, or `q` to finish.
+- Each grasp saves a picture to `logging/dexnet_pnp/<timestamp>.affordance/` showing where it chose to pick and why.
+- Each run is also recorded for the `rerun` viewer in `logging/rerun/<timestamp>/` (see `docs/LOGGING.md`).
 
 **Base command:**
 
@@ -53,34 +36,36 @@ bash run_dexnet_pnp_single.sh
 
 | Option | Description |
 | --- | --- |
-| `--vacuum` | Start the pneumatics for real suction. |
-| `--no-vacuum` | Dry-run with no suction; move the cup by hand (default). |
-| `--auto` | Auto-pick — no per-pick Enter prompt. |
-| `--confirm` | Before each pick, wait for Enter to execute it, `r` to regenerate the grasp, or Ctrl-C to abort (default). |
-| `--straight-down` | Ignore grasp tilt and approach the object vertically. |
-| `--offset-x M`, `--offset-y M` | Shift every pick by this much (metres, robot base frame) after DexNet has chosen it. Defaults come from `ORIO_PNP_OFFSET_X` / `ORIO_PNP_OFFSET_Y`, else 0. |
-| `--min-q Q` | Lowest DexNet confidence (0 to 1) at which a grasp is accepted. Default 0.30, or `DEXNET_MIN_Q_VALUE`. Lower it to attempt low-confidence grasps on hard piles; grasps below it are rejected and the loop re-scans. |
+| `--vacuum` | Turn on real suction. |
+| `--no-vacuum` | No suction; test run only (default). |
+| `--auto` | Pick without asking each time. |
+| `--confirm` | Ask before each pick: Enter to pick, `r` to try another grasp (default). |
+| `--straight-down` | Always move straight down to the item. |
+| `--offset-x M`, `--offset-y M` | Move every pick by this many metres. Use it if the cup always lands off by the same amount. |
+| `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.30. |
+| `--planner NAME` | `suction` (default) or `dexnet` (see `docs/DEXNET.md`). |
+| `--no-affordance` | Do not save the grasp pictures (a bit faster). |
 | `--no-logging` | Do not record this run. |
-| `--live` | Also stream the recording to a `rerun` viewer already open on this machine. |
-| `-h`, `--help` | Print the script's usage header and exit. |
+| `--live` | Also show the recording in an open `rerun` viewer. |
+| `--fresh` | Stop everything first and start from scratch. |
+| `-h`, `--help` | Show help and exit. |
 
-**Example:**
+**Examples:**
 
 ```bash
 bash run_dexnet_pnp_single.sh --vacuum --auto --straight-down
+bash run_dexnet_pnp_single.sh --vacuum --offset-y -0.015   # cup lands 1.5 cm too high
 ```
 
-**Correcting a constant landing error.** If the cup lands a fixed distance away from the
-grasp drawn in the affordance figure, that is the camera calibration, not the planner.
-Pass the correction in metres and the pick loop adds it to every grasp before moving the
-arm; DexNet, the perception node and the figure are unchanged. In the figure, up is +Y and
-right is +X in the robot frame, so an arm that lands above the drawn grasp needs a
-negative `--offset-y`. The chosen value is printed on the `[launcher] pnp flags:` line
-and in the `[Grasp]` log lines for each pick.
+---
+
+## `stop_dexnet_pnp.sh`
+
+Stops everything `run_dexnet_pnp_single.sh` started: cameras, planner, robot connection
+and containers. Turns the suction off first if a run is still going.
 
 ```bash
-bash run_dexnet_pnp_single.sh --vacuum --offset-y -0.015
-export ORIO_PNP_OFFSET_Y=-0.015    # or set it once for every run
+bash stop_dexnet_pnp.sh
 ```
 
 ---

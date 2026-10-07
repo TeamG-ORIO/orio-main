@@ -151,8 +151,15 @@ Environment knobs without flags: `DEXNET_RESCALE` (0.5), and `bin_depth_min/max`
 `max_tilt_deg` in `grasp.yaml`.
 
 Each run writes `logging/dexnet_pnp/<stamp>.log` (every container's output, tagged by
-module), `<stamp>.control_pc.log`, `<stamp>.affordance/afford_NNNN_hhmmss.png`, and when
-the recorder is available `logging/rerun/<stamp>/`.
+module), `<stamp>.affordance/afford_NNNN_hhmmss.png`, and when the recorder is available
+`logging/rerun/<stamp>/`. The services that stay up between runs (see below) log to
+`logging/dexnet_pnp/stack/<service>.log`, the control PC to `stack/control_pc.log`.
+
+Ctrl-C stops only the run: the pick loop, pneumatics and recorder. roscore, the main
+container, the control PC, the planner, both cameras and perception stay up, and the next
+run reuses whatever is still healthy (the planner and perception are restarted when
+`--planner`, `--min-q` or the panel setting changes). `bash stop_dexnet_pnp.sh` stops
+everything; `--fresh` does the same before starting.
 
 ### Offline checks that need no robot
 
