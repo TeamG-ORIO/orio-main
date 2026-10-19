@@ -12,7 +12,8 @@
 #   bash snap_xtion.sh [outdir]         default outdir: logging/xtion/<timestamp>/
 #   bash snap_xtion.sh --keep           leave roscore/container/camera up afterwards
 #
-# Writes color.png, color.npy, depth.npy and K.npy into outdir.
+# Writes color.png, preview.png (RGB and depth side by side), color.npy, depth.npy and
+# K.npy into outdir.
 # Env: ORIO_CONTAINER, ORIO_ROS1_CONTAINER, ORIO_PERCEPTION_IMAGE, ORIO_CAM_ATTEMPTS.
 set -uo pipefail
 
@@ -32,7 +33,7 @@ OUT=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --keep) KEEP=1 ;;
-        -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "unknown option: $1" >&2; exit 2 ;;
         *) OUT="$1" ;;
     esac
@@ -142,7 +143,7 @@ docker run --rm --net=host --name "$SNAP_CONTAINER" \
     bash -c 'mkdir -p /tmp/ros/log && source /opt/ros/noetic/setup.bash && python3 /capture/capture_xtion.py /out'
 rc=$?
 if [ "$rc" -eq 0 ]; then
-    log "saved: $OUT/color.png"
+    log "saved: $OUT/color.png and $OUT/preview.png"
 else
     log "capture FAILED (exit $rc)."
 fi
