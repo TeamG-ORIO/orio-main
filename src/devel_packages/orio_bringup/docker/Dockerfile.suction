@@ -15,6 +15,14 @@ RUN pip install --no-cache-dir \
     && pip install --no-cache-dir --extra-index-url https://rospypi.github.io/simple/ \
         rospy std_msgs sensor_msgs geometry_msgs
 
+# RF-DETR, for checkpoints that read segmentation masks (the "seg" input channels): the
+# planner runs orio-grasping's RGB-D segmentation model on the colour and depth first. Pinned
+# to the commit of orio-grasping's third_party/rf-detr submodule, which its rgbd_seg.py
+# patches; torch is pinned so the install keeps the base image's CUDA build. transformers
+# 5.10+ needs a newer torch and 5.15+ drops BackboneConfigMixin, which this rf-detr imports.
+RUN pip install --no-cache-dir torch==2.4.1 torchvision==0.19.1 transformers==5.5.0 \
+        "rfdetr @ https://github.com/roboflow/rf-detr/archive/9b009fa928d6218320439803d1da01869a85c072.tar.gz"
+
 # rosgraph's RospyLogger.findCaller loops forever on Python 3.11 when no frame matches
 # (its walk stops advancing at the outermost frame), so the first rospy.loginfo hangs the
 # node. Stop the walk there instead; only the caller name in log records is affected.

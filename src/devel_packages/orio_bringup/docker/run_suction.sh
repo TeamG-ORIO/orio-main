@@ -8,6 +8,11 @@
 #   SUCTION_CHECKPOINT   model checkpoint (default: the newest $ORIO_GRASPING/runs/*/best.pt)
 #   SUCTION_MIN_SCORE    lowest seal x hold x access the planner accepts (default 0.30)
 #   SUCTION_ROT180       1 (default): driver frames are upside down relative to the calibration
+#   SUCTION_SEG_CHECKPOINT  RGB-D segmentation weights, for checkpoints with the "seg" input
+#                        channels such as seg_v1 (default: the newest
+#                        $ORIO_GRASPING/runs/seg/*/checkpoint_best_total.pth); ignored otherwise
+#   SUCTION_SEG_MODEL    RF-DETR size it was trained as (default RFDETRSegLarge)
+#   SUCTION_SEG_THRESHOLD  lowest mask confidence kept (default 0.5)
 #   SUCTION_IMAGE, SUCTION_CONTAINER_NAME
 set -euo pipefail
 
@@ -32,12 +37,22 @@ if [ -z "$CKPT" ] || [ ! -f "$CKPT" ]; then
     exit 1
 fi
 CKPT="$(readlink -f "$CKPT")"
+SEG_CKPT="${SUCTION_SEG_CHECKPOINT:-$(ls -t "$GRASPING"/runs/seg/*/checkpoint_best_total.pth 2>/dev/null | head -1)}"
+SEG_ARGS=()
+if [ -n "$SEG_CKPT" ] && [ -f "$SEG_CKPT" ]; then
+    SEG_CKPT="$(readlink -f "$SEG_CKPT")"
+    SEG_ARGS=(-v "$SEG_CKPT:/opt/seg_checkpoint.pth:ro")
+    SEG_PARAM=/opt/seg_checkpoint.pth
+else
+    SEG_PARAM=""
+fi
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
     echo "Image $IMAGE missing. Build it:" >&2
     echo "  docker build -t $IMAGE - < $REPO/src/devel_packages/orio_bringup/docker/Dockerfile.suction" >&2
     exit 1
 fi
 echo "suction planner checkpoint: $CKPT ($(date -r "$CKPT" '+saved %Y-%m-%d %H:%M'))"
+[ -n "$SEG_PARAM" ] && echo "segmentation checkpoint (used if the network reads masks): $SEG_CKPT"
 [ "$ROT180" = "1" ] && ROT180_PARAM=true || ROT180_PARAM=false
 
 docker rm -f "$NAME" >/dev/null 2>&1 || true
@@ -52,8 +67,11 @@ exec docker run -d --name "$NAME" --restart unless-stopped \
     -v "$REPO/src/devel_packages/orio_core:/home/ros_ws/src/devel_packages/orio_core:ro" \
     -v "$GRASPING:/opt/orio-grasping:ro" \
     -v "$CKPT:/opt/checkpoint.pt:ro" \
+    "${SEG_ARGS[@]}" \
     -v "$REPO/logging:/home/ros_ws/logging" \
     -v "$REPO/src/devel_packages/orio_bringup/docker/suction_grasp_planner.py:/opt/suction_grasp_planner.py:ro" \
     "$IMAGE" \
     python /opt/suction_grasp_planner.py _checkpoint:=/opt/checkpoint.pt \
-        _min_score:="$MIN_SCORE" _rot180:="$ROT180_PARAM"
+        _min_score:="$MIN_SCORE" _rot180:="$ROT180_PARAM" \
+        _seg_checkpoint:="$SEG_PARAM" _seg_model:="${SUCTION_SEG_MODEL:-RFDETRSegLarge}" \
+        _seg_threshold:="${SUCTION_SEG_THRESHOLD:-0.5}"

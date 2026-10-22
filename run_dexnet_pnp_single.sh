@@ -30,9 +30,12 @@
 #                                                 #   $SUCTION_MIN_SCORE / $DEXNET_MIN_Q_VALUE, else 0.30)
 #   bash run_dexnet_pnp_single.sh --planner dexnet
 #                                                 # grasp planner: suction (default: the orio-grasping
-#                                                 #   network, checkpoint from $SUCTION_CHECKPOINT, else
-#                                                 #   the newest in $ORIO_GRASPING/runs) or dexnet
+#                                                 #   network) or dexnet
 #                                                 #   (default: $ORIO_PLANNER, else suction)
+#   bash run_dexnet_pnp_single.sh --checkpoint depth_v1
+#                                                 # suction network: a run tag (the newest
+#                                                 #   $ORIO_GRASPING/runs/*_<tag>/best.pt) or a path
+#                                                 #   (default: $SUCTION_CHECKPOINT, else seg_v1)
 #
 # The iam-doc control PC (robot 1) is started over ssh; it opens its own gnome-terminal
 # windows separately (they run for the robot and cannot be merged here).
@@ -47,7 +50,9 @@
 # It also writes a diagnostic panel per grasp to logging/dexnet_pnp/<stamp>.affordance/,
 # the only per-grasp image this launcher writes, rendered by the planner container. The
 # suction planner draws the chosen cups on the camera image, on the height map the network
-# saw and on its score map (a ~0.5 s render). DexNet draws its six-panel affordance figure
+# saw and on its score map (a ~0.5 s render). Beside each panel it keeps the call's raw
+# inputs, grasp_NNNN_hhmmss/{color,depth,K}.npy (~2 MB, the logging/xtion layout) and a
+# meta.json with the planner settings and result, so the models can be rerun offline. DexNet draws its six-panel affordance figure
 # (workspace, depth, segmask, affordance map, affordance over scene, chosen grasp), the
 # same one orio_perception/test/live_affordance.py produces offline, at the cost of a
 # second forward pass plus a ~0.3 s render. --no-affordance skips it; so does --no-logging.
@@ -102,6 +107,10 @@ PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.0}"
 PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:-0.0}"
 # Grasp planner: suction (the orio-grasping network) or dexnet.
 PLANNER="${ORIO_PLANNER:-suction}"
+# Suction network checkpoint: a run tag or a path. seg_v1 also reads segmentation masks, so
+# its planner runs orio-grasping's RGB-D segmentation model too (see run_suction.sh).
+SUCTION_CKPT="${SUCTION_CHECKPOINT:-seg_v1}"
+ORIO_GRASPING="${ORIO_GRASPING:-$HOME/orio-grasping}"
 # Lowest score (0..1) the planner accepts: the suction network's seal x hold x access, or
 # DexNet's q-value. Below it the planner answers "rejected" and the pick loop re-scans;
 # enough rejections in a row count as an empty bin (see --max-declines in dexnet_pnp.py).
@@ -135,8 +144,11 @@ while [ $# -gt 0 ]; do
         --planner)       [ $# -gt 0 ] || { echo "--planner needs suction or dexnet" >&2; exit 2; }
                          PLANNER="$1"; shift ;;
         --planner=*)     PLANNER="${arg#*=}" ;;
+        --checkpoint)    [ $# -gt 0 ] || { echo "--checkpoint needs a run tag or a path" >&2; exit 2; }
+                         SUCTION_CKPT="$1"; shift ;;
+        --checkpoint=*)  SUCTION_CKPT="${arg#*=}" ;;
         --fresh)         FRESH=1 ;;
-        -h|--help) sed -n '2,53p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,56p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -154,7 +166,14 @@ case "$PLANNER" in
         PLANNER_CONTAINER="$SUCTION_CONTAINER"
         PLANNER_SERVICE=/suction_grasp_planner/plan_grasp
         PLANNER_SCRIPT=run_suction.sh
-        MIN_Q="${MIN_Q:-${SUCTION_MIN_SCORE:-0.30}}" ;;
+        MIN_Q="${MIN_Q:-${SUCTION_MIN_SCORE:-0.30}}"
+        if [ ! -f "$SUCTION_CKPT" ]; then
+            tag="$SUCTION_CKPT"
+            SUCTION_CKPT="$(ls -t "$ORIO_GRASPING"/runs/*_"$tag"/best.pt 2>/dev/null | head -1)"
+            [ -n "$SUCTION_CKPT" ] || { echo "--checkpoint: no $ORIO_GRASPING/runs/*_$tag/best.pt" >&2; exit 2; }
+        fi
+        SUCTION_CKPT="$(readlink -f "$SUCTION_CKPT")"
+        export SUCTION_CHECKPOINT="$SUCTION_CKPT" ;;
     dexnet)
         PLANNER_CONTAINER="$DEXNET_CONTAINER"
         PLANNER_SERVICE=/dexnet_grasp_planner/plan_grasp
@@ -692,6 +711,7 @@ else
 fi
 # The planner reads its settings once, at start-up: reuse it only if they match this run.
 PLANNER_CONF="planner=$PLANNER min_q=$MIN_Q panels=$PANELS"
+[ "$PLANNER" = suction ] && PLANNER_CONF+=" checkpoint=$SUCTION_CKPT"
 if [ "$STACK_FRESH" -eq 0 ] && container_up "$PLANNER_CONTAINER" && conf_is planner "$PLANNER_CONF"; then
     log "$PLANNER grasp planner already running (min score $MIN_Q)."
 else
