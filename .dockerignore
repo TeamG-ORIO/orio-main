@@ -1,0 +1,39 @@
+# Build context for orio_docker (build.sh runs `docker build .` from the repo root).
+# The Dockerfile has exactly ONE copy — `COPY src/devel_packages` — so everything else
+# here is context transferred for nothing. Before this file the context was 13.45GB and
+# took ~49s to transfer on every build.
+#
+# It was not merely slow: orio_perception/venv is a HOST py3.10 virtualenv whose
+# cuda_home/bin/ptxas is a symlink to an absolute host path
+# (/home/orio/orio-main/...), which does not exist inside the image. The vendored ZED
+# packages each do `FILE(GLOB_RECURSE all_files ${CMAKE_SOURCE_DIR}/*)` into a dummy
+# qtcreator target, so that dangling symlink got swept into the build and catkin_make
+# died with "Cannot find source file: .../venv/cuda_home/bin/ptxas". Excluding the venv
+# fixes the build, not just its speed.
+
+# Host virtualenvs — py3.10, host-absolute symlinks; the image has its own py3.8 stack.
+**/venv/
+**/.venv/
+
+# ML weights (~1GB): the perception container bind-mounts these from the host at runtime
+# (see run_perception.sh), so they are never needed in the image.
+src/devel_packages/orio_perception/weights/
+src/devel_packages/orio_perception/SAM_weights/
+
+# Host catkin artifacts — the image runs its own catkin_make.
+build/
+devel/
+.catkin_workspace
+
+# Never needed in the image.
+.git/
+.gitignore
+.gitmodules
+logging/
+.ros_noetic_dist/
+reference/
+**/__pycache__/
+**/*.pyc
+
+# Local secrets — must not be baked into an image layer.
+.env.local

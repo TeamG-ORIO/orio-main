@@ -5,7 +5,8 @@
 #   bash launch_demo.sh --dexnet     # add the DexNet suction-planner pane
 #   bash launch_demo.sh --no-logging # skip the rerun recorder + event logging
 #   bash launch_demo.sh --live       # recorder also streams to a running `rerun` viewer
-#   bash launch_demo.sh --session orio_dexnet_pnp   # single-arm DexNet pick-and-place (no labelling)
+#   bash launch_demo.sh --session orio_dexnet_pnp   # single-arm suction pick-and-place (no labelling)
+#   bash launch_demo.sh --session orio_dexnet_pnp --planner dexnet  # plan with DexNet, not the suction network
 #   bash launch_demo.sh --session orio_dexnet_pnp --confirm        # wait for Enter before each pick
 #   bash launch_demo.sh --session orio_dexnet_pnp --straight-down  # ignore grasp tilt, approach vertically
 # Env: ORIO_FRANKAPY, ORIO_PERCEPTION_ASSETS, ORIO_CONTAINER, ORIO_RUN_DIR.
@@ -33,7 +34,9 @@ while [ $# -gt 0 ]; do
         # Pass-through flags for the orio_dexnet_pnp pick-and-place pane.
         --confirm) export ORIO_PNP_CONFIRM=1 ;;
         --straight-down) export ORIO_PNP_STRAIGHT_DOWN=1 ;;
-        -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
+        --planner) shift; export ORIO_PLANNER="$1" ;;
+        --planner=*) export ORIO_PLANNER="${1#*=}" ;;
+        -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift

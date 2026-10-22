@@ -31,7 +31,7 @@ now record things:
 
 | Where | What it holds | Notes |
 |---|---|---|
-| `logging/dexnet_pnp/<stamp>.control_pc.log` (workstation) | franka-interface + action-server output for that run | written by the launcher's ssh tap |
+| `logging/dexnet_pnp/stack/control_pc.log` (workstation) | franka-interface + action-server output, one banner per start | written by the launcher's ssh tap; the control PC stays up between runs |
 | `~/franka_logs/*.log` (**on iam-doc**) | the same output, saved locally | survives the launcher dying / terminal closing; last 50 runs kept |
 | `coredumpctl` (**on iam-doc**) | core dump + backtrace of a franka-interface crash | needs the one-time setup below |
 | `journalctl -b -1 -k` (**on iam-doc**) | kernel hung-task / lockup traces from a **freeze** | needs the setup below; look at the *previous* boot |

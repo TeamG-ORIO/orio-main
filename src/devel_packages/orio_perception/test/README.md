@@ -31,6 +31,20 @@ guard paths: an empty bin is declined rather than grasped, and the tilt gate rej
 
 `sample_results.json` is the reference baseline; q-values should match to ~1e-3.
 
+## capture_xtion.py
+
+One time-synced RGB + registered-depth frame from the live Xtion, saved as `color.png`
+plus the `color.npy` / `depth.npy` / `K.npy` scene files the offline tools below read.
+It needs `rospy`, which the host venv does not have, so run it through the wrapper at the
+repo root, which runs it in the perception container and starts the ROS master and the
+Xtion driver first if nothing is running:
+
+```bash
+bash snap_xtion.sh [outdir]      # default outdir: logging/xtion/<timestamp>/
+```
+
+See `COMMANDS.md` for the options.
+
 ## visualize_grasps.py
 
 Contact sheet from the JSON above: full scene, zoomed crop, and depth with the segmask

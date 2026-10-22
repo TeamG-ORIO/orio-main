@@ -1,6 +1,6 @@
 <launch>
     <!-- Grasp backend + camera config for the combined perception node. -->
-    <arg name="grasp_backend" default="" doc="override grasp.yaml: dexnet | classical"/>
+    <arg name="grasp_backend" default="" doc="override grasp.yaml: suction | dexnet | classical"/>
 
     <node name="combined_perception_node" pkg="orio_perception"
           type="perception_control_combined_pass_through.py" output="screen">

@@ -12,6 +12,7 @@ logging/rerun/20260914_153000/
 
 ```bash
 bash launch_demo.sh [--no-logging] [--live]              # recorder pane starts with roscore
+bash run_dexnet_pnp_single.sh [--no-logging] [--live]    # same, without tmux (recorder = bg process)
 python3 src/devel_packages/orio_logging/runs.py list     # or: open latest | summary | compare A B | du
 rerun logging/rerun/<run_id>/*.rrd                       # viewer (perception venv has `rerun`)
 ```
@@ -20,15 +21,73 @@ rerun logging/rerun/<run_id>/*.rrd                       # viewer (perception ve
 sets `ORIO_LOGGING=0` for every process: no recorder pane, no events, no perception writer.
 The recorder refuses to start under 5 GB free and lists old runs to delete.
 
+### Affordance panels
+
+`run_dexnet_pnp_single.sh` writes the six-panel diagnostic per grasp to
+`logging/dexnet_pnp/<stamp>.affordance/afford_<n>_<hhmmss>.png`: workspace, depth,
+segmask, affordance map, affordance over scene, chosen grasp — the same figure
+`orio_perception/test/live_affordance.py` renders offline, but for every call of a live
+run. Rejected grasps get a panel too; a `q=0.01` result is exactly when the map and
+segmask are worth looking at.
+
+This is the **only** per-grasp image the launcher writes. An earlier single-frame PNG
+drawn in the perception node was removed in favour of it: the panel is a superset (its
+bottom-right cell is that same annotated close-up), and keeping both meant two images per
+pick from two containers.
+
+On by default. `--no-affordance` skips the panels; `--no-logging` turns them off along
+with everything else.
+
+This one lives in **`dexnet_grasp_planner.py`**, not the perception node, and that is
+forced: the dense affordance tensor exists only inside the policy object, while
+`PlanDexnetGrasp` returns just the chosen grasp. `_affordance_map` reaches into
+`policy._unpack_state` / `_gen_images_and_depths` / `_grasp_quality_fn.quality` exactly as
+`live_affordance.py` does, so it tracks those gqcnn internals and is exception-wrapped.
+
+Cost, for the record: a **second forward pass** per call plus a ~0.3 s matplotlib
+render (measured on the RTX 4090 against a 178x172 input). The panels show the
+**post-processing** depth and segmask taken from the policy state — after inpainting and
+the valid-pixel intersection — since that is what the network ran on; the raw service
+inputs would overstate the mask and hide inpainting artefacts.
+
+`run_dexnet.sh` passes `ORIO_AFFORDANCE_DIR` and mounts `logging/` into the dexnet
+container (the planner had no such mount before this). The launcher gates the panels on
+`LOGGING_REQUESTED` rather than `ORIO_LOGGING`: the latter gets zeroed when the host venv
+lacks rospy/rerun, which says nothing about the dexnet container, where these are drawn.
+
+### Host requirement: rospy *and* rerun in one interpreter
+
+The recorder is the only piece that needs both, and they pull in opposite directions:
+rerun 0.37.2 needs Python ≥ 3.9, while `rospy` ships with ROS1 noetic (Python 3.8, Ubuntu
+20.04). On a workstation that is 22.04 with no host ROS1 — the stack is containerised
+precisely because noetic is not installable there — `/opt/ros/noetic` may exist but be
+empty, and the recorder dies at `import rospy`.
+
+Fix: add the pure-python ROS1 packages to the perception venv (py3.10). They are the
+community [rospypi/simple](https://github.com/rospypi/simple) builds, pip-installable and
+independent of a system ROS:
+
+```bash
+src/devel_packages/orio_perception/venv/bin/pip install \
+    --extra-index-url https://rospypi.github.io/simple/ \
+    rospy rosgraph_msgs std_msgs geometry_msgs sensor_msgs actionlib_msgs
+```
+
+`actionlib_msgs` is needed for `franka_interface_msgs/RobotState` (the arm streams).
+`smach_msgs` is not on that index; without it the recorder logs one warning and records
+everything except smach transitions — which the DexNet path does not use anyway.
+`run_dexnet_pnp_single.sh` checks for both imports up front and, if either is missing,
+prints this command and continues with logging off rather than failing the run.
+
 ## Architecture
 
 ```
 control PCs ──robot_state (100 Hz)──┐
 pneumatics  ──has_item, rosout──────┤
 dexnet      ──rosout, /orio/events──┤        ┌──────────────┐
-state mach. ──/orio/events, rosout──┼──────▶ │  recorder.py │──▶ recorder.rrd
-smach       ──container_status──────┘        │  (host venv) │──▶ run.json
-                                             └──────┬───────┘
+state mach. ──/orio/events, rosout──┤──────▶ │  recorder.py │──▶ recorder.rrd
+dexnet_pnp  ──/orio/events, rosout──┤        │  (host venv) │──▶ run.json
+smach       ──container_status──────┘        └──────┬───────┘
 perception  ──rerun SDK, worker thread──────────────┼──────▶ perception.rrd
                                                     └─ --live: gRPC ─▶ rerun viewer
 ```
@@ -40,8 +99,9 @@ Two writers, one `recording_id` (the run id); the viewer merges the files.
 | Recorder, run CLI, cell.yaml, meshes | `src/devel_packages/orio_logging/` |
 | Event encoding (pure, no ROS) | `orio_core/orio_core/events.py` |
 | Perception writer (worker thread) | `orio_perception/scripts/rerun_writer.py` |
-| Event hooks | `state_machine.py`, `pneumatic_control_recovery.py`, `dexnet_grasp_planner.py` |
-| Bring-up | `launch_demo.sh`, `orio.session.sh`, `stop_demo.sh`, `orio_run_docker.sh`, `run_dexnet.sh` |
+| Affordance panels | `orio_bringup/docker/dexnet_grasp_planner.py` (`_save_affordance_panel`) |
+| Event hooks | `state_machine.py`, `dexnet_pnp.py`, `pneumatic_control_recovery.py`, `dexnet_grasp_planner.py` |
+| Bring-up | `launch_demo.sh`, `orio.session.sh`, `stop_demo.sh`, `orio_run_docker.sh`, `run_dexnet.sh`, `run_dexnet_pnp_single.sh` |
 
 Why this shape: the state machine runs on Python 3.8 in the container, where rerun stops
 at 0.22.1 and `.rrd` files are not portable across versions. So nothing in a container
@@ -64,6 +124,12 @@ topics; state transitions from the smach introspection topic; every node's log l
 | state_machine | `zone`, `recovery`, `error`, `rfid`, `operator`, `shutdown`, `summary` | see code |
 | pneumatics | `vacuum_cmd` | (name = serial command) |
 | dexnet | `dexnet` | q, px, depth, plan_time_s, ok |
+| dexnet_pnp | `pick` | n (attempt), placed |
+| dexnet_pnp | `cmd` (every `_move`, name=`arm1`) | desc, joints, duration, timeout, dt_s, faults, ok |
+| dexnet_pnp | `ik` (name=`arm1`) | target, pre, final, err_pre, err_final, ok |
+| dexnet_pnp | `grasp` (`accepted` / `declined`) | pos, tilt_deg, reason, n_poses, ok |
+| dexnet_pnp | `service` (every Trigger call) | dt_s, ok |
+| dexnet_pnp | `operator`, `error`, `shutdown`, `summary` | see code |
 
 ### Entity layout
 
