@@ -35,7 +35,8 @@
 #   bash run_dexnet_pnp_single.sh --checkpoint depth_v1
 #                                                 # suction network: a run tag (the newest
 #                                                 #   $ORIO_GRASPING/runs/*_<tag>/best.pt) or a path
-#                                                 #   (default: $SUCTION_CHECKPOINT, else seg_v1)
+#                                                 #   (default: $SUCTION_CHECKPOINT, else the
+#                                                 #   newest $ORIO_GRASPING/runs/*/best.pt)
 #
 # The iam-doc control PC (robot 1) is started over ssh; it opens its own gnome-terminal
 # windows separately (they run for the robot and cannot be merged here).
@@ -107,9 +108,11 @@ PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.0}"
 PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:-0.0}"
 # Grasp planner: suction (the orio-grasping network) or dexnet.
 PLANNER="${ORIO_PLANNER:-suction}"
-# Suction network checkpoint: a run tag or a path. seg_v1 also reads segmentation masks, so
-# its planner runs orio-grasping's RGB-D segmentation model too (see run_suction.sh).
-SUCTION_CKPT="${SUCTION_CHECKPOINT:-seg_v1}"
+# Suction network checkpoint: a run tag or a path; empty means the newest
+# $ORIO_GRASPING/runs/*/best.pt (resolved below, same default as run_suction.sh). The seg_*
+# checkpoints also read segmentation masks, so their planner runs orio-grasping's RGB-D
+# segmentation model too (see run_suction.sh).
+SUCTION_CKPT="${SUCTION_CHECKPOINT:-}"
 ORIO_GRASPING="${ORIO_GRASPING:-$HOME/orio-grasping}"
 # Lowest score (0..1) the planner accepts: the suction network's seal x hold x access, or
 # DexNet's q-value. Below it the planner answers "rejected" and the pick loop re-scans;
@@ -167,7 +170,10 @@ case "$PLANNER" in
         PLANNER_SERVICE=/suction_grasp_planner/plan_grasp
         PLANNER_SCRIPT=run_suction.sh
         MIN_Q="${MIN_Q:-${SUCTION_MIN_SCORE:-0.30}}"
-        if [ ! -f "$SUCTION_CKPT" ]; then
+        if [ -z "$SUCTION_CKPT" ]; then
+            SUCTION_CKPT="$(ls -t "$ORIO_GRASPING"/runs/*/best.pt 2>/dev/null | head -1)"
+            [ -n "$SUCTION_CKPT" ] || { echo "no checkpoint: train one into $ORIO_GRASPING/runs/ or set SUCTION_CHECKPOINT" >&2; exit 2; }
+        elif [ ! -f "$SUCTION_CKPT" ]; then
             tag="$SUCTION_CKPT"
             SUCTION_CKPT="$(ls -t "$ORIO_GRASPING"/runs/*_"$tag"/best.pt 2>/dev/null | head -1)"
             [ -n "$SUCTION_CKPT" ] || { echo "--checkpoint: no $ORIO_GRASPING/runs/*_$tag/best.pt" >&2; exit 2; }
@@ -386,7 +392,7 @@ trap cleanup EXIT
 # line and one already running shows from now on.
 follow roscore roscore
 follow "$PLANNER" planner
-follow cameras zed
+[ "${ORIO_USE_ZED:-0}" -eq 1 ] && follow cameras zed
 follow cameras xtion
 follow perception perception
 
@@ -734,8 +740,17 @@ fi
 # the remaining suspicion is the cable/power/camera itself. The retry is the mitigation.
 # (See docs/TROUBLESHOOTING.md.)
 
-# (1) ZED first.
-if [ "$CAMS_FRESH" -eq 0 ] && topic_live /zedm/zed_node/rgb/image_rect_color; then
+# (1) ZED first — OPTIONAL (off by default since 2026-11-02): the pick pipeline plans
+# from the Xtion (/compute_grasps); the ZED only feeds the labelling service
+# (/compute_grasps_labelling), which times out cleanly without it. The ZED-M's USB3 link
+# is currently failing at the hardware level (EPROTO drops ~3 min into streaming, then no
+# enumeration at all — see logging/dexnet_pnp/dmesg_full.txt). Set ORIO_USE_ZED=1 to
+# bring it back once the camera/cable is replaced.
+if [ "${ORIO_USE_ZED:-0}" -ne 1 ]; then
+    log "ZED camera DISABLED (set ORIO_USE_ZED=1 to re-enable): labelling has no images; the pick pipeline is unaffected."
+    stop_detached zed
+    docker exec "$CONTAINER" bash -c "pkill -f 'zed_only.launch|cameras.launch'" >/dev/null 2>&1 || true
+elif [ "$CAMS_FRESH" -eq 0 ] && topic_live /zedm/zed_node/rgb/image_rect_color; then
     log "ZED already publishing."
 else
     log "starting ZED camera…"
