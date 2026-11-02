@@ -59,10 +59,59 @@ bash run_dexnet_pnp_single.sh --vacuum --offset-y -0.015   # cup lands 1.5 cm to
 
 ---
 
+## `run_full_demo.sh`
+
+Runs the full demo in one terminal: arm 1 picks items from the bin with the new grasp
+network and moves them through the label zones to the output box, while arm 2 applies
+labels. A window asks for the item name and expiry first.
+Press **Ctrl-C** to stop the run; the stack stays up for the next run (shared with
+`run_dexnet_pnp_single.sh`). To stop everything, run `bash stop_dexnet_pnp.sh`.
+Each run saves a log to `logging/demo/<timestamp>.log`.
+
+- Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2).
+- Uses the ZED for label placement. If it won't start, replug it or use `--no-zed`.
+- If an arm fails mid-run, a recovery window opens for it; the other keeps going.
+- When the bin is empty, it asks you to refill it. Enter to go on, `q` to finish.
+
+**Base command:**
+
+```bash
+bash run_full_demo.sh
+```
+
+| Option | Description |
+| --- | --- |
+| `--vacuum` | Turn on real suction (both cups). |
+| `--no-vacuum` | No suction; test run only (default). |
+| `--auto` | Pick from the bin without asking each time. |
+| `--confirm` | Ask before each bin pick: Enter to pick, `r` to try another grasp (default). |
+| `--straight-down` | Always move straight down to the item. |
+| `--offset-x M`, `--offset-y M` | Move every pick by this many metres. |
+| `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.30. |
+| `--planner NAME` | `suction` (default) or `dexnet` (see `docs/DEXNET.md`). |
+| `--checkpoint TAG` | Which grasp network to use (a run tag or a file path). |
+| `--no-zed` | Run without the ZED. Labels cannot be placed. |
+| `--no-rfid` | Do not start the RFID inventory node. |
+| `--no-affordance` | Do not save the grasp pictures (a bit faster). |
+| `--no-logging` | Do not record this run. |
+| `--live` | Also show the recording in an open `rerun` viewer. |
+| `--fresh` | Stop everything first and start from scratch. |
+| `-h`, `--help` | Show help and exit. |
+
+**Examples:**
+
+```bash
+bash run_full_demo.sh --vacuum                 # the real demo
+bash run_full_demo.sh --no-zed --auto          # picking only, no labelling
+```
+
+---
+
 ## `stop_dexnet_pnp.sh`
 
-Stops everything `run_dexnet_pnp_single.sh` started: cameras, planner, robot connection
-and containers. Turns the suction off first if a run is still going.
+Stops everything `run_dexnet_pnp_single.sh` or `run_full_demo.sh` started: cameras,
+planner, both robot connections and containers. Turns the suction off first if a run is
+still going.
 
 ```bash
 bash stop_dexnet_pnp.sh

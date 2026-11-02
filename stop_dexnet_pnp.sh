@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Tear down everything run_dexnet_pnp_single.sh started: the pick loop and pneumatics (if
-# a run is still going), the control PC processes on iam-doc, the cameras, the grasp
-# planner, perception, the main container and roscore.
+# Tear down everything run_dexnet_pnp_single.sh OR run_full_demo.sh started (they share
+# the stack): the pick loop / sequence and pneumatics (if a run is still going), the
+# control PC processes on iam-doc, the label arm's stack on iam-luisa, the cameras, the
+# grasp planner, perception, the RFID node, the main container and roscore.
 #
 #   bash stop_dexnet_pnp.sh
 #
-# Ctrl-C on run_dexnet_pnp_single.sh only stops that run and leaves this stack up so the
+# Ctrl-C on either launcher only stops that run and leaves this stack up so the
 # next run starts quickly; this is the clean "everything off" command.
 set -uo pipefail
 
@@ -15,6 +16,7 @@ DEXNET_CONTAINER="${DEXNET_CONTAINER_NAME:-orio_dexnet}"
 SUCTION_CONTAINER="${SUCTION_CONTAINER_NAME:-orio_suction}"
 CTRL_PC_USER="${ORIO_CTRL_PC_USER:-student}"
 CTRL_PC_HOST="${ORIO_CTRL_PC_HOST:-iam-doc}"
+LUISA_PC="${ORIO_LUISA_HOST:-snaak@iam-luisa}"
 LOG_DIR="$REPO/logging/dexnet_pnp"
 STACK_DIR="$LOG_DIR/stack"
 
@@ -26,14 +28,17 @@ esac
 
 say() { echo "[stop] $*"; }
 
-# 1. A run still going: vacuum off, then stop the pick loop and pneumatics. They run in
-#    the main container, so they go when it does, but the vacuum must be off first.
+# 1. A run still going: both vacuums off, then stop the pick loop / sequence, pneumatics
+#    and the RFID node. They run in the main container, so they go when it does, but the
+#    vacuums must be off first.
 if docker ps -q -f "name=^${CONTAINER}\$" 2>/dev/null | grep -q .; then
     docker exec "$CONTAINER" bash -lc \
       "source /opt/ros/noetic/setup.bash 2>/dev/null; \
-       rosservice call /orio/pnp_cup/off 2>/dev/null" >/dev/null 2>&1 || true
-    docker exec "$CONTAINER" pkill -f 'dexnet_pnp\.py|pneumatic_control_recovery\.py' \
-        >/dev/null 2>&1 && say "pick loop / pneumatics stopped"
+       rosservice call /orio/pnp_cup/off 2>/dev/null; \
+       rosservice call /orio/lbl_cup/off 2>/dev/null" >/dev/null 2>&1 || true
+    docker exec "$CONTAINER" pkill -f \
+        'dexnet_pnp\.py|full_sequence\.py|pneumatic_control_recovery\.py|db_manager\.py' \
+        >/dev/null 2>&1 && say "pick loop / sequence / pneumatics / rfid stopped"
 fi
 
 # 2. The control-PC processes ON iam-doc. Killing the local ssh sessions does NOT stop the
@@ -89,6 +94,17 @@ else
 fi
 REMOTE_TEARDOWN
 
+# 2b. The label arm's stack ON iam-luisa: it lives in a tmux session inside the
+#     franka-interface container there (start_control_pc_luisa.sh), so killing local ssh
+#     sessions does not touch it. Kill the session; the container itself is left running
+#     (it is managed by docker compose on that machine and is cheap to keep).
+say "stopping the label-arm stack on ${LUISA_PC#*@}…"
+timeout 25 ssh -o BatchMode=yes -o ConnectTimeout=8 "$LUISA_PC" \
+    "docker exec franka-interface bash -lc 'tmux kill-session -t franka' 2>/dev/null" \
+    >/dev/null 2>&1 \
+    && say "label-arm stack stopped" \
+    || say "WARNING: could not reach ${LUISA_PC#*@} (or nothing was running there)"
+
 # 3. The stack's local processes (ssh sessions, camera launches, log followers). Each
 #    leads its own process group, recorded in <name>.pid.
 for f in "$STACK_DIR"/*.pid; do
@@ -101,5 +117,5 @@ done
 say "removing containers…"
 docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" orio_perception orio_cameras \
     >/dev/null 2>&1 || true
-rm -f "$STACK_DIR"/*.conf "$LOG_DIR/current.affordance"
+rm -f "$STACK_DIR"/*.conf "$LOG_DIR/current.affordance" "$REPO/logging/demo/current.affordance"
 say "done - everything is stopped"
