@@ -49,12 +49,12 @@ class SuctionModel(object):
 
     def __init__(self, repo, checkpoint, config=None, device=None, rot180=True,
                  seg_checkpoint=None, seg_model="RFDETRSegLarge", seg_threshold=0.5,
-                 seg_trim_top=16, seg_trim_sides=16):
+                 seg_trim_top=16, seg_trim_sides=16, calibrated_intrinsics=True):
         for path in (repo, os.path.join(repo, "scripts")):
             if path not in sys.path:
                 sys.path.insert(0, path)
         import torch
-        from orio_grasping.camera_model import extrinsics, table_inner_crop
+        from orio_grasping.camera_model import extrinsics, intrinsics, table_inner_crop
         from orio_grasping.config import load_config
         from orio_grasping.heightmap import Grid, build_heightmap, network_input
         from orio_grasping.model import load_checkpoint, predict
@@ -91,6 +91,20 @@ class SuctionModel(object):
                 x0, y0, x1, y1 = w - x1, h - y1, w - x0, h - y0
             self.crop = (x0, y0, x1, y1)
 
+        # The camera pose was calibrated together with a focal length (hfov_deg in
+        # xtion_pose.json: fx 549.7 px, from the table width), not the driver's default
+        # camera_info (570.3 px), and orio-grasping's real-capture scripts use it. Back-projecting
+        # with the driver's K would scale every point ~4 % about the image centre (up to ~1 cm
+        # at the bin edges): a different height map for the network, and a different 3D grasp.
+        # So full frames use the calibrated K, turned like the pose when rot180 is set.
+        self.K_cal = None
+        if calibrated_intrinsics:
+            h, w = self.full_shape
+            K_cal = intrinsics(self.cfg)
+            if self.rot180:
+                K_cal[0, 2], K_cal[1, 2] = w - 1 - K_cal[0, 2], h - 1 - K_cal[1, 2]
+            self.K_cal = K_cal
+
         self.seg = None
         if "seg" in self.channels:
             self._load_seg(T, seg_checkpoint, seg_model, seg_threshold, seg_trim_top, seg_trim_sides)
@@ -120,8 +134,9 @@ class SuctionModel(object):
         self.checkpoint_info += "; seg %s (%s, threshold %.2f)" % (checkpoint, model_name, self.seg_threshold)
 
     def segment(self, color, depth, K):
-        """Instance image (request orientation and shape, 0 = no object) from the RGB-D
-        segmentation model. It sees the frame in the calibration orientation, cut to the table
+        """Instance image (request orientation and shape, 0 = no object; k = the k-th most
+        confident mask) from the RGB-D segmentation model, and each mask's confidence in id
+        order. The model sees the frame in the calibration orientation, cut to the table
         window, black and with invalid depth outside the bin region."""
         import torch
 
@@ -140,10 +155,10 @@ class SuctionModel(object):
                        torch.from_numpy(np.ascontiguousarray(ch[:, y0:y1, x0:x1]))])
         det = self.seg.predict(x, threshold=self.seg_threshold, include_source_image=False)
         masks = det.mask if det.mask is not None else np.zeros((0, y1 - y0, x1 - x0), bool)
-        inst, _ = self._instance_image(masks, np.asarray(det.confidence), rgb.shape[:2])
+        inst, records = self._instance_image(masks, np.asarray(det.confidence), rgb.shape[:2])
         full = np.zeros((h, w), np.uint16)
         full[y0:y1, x0:x1] = inst
-        return np.ascontiguousarray(full[::-1, ::-1] if self.rot180 else full)
+        return np.ascontiguousarray(full[::-1, ::-1] if self.rot180 else full), [r["score"] for r in records]
 
     def project(self, xyz_world, K):
         """World point to (u, v, z) in the request image."""
@@ -161,18 +176,20 @@ class SuctionModel(object):
         """
         depth = np.asarray(depth_m, dtype=np.float32)
         depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0.0).astype(np.float32)
-        instances = None
+        K = np.asarray(K, dtype=np.float64)
+        if self.K_cal is not None and depth.shape == self.full_shape:
+            K = self.K_cal  # the request's K is the driver default, see __init__
+        instances, mask_scores = None, None
         if self.seg is not None:
             if color is None or color.shape[:2] != depth.shape or depth.shape != self.full_shape:
                 raise ValueError("segmentation needs a %dx%d colour image registered to the depth"
                                  % (self.full_shape[1], self.full_shape[0]))
-            instances = self.segment(color, depth, K)
+            instances, mask_scores = self.segment(color, depth, K)
         if self.crop is not None and depth.shape == self.full_shape:
             x0, y0, x1, y1 = self.crop
             windowed = np.zeros_like(depth)
             windowed[y0:y1, x0:x1] = depth[y0:y1, x0:x1]
             depth = windowed
-        K = np.asarray(K, dtype=np.float64)
 
         hm = self._build_heightmap(depth, K, self.T_world_cam, self.table_z, self.grid, self.cfg.heightmap,
                                    instances=instances)
@@ -215,6 +232,8 @@ class SuctionModel(object):
             "heightmap": hm,
             "prediction": p,
             "instances": instances,
+            "mask_scores": mask_scores,
+            "K": K,
         }
 
     def cup_centres_world(self, g):
@@ -242,15 +261,34 @@ class SuctionModel(object):
         ax[0].imshow(img)
         inst = g.get("instances")
         if inst is not None and inst.shape == img.shape[:2]:
-            ax[0].imshow(np.ma.masked_where(inst == 0, inst % 20), cmap="tab20", vmin=0, vmax=19, alpha=0.45)
+            # tab20's even entries (blue, orange, green, red, ...): neighbouring ids get clearly
+            # different colours, not two shades of one.
+            shade = (2 * (inst.astype(np.int32) - 1)) % 20
+            ax[0].imshow(np.ma.masked_where(inst == 0, shade), cmap="tab20", vmin=0, vmax=19, alpha=0.45)
+            # Each mask in its own colour: outline, dashed bounding box, and its id (1 = most
+            # confident) with the segmentation confidence.
+            tab20 = plt.get_cmap("tab20")
+            scores = g.get("mask_scores") or []
+            for k in range(1, int(inst.max()) + 1):
+                on = inst == k
+                if not on.any():
+                    continue
+                c = tab20(((2 * (k - 1)) % 20) / 19.0)
+                ys, xs = np.nonzero(on)
+                ax[0].contour(on, levels=[0.5], colors=[c], linewidths=1.2)
+                ax[0].add_patch(plt.Rectangle((xs.min() - 0.5, ys.min() - 0.5), xs.max() - xs.min() + 1,
+                                              ys.max() - ys.min() + 1, fill=False, ec=c, lw=1.5, ls="--"))
+                text = "%d" % k if k > len(scores) else "%d: %.2f" % (k, scores[k - 1])
+                ax[0].text(xs.min(), ys.min() - 2, text, color="black", fontsize=9, va="bottom",
+                           bbox=dict(boxstyle="square,pad=0.15", fc=c, ec="none", alpha=0.9))
         for centre in self.cup_centres_world(g):
             u, v, z = self.project(centre, K)
             ax[0].add_patch(Circle((u, v), self.cup_radius * K[0, 0] / z, fill=False, ec=col, lw=2.5))
         if self.crop is not None and img.shape[:2] == self.full_shape:
             x0, y0, x1, y1 = self.crop
             ax[0].add_patch(plt.Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec="yellow", lw=1, ls="--"))
-        ax[0].set_title("camera (dataset window dashed)" if g.get("n_masks") is None
-                        else "camera, %d masks (dataset window dashed)" % g["n_masks"])
+        ax[0].set_title("camera (dataset window: yellow dashed)" if g.get("n_masks") is None
+                        else "camera, %d masks: id: confidence (dataset window: yellow dashed)" % g["n_masks"])
 
         def shown(a):
             return a[::-1, ::-1] if self.rot180 else a
@@ -298,7 +336,11 @@ class SuctionGraspPlanner(object):
             seg_model=rospy.get_param("~seg_model", "RFDETRSegLarge"),
             seg_threshold=float(rospy.get_param("~seg_threshold", 0.5)),
             seg_trim_top=int(rospy.get_param("~seg_trim_top", 16)),
-            seg_trim_sides=int(rospy.get_param("~seg_trim_sides", 16)))
+            seg_trim_sides=int(rospy.get_param("~seg_trim_sides", 16)),
+            calibrated_intrinsics=bool(rospy.get_param("~calibrated_intrinsics", True)))
+        if self._model.K_cal is not None:
+            rospy.loginfo("Intrinsics: calibrated fx %.1f px (the request's K is used only for other "
+                          "frame sizes)", self._model.K_cal[0, 0])
         rospy.loginfo("Model %s on %s; grid %dx%d cells of %.1f mm, cup angles %s, frame %s",
                       self._model.checkpoint_info, self._model.device,
                       self._model.grid.shape[1], self._model.grid.shape[0],
@@ -314,6 +356,7 @@ class SuctionGraspPlanner(object):
             "seg_threshold": float(rospy.get_param("~seg_threshold", 0.5)),
             "seg_trim_top": int(rospy.get_param("~seg_trim_top", 16)),
             "seg_trim_sides": int(rospy.get_param("~seg_trim_sides", 16)),
+            "calibrated_intrinsics": self._model.K_cal is not None,
         }
 
         # Diagnostic panels, opt-in like the DexNet planner's affordance panels (same env
@@ -437,17 +480,19 @@ class SuctionGraspPlanner(object):
                     "score": g["score"], "seal": g["seal"], "hold": g["hold"], "access": g["access"],
                     "angle_deg": g["angle_deg"], "tilt_deg": g["tilt_deg"], "cell": list(g["cell"]),
                     "world_xyz": [float(v) for v in g["world_xyz"]], "center_px": list(g["center_px"]),
-                    "unseen": g["unseen"], "n_masks": g["n_masks"], "accepted": not rejected,
+                    "unseen": g["unseen"], "n_masks": g["n_masks"], "mask_scores": g["mask_scores"], "accepted": not rejected,
                     "plan_time_s": elapsed})
             except Exception as exc:  # noqa: BLE001
                 rospy.logwarn("Could not save grasp result: %s", exc)
 
+        panel = ""
         if base and color is not None:
             try:
                 out = base + ".png"
-                self._model.save_panel(out, g, color, K, "call %04d @ %s  %s  %s  (%.2fs)" % (
+                self._model.save_panel(out, g, color, g["K"], "call %04d @ %s  %s  %s  (%.2fs)" % (
                     self._panel_n, stamp, "ACCEPTED" if not rejected else "REJECTED", summary, elapsed))
                 rospy.loginfo("Grasp panel: %s", out)
+                panel = out
             except Exception as exc:  # noqa: BLE001 - a diagnostic must never fail a pick
                 rospy.logwarn("Could not write grasp panel: %s", exc)
 
@@ -462,7 +507,8 @@ class SuctionGraspPlanner(object):
                 msg, False, "score %.4f below threshold %.3f" % (g["score"], self._min_score))
         rospy.loginfo("Planned suction grasp %s at px (%.0f, %.0f) in %.3fs",
                       summary, msg.center_px[0], msg.center_px[1], elapsed)
-        return PlanDexnetGraspResponse(msg, True, "")
+        # On success the message names the panel, if one was written (grasp_test.py prints it).
+        return PlanDexnetGraspResponse(msg, True, panel and "panel: " + panel)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,99 @@
+{
+ "args": {
+  "dataset": "data/coco/deformables_v1_seg_val335",
+  "tag": "rgbd_v3_deformables",
+  "out": "runs/seg/rgbd_v3_deformables",
+  "model": "large",
+  "init": "runs/seg/rgbd_v2/checkpoint_best_total.pth",
+  "epochs": 15,
+  "batch_size": 4,
+  "grad_accum": 4,
+  "lr": 5e-05,
+  "lr_encoder": 7.5e-05,
+  "depth_lr": 7.5e-05,
+  "depth_dropout": 0.3,
+  "no_height_aug": false,
+  "lr_scheduler": "cosine",
+  "warmup_epochs": 1.0,
+  "resolution": null,
+  "num_workers": 2,
+  "eval_interval": 2,
+  "patience": null,
+  "resume": null,
+  "seed": 0
+ },
+ "model_class": "RFDETRSegLarge",
+ "input": {
+  "channels": [
+   "r",
+   "g",
+   "b",
+   "height_above_table",
+   "valid_depth"
+  ],
+  "height_range_m": [
+   -0.05,
+   0.45
+  ],
+  "mean": [
+   0.485,
+   0.456,
+   0.406,
+   0.25,
+   0.5
+  ],
+  "std": [
+   0.229,
+   0.224,
+   0.225,
+   0.25,
+   0.5
+  ],
+  "depth_dropout": 0.3,
+  "height_aug": {
+   "holes_p": 0.5,
+   "holes_count": [
+    1,
+    4
+   ],
+   "hole_area_px": [
+    50.0,
+    2000.0
+   ],
+   "hole_on_object_p": 0.8,
+   "tilt_p": 0.5,
+   "tilt_mm": 8.0,
+   "warp_mm": 3.0,
+   "speckle_p": 0.5,
+   "speckle_mm": 1.5
+  }
+ },
+ "rfdetr_version": "unknown",
+ "dataset": {
+  "train": {
+   "images": 8501,
+   "masks": 73743,
+   "classes": [
+    "object"
+   ]
+  },
+  "valid": {
+   "images": 335,
+   "masks": 3068,
+   "classes": [
+    "object"
+   ]
+  },
+  "test": {
+   "images": 495,
+   "masks": 4465,
+   "classes": [
+    "object"
+   ]
+  }
+ },
+ "git_commit": "baaca473dc464a0d89f6a2ffc2d591d22053daf7+dirty",
+ "started": "2026-10-27T11:31:55",
+ "finished": "2026-10-27T12:55:34",
+ "train_seconds": 5018.2
+}

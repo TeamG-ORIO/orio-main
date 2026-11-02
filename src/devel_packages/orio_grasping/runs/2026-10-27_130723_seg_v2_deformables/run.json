@@ -1,0 +1,204 @@
+{
+ "started": "2026-10-27T13:07:34-04:00",
+ "git_commit": "baaca473dc464a0d89f6a2ffc2d591d22053daf7+dirty",
+ "args": {
+  "data": "[PosixPath('data/2026-10-26_223959_deformables_v1_grasp')]",
+  "out": "/home/orio/orio-grasping/runs/2026-10-27_130723_seg_v2_deformables",
+  "tag": "seg_v2_deformables",
+  "config": "None",
+  "epochs": "60",
+  "batch_size": "None",
+  "workers": "None",
+  "encoder": "None",
+  "channels": "['height', 'normals', 'unseen', 'seg']",
+  "from_scratch": "False",
+  "device": "cuda",
+  "overfit": "0",
+  "resume": "None"
+ },
+ "train_cfg": {
+  "channels": [
+   "height",
+   "normals",
+   "unseen",
+   "seg"
+  ],
+  "height_scale": 0.1,
+  "encoder": "resnet34",
+  "encoder_weights": "imagenet",
+  "decoder_channels": [
+   256,
+   128,
+   64,
+   32,
+   16
+  ],
+  "refine_channels": 32,
+  "batch_size": 16,
+  "epochs": 60,
+  "lr_encoder": 0.0003,
+  "lr_decoder": 0.001,
+  "weight_decay": 0.0001,
+  "warmup_epochs": 1.0,
+  "amp": "bf16",
+  "num_workers": 8,
+  "loss": "bce",
+  "focal_gamma": 2.0,
+  "pos_weight_max": 1.0,
+  "head_weights": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "success_threshold": 0.5,
+  "val_fraction": 0.1,
+  "test_fraction": 0.05,
+  "online_augment": true,
+  "symmetries": "all",
+  "val_augmented": false,
+  "log_images": 4,
+  "debug_plot_every": 2500,
+  "debug_plot_scenes": 20,
+  "debug_plot_split": "test",
+  "seed": 0
+ },
+ "label_info": {
+  "seal_factors": {
+   "interlink_system": 1.0,
+   "pump_infusion_set": 1.0,
+   "dextrose_bag": 1.0
+  },
+  "heads": [
+   "seal",
+   "hold",
+   "access"
+  ],
+  "angles_deg": [
+   0.0,
+   90.0
+  ],
+  "grid": {
+   "x_range": [
+    -0.707,
+    -0.014
+   ],
+   "y_range": [
+    -0.85,
+    -0.255
+   ],
+   "cell": 0.002,
+   "shape": [
+    298,
+    346
+   ],
+   "axes": "col along world -x, row along world +y"
+  },
+  "cup_radius": 0.015875,
+  "cup_spacing": 0.03302,
+  "config": {
+   "angles_deg": [
+    0.0,
+    90.0
+   ],
+   "seal_margin": 0.006,
+   "min_seen_fraction": 0.5,
+   "hold_sigma": 0.02,
+   "hold_along_ratio": 2.0,
+   "cover_tolerance": 0.1,
+   "max_tilt_deg": 35.0,
+   "deformable_seal": "edge",
+   "flat_rms": [
+    0.0008,
+    0.002
+   ],
+   "flat_angle_deg": [
+    10.0,
+    30.0
+   ]
+  },
+  "covered": {
+   "1": 0.0,
+   "2": 0.14314607669129484,
+   "3": 1.0,
+   "4": 0.0,
+   "5": 0.0,
+   "6": 0.0
+  }
+ },
+ "data": [
+  "data/2026-10-26_223959_deformables_v1_grasp"
+ ],
+ "num_scenes": {
+  "train": 8487,
+  "val": 1022,
+  "all": 10000
+ },
+ "online_symmetries": [
+  [
+   0,
+   false
+  ],
+  [
+   1,
+   false
+  ],
+  [
+   2,
+   false
+  ],
+  [
+   3,
+   false
+  ],
+  [
+   0,
+   true
+  ],
+  [
+   1,
+   true
+  ],
+  [
+   2,
+   true
+  ],
+  [
+   3,
+   true
+  ]
+ ],
+ "n_angles": 2,
+ "angles_deg": [
+  0.0,
+  90.0
+ ],
+ "input_size": 352,
+ "pos_weight": {
+  "seal": 1.0,
+  "hold": 1.0,
+  "access": 1.0
+ },
+ "debug_scenes": [
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_010528",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_012218",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_012731",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_013279",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_013732",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_014038",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_014222",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_014474",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_015199",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_015244",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_015425",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_016153",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_017792",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_018145",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_018644",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_018767",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_019158",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_019191",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_019506",
+  "data/2026-10-26_223959_deformables_v1_grasp/scene_019588"
+ ],
+ "parameters": 24468325
+}

@@ -1,0 +1,6 @@
+numpy
+opencv-python-headless
+scipy
+scikit-image        # only for current_opt_label_location.py (the baseline)
+rapidocr==3.10.0    # text detector wrapper (PP-OCRv5 models download on first use)
+onnxruntime         # or onnxruntime-gpu for the text detector on a GPU

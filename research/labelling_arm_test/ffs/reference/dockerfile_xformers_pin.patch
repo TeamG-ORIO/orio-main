@@ -1,0 +1,15 @@
+diff --git a/docker/dockerfile b/docker/dockerfile
+index 25cd557..72365cc 100755
+--- a/docker/dockerfile
++++ b/docker/dockerfile
+@@ -26,7 +26,9 @@ RUN conda init bash &&\
+     echo "conda activate my" >> ~/.bashrc &&\
+     conda activate my &&\
+     pip install uv &&\
+-    uv pip install torch==2.6.0 torchvision==0.21.0 xformers --index-url https://download.pytorch.org/whl/cu124
++    # ORIO fix: pin xformers, else the resolver pulls torch 2.14 and breaks
++    # torchvision 0.21 ("operator torchvision::nms does not exist"). See ORIO_QUICKSTART.md.
++    uv pip install torch==2.6.0 torchvision==0.21.0 xformers==0.0.29.post3 --index-url https://download.pytorch.org/whl/cu124
+ 
+ COPY requirements.txt /tmp/requirements.txt
+ RUN conda activate my &&\

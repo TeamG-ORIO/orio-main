@@ -1,0 +1,226 @@
+# Settings for the Orio grasp-data simulation. Every script reads this file when it exists at
+# the repository root (or another file given with --config). Values here override the defaults
+# in orio_grasping/config.py; the sections and keys are the fields of its dataclasses, and any
+# other field can be added under its section. Lists stand for tuples, "" stands for None.
+# Units: metres, kilograms, degrees where the key says so. Command-line flags such as
+# --num-envs still win over this file.
+
+# top-level settings (must stay above the first [section])
+texture_dir = "assets/textures"
+table_texture = "assets/workcell/table_color.jpg"   # bare table top (no cloth since 2026-10-07); "" for a plain dark table
+table_tile_size = 0.41
+table_tint = 0.5                # darkens the table texture (the phone's HDR lifted it); see fit_color_calibration.py
+
+# ---------------------------------------------------------------------------------------------
+# Objects: random cardboard boxes mixed with the real items in assets/items/catalog.json
+# ---------------------------------------------------------------------------------------------
+[boxes]
+catalog_ratio = 1.0            # probability that a box slot is a real catalog item (0 = random boxes only, 1 = catalog only)
+catalog_path = "assets/items/catalog.json"
+object_mix = [0.2, 0.1, 0.7] # shares of [boxes, pouches, imported objects] per body slot, normalised; 0 turns a type
+                               # off. Boxes split into catalog and random boxes by catalog_ratio. [1, 0, 0] gives the
+                               # same scenes as before pouches and imported objects existed
+homogeneous_fraction = 0.3     # environments whose every slot is a copy of one item (a bin of one product); the
+                               # rest draw each slot independently. 0 = off
+homogeneous_size_jitter = 0.02 # +- relative size of copies of a random cardboard box (real items are exact copies)
+pouch_catalog_path = "assets/pouches/catalog.json"
+pouch_shapes_path = "assets/pouch_shapes/shapes.json"
+imported_catalog_path = "assets/imported/catalog.json"   # scripts/fetch_imported_objects.py
+length_range = [0.05, 0.30]    # random boxes, metres, sampled uniformly
+width_range = [0.05, 0.30]
+height_range = [0.005, 0.05]
+density_range = [100.0, 500.0] # kg/m^3, mass follows from the dimensions
+static_friction = 0.5
+dynamic_friction = 0.5
+friction_range = [0.3, 0.8]    # per body, static = dynamic, drawn at stage build (replaces the two above); "" = fixed
+restitution = 0.0
+max_per_env = 50               # box bodies that exist per environment (sizes drawn at stage build); each scene drops a
+                               # random subset of them, so this must be >= pile.count_range[1]; more gives scenes from
+                               # the same stage less overlap
+texture_tile_size = 0.3        # metres covered by one cardboard texture repeat on random boxes
+item_tint_min = 0.85           # catalog items get a random brightness tint in [item_tint_min, 1]
+
+# ---------------------------------------------------------------------------------------------
+# Pile: how boxes are dropped and when the pile counts as settled
+# ---------------------------------------------------------------------------------------------
+[pile]
+count_range = [1, 20]          # boxes dropped per scene, inclusive; at most boxes.max_per_env
+drop_height = 0.15             # release height above the table top (or walls / pile)
+drop_batch = 2                 # boxes released together
+drop_spacing = 0.35            # vertical spacing within a batch
+drop_interval_steps = 45       # simulation steps between batches
+random_orientation = true
+redrop_passes = 1              # boxes that leave the bin region are dropped again this many times, then culled
+settle_steps_max = 600
+settle_check_interval = 10
+settle_pos_tol = 0.001         # metres of motion between checks for "still"
+settle_rot_tol = 0.005         # radians
+settle_quiet_checks = 2
+render_warmup_steps = 4
+arranged_fraction = 0.0        # share of scenes laid flat in rows with narrow gaps instead of dropped (orio_grasping/arrange.py);
+                               # for a run of only those: generate_dataset.py --set pile.arranged_fraction=1.0
+arranged_gap_m = [0.005, 0.06] # gap between neighbours, log-uniform per scene
+arranged_yaw_jitter_deg = 4.0
+arranged_margin_m = 0.015      # keep this far inside the bin region
+
+# ---------------------------------------------------------------------------------------------
+# Sim-to-real randomization (orio_grasping/variation.py): per-scene variation around the
+# calibrated camera, lights, table, depth sensor and colour response. Every sampled value goes to
+# meta.json under "randomization". See RandomizationCfg in orio_grasping/config.py for every key;
+# scripts/show_randomization.py renders a contact sheet of each one.
+# ---------------------------------------------------------------------------------------------
+[randomization]
+enabled = true
+nominal_fraction = 0.15        # capture rounds rendered with everything at its calibrated value
+camera_position_radius = 0.008 # m, uniform in a ball (calibrations differ by up to 15.7 mm)
+camera_rotation_deg = 0.5      # tilt about the image x and y axes (captures agree to 0.4 deg)
+camera_roll_deg = 1.5          # about the optical axis (real near table edge is 1.2 deg off the calibrated one)
+focal_scale = 0.02             # +-2% focal length
+principal_point_px = 6.0
+distortion_k1 = 0.02
+dome_intensity_scale = 0.25    # per capture round (the dome is shared by all environments)
+color_temperature_k = [5000.0, 8000.0]   # per round, 6500 K = calibrated look; narrow it if the lab lighting never changes
+ceiling_scale_range = [0.7, 1.8]   # ceiling light strength; skewed up because the real glare saturates
+occluder_probability = 0.25    # person-sized box beside the table, shading the bin from the dome
+depth_scale_rel = 0.02         # about the table depth (the 4% scale ambiguity, docs/TODO.md)
+depth_offset_m = 0.005
+depth_rgb_shift_px = 2
+color_gain = 0.08              # per channel: white balance / auto exposure drift
+rgb_noise_std = [1.0, 3.0]
+blur_sigma = [0.0, 0.6]        # the real items show more fine detail than the calibrated render
+
+# ---------------------------------------------------------------------------------------------
+# What each scene folder contains
+# ---------------------------------------------------------------------------------------------
+[outputs]
+rgb = true                     # rgb.png (after the Xtion colour calibration)
+rgb_raw = false                # also keep the render before the colour calibration
+depth = true                   # depth.png, uint16 in 0.1 mm steps
+point_cloud = false            # points.npy (3.7 MB per scene); dataset.point_cloud(depth, K) rebuilds it exactly
+segmentation = true            # seg.png
+ground_truth = true            # meta.json
+preview = true                 # preview.png: rgb and depth side by side
+workers = 4                    # background processes that apply the sensor models and encode the PNGs (0.3 s of CPU
+                               # per scene) while the simulator runs the next round; 0 does it in the simulator process
+
+# ---------------------------------------------------------------------------------------------
+# Simulation
+# ---------------------------------------------------------------------------------------------
+[sim]
+num_envs = 16                  # parallel environments per stage; the drop-and-settle physics costs about the same
+                               # per round whatever the count, so more is faster until GPU memory runs out
+device = "cuda:0"
+env_spacing = 10.0             # >= 8 m keeps each environment's ceiling-light cone off its neighbours' tables
+dt = 0.008333333333333333      # 1/120 s
+
+# ---------------------------------------------------------------------------------------------
+# Camera (Asus Xtion). Pose and FOV come from assets/calibration/xtion_pose.json; set
+# pose_calibration = "" to fall back to the MuJoCo placement, or give position / look_at /
+# up_hint / hfov_deg here to override the calibration.
+# ---------------------------------------------------------------------------------------------
+[camera]
+pose_calibration = "assets/calibration/xtion_pose.json"
+color_calibration = "assets/calibration/xtion_color.json"   # "" disables the Xtion colour response
+depth_noise = "assets/calibration/xtion_depth_noise.json"   # fitted sensor model applied to depth.png ("" = exact depth only)
+depth_noise_dropout = true     # include the model's invalid pixels (side-face and shadow dropout, sensor border)
+width = 640
+height = 480
+depth_range = [0.8, 3.5]       # the real sensor's nominal range, recorded in meta.json
+clip_to_depth_range = false    # true writes simulated depth outside that range as invalid (0); false keeps every pixel
+crop = "table"                 # "table": write the largest rectangle showing only table top (K shifted, box recorded in
+                               # meta.json); "none": the full 640 x 480 frame
+crop_inset_px = 0              # shrink that rectangle by this many pixels per side (table edges are known to about 6 px)
+
+# ---------------------------------------------------------------------------------------------
+# Workcell
+# ---------------------------------------------------------------------------------------------
+[bin]
+# Region of the table top where boxes are piled, metres in the workcell frame (+y toward the
+# robot, +x toward the image left). Set 2026-10-06 to the largest table rectangle that lies
+# inside the dataset crop (camera.crop = "table", back-projected with the calibrated camera), so
+# everything released in the bin is in the image; the two are otherwise independent, re-run
+# scripts/draw_bin_region.py to see both. y_max was then moved in (2026-10-09) so the bin's robot-side
+# edge, and its wall, sits 3 in from the bottom of the image (at the centre column), matching the
+# real bin. The measured bin (bin-dim.jpeg) was the full table width (x [-0.711, 0]) from the near
+# edge (y -0.857) to 12 in in front of the arm base (y -0.400).
+x_min = -0.707
+x_max = -0.014
+y_min = -0.850
+y_max = -0.255
+edge_buffer = 0.10             # metres inside the bin region's edges within which no box is released
+cull_rule = "table"            # which settled boxes get re-dropped then removed: "table" = only boxes that left the
+                               # table top; "centre" = also those whose centre is in the buffer; "footprint" = also
+                               # those whose footprint touches the buffer (strict, culls most of a pile of big items)
+walls = true                   # four walls around the region, standing just outside its edges
+wall_height = 0.15
+wall_thickness = 0.01           # guess, see docs/TODO.md
+
+[crossbar]
+enabled = true                 # crossbar and camera housing above the table (never in view)
+
+[robot.ee]
+cup_radius = 0.015875          # 1 1/4 in (31.75 mm) diameter cups, measured
+cup_spacing = 0.03302          # centre to centre, about 1.3 in, measured
+cup_height = 0.02
+cup_axis_angle_deg = 0.0
+
+[table]
+top_z = 0.9                    # table top height above the floor
+
+# ---------------------------------------------------------------------------------------------
+# Height map: depth image -> top-down grid (orio_grasping/heightmap.py, docs/HEIGHTMAP_AND_LABELS.md)
+# ---------------------------------------------------------------------------------------------
+[heightmap]
+cell_size = 0.002              # metres per cell; the Xtion sees about 1.7 mm per pixel on the table
+x_range = ""                   # world x extent of the map, [min, max]; "" = the scene's bin region
+y_range = ""                   # world y extent, [min, max]; "" = the scene's bin region
+max_height = ""                # cap on heights above the table, metres; "" = no cap
+gap_min_neighbours = 5         # empty cells with at least this many of 8 measured neighbours take their median
+normal_radius = 0.016          # radius of the disc each cell's normal is fitted over
+
+# ---------------------------------------------------------------------------------------------
+# Labels: per cell and cup angle, seal / hold / access in [0, 1] (orio_grasping/labels.py).
+# Cup radius and spacing come from [robot.ee]. See docs/HEIGHTMAP_AND_LABELS.md.
+# ---------------------------------------------------------------------------------------------
+[labels]
+angles_deg = [0.0, 90.0]       # cup-line directions, degrees from world +x toward +y (modulo 180)
+seal_margin = 0.006            # seal rises from 0 (a cup rim touches a face edge) to 1 at this much slack
+min_seen_fraction = 0.5        # seal x visibility: 0 when at most this much of the cup footprints was measured, 1 when all
+hold_sigma = 0.02              # hold = exp(-d_eff^2 / 2 sigma^2), d_eff = box centre's offset from the grasp axis
+hold_along_ratio = 2.0         # offset along the cup line counts this many times less than across it; 1 + spacing / (2 cup radius) = 2.04
+cover_tolerance = 0.10         # a box is covered (access 0) when more than this fraction of its outline is under another
+max_tilt_deg = 35.0            # access tilt term 1 - (tilt / max_tilt)^2 reaches 0 here (arm IK and workspace limits)
+
+# ---------------------------------------------------------------------------------------------
+# Suction network and training (orio_grasping/model.py, scripts/train.py)
+# ---------------------------------------------------------------------------------------------
+[train]
+channels = ["height", "normals", "unseen"]   # network input; ["height", "unseen"] is the first ablation
+height_scale = 0.1             # heights (m) are divided by this inside the model; fixed, never per image
+encoder = "resnet34"           # any segmentation_models_pytorch encoder: resnet18, resnet50, tu-<timm name>, ...
+encoder_weights = "imagenet"   # "" trains the encoder from scratch (compare both on the pilot set)
+decoder_channels = [256, 128, 64, 32, 16]
+refine_channels = 32           # full-resolution block on decoder output + raw input (edge precision)
+batch_size = 16
+epochs = 100                   # one cosine schedule over the whole run; the first run plateaued by about epoch 55
+lr_encoder = 3e-4
+lr_decoder = 1e-3
+weight_decay = 1e-4
+warmup_epochs = 1.0            # then cosine decay to 0
+amp = "bf16"                   # "" for float32
+num_workers = 8
+loss = "bce"                   # "bce" or "focal"
+focal_gamma = 2.0
+pos_weight_max = 1.0           # positives weighted by negative / positive count per head, capped here; 1 disables
+head_weights = [1.0, 1.0, 1.0] # seal, hold, access
+success_threshold = 0.5        # top-1 grasp counts as good when its label seal x hold x access >= this
+val_fraction = 0.1
+test_fraction = 0.05
+online_augment = true          # random rotation / flip of each training sample at load time; offline copies are then skipped
+symmetries = "all"             # online augmentation draws from: "all" (8 symmetries), "rotations" (4) or "none"
+val_augmented = false          # true: validate on augmented copies too; false: original val scenes only (augment_dataset.py then skips val / test)
+log_images = 4
+debug_plot_every = 2500        # optimiser steps between debug plots of fixed scenes (runs/<run>/debug/); 0 = off
+debug_plot_scenes = 20         # fixed scenes in those plots, drawn once with seed
+debug_plot_split = "test"      # split they come from: "test" or "val" (original scenes only; never used for checkpoint choice)
+seed = 0

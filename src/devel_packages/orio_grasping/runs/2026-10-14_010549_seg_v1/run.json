@@ -1,0 +1,194 @@
+{
+ "started": "2026-10-14T01:05:49-04:00",
+ "git_commit": "99f7db39526ffdd1e3884607efcf1fbc7fc113a3",
+ "args": {
+  "data": "[PosixPath('/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1')]",
+  "out": "/mnt/Shared/orio-grasping/runs/orionet/seg_v1",
+  "tag": "seg_v1",
+  "config": "None",
+  "epochs": "60",
+  "batch_size": "None",
+  "workers": "None",
+  "encoder": "None",
+  "channels": "['height', 'normals', 'unseen', 'seg']",
+  "from_scratch": "False",
+  "device": "cuda",
+  "overfit": "0",
+  "resume": "None"
+ },
+ "train_cfg": {
+  "channels": [
+   "height",
+   "normals",
+   "unseen",
+   "seg"
+  ],
+  "height_scale": 0.1,
+  "encoder": "resnet34",
+  "encoder_weights": "imagenet",
+  "decoder_channels": [
+   256,
+   128,
+   64,
+   32,
+   16
+  ],
+  "refine_channels": 32,
+  "batch_size": 16,
+  "epochs": 60,
+  "lr_encoder": 0.0003,
+  "lr_decoder": 0.001,
+  "weight_decay": 0.0001,
+  "warmup_epochs": 1.0,
+  "amp": "bf16",
+  "num_workers": 8,
+  "loss": "bce",
+  "focal_gamma": 2.0,
+  "pos_weight_max": 1.0,
+  "head_weights": [
+   1.0,
+   1.0,
+   1.0
+  ],
+  "success_threshold": 0.5,
+  "val_fraction": 0.1,
+  "test_fraction": 0.05,
+  "online_augment": true,
+  "symmetries": "all",
+  "val_augmented": false,
+  "log_images": 4,
+  "debug_plot_every": 2500,
+  "debug_plot_scenes": 20,
+  "debug_plot_split": "test",
+  "seed": 0
+ },
+ "label_info": {
+  "heads": [
+   "seal",
+   "hold",
+   "access"
+  ],
+  "angles_deg": [
+   0.0,
+   90.0
+  ],
+  "grid": {
+   "x_range": [
+    -0.707,
+    -0.014
+   ],
+   "y_range": [
+    -0.85,
+    -0.255
+   ],
+   "cell": 0.002,
+   "shape": [
+    298,
+    346
+   ],
+   "axes": "col along world -x, row along world +y"
+  },
+  "cup_radius": 0.015875,
+  "cup_spacing": 0.03302,
+  "config": {
+   "angles_deg": [
+    0.0,
+    90.0
+   ],
+   "seal_margin": 0.006,
+   "min_seen_fraction": 0.5,
+   "hold_sigma": 0.02,
+   "hold_along_ratio": 2.0,
+   "cover_tolerance": 0.1,
+   "max_tilt_deg": 35.0
+  },
+  "covered": {
+   "1": 0.0,
+   "2": 0.0008665511265164644,
+   "3": 0.0,
+   "4": 0.0,
+   "5": 0.0008718395815170009,
+   "6": 0.0008665511265164644,
+   "7": 0.0,
+   "8": 0.0,
+   "9": 0.0,
+   "10": 0.001736111111111111
+  }
+ },
+ "data": [
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1"
+ ],
+ "num_scenes": {
+  "train": 8508,
+  "val": 986,
+  "all": 10000
+ },
+ "online_symmetries": [
+  [
+   0,
+   false
+  ],
+  [
+   1,
+   false
+  ],
+  [
+   2,
+   false
+  ],
+  [
+   3,
+   false
+  ],
+  [
+   0,
+   true
+  ],
+  [
+   1,
+   true
+  ],
+  [
+   2,
+   true
+  ],
+  [
+   3,
+   true
+  ]
+ ],
+ "n_angles": 2,
+ "angles_deg": [
+  0.0,
+  90.0
+ ],
+ "input_size": 352,
+ "pos_weight": {
+  "seal": 1.0,
+  "hold": 1.0,
+  "access": 1.0
+ },
+ "debug_scenes": [
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_000647",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_002649",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_003104",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_003672",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_003961",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_004144",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_004383",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_004728",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_004788",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_005017",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_005857",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_007560",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_007879",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_008367",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_008554",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_008961",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_008962",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_009265",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_009741",
+  "/mnt/Shared/orio-grasping/data/2026-10-13_grasp_v1/scene_009759"
+ ],
+ "parameters": 24468325
+}

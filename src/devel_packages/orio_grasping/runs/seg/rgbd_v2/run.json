@@ -1,0 +1,99 @@
+{
+ "args": {
+  "dataset": "/mnt/Shared/orio-grasping/coco/set_v1_arranged",
+  "tag": "rgbd_v2",
+  "out": "/mnt/Shared/orio-grasping/runs/seg/rgbd_v2",
+  "model": "large",
+  "init": null,
+  "epochs": 30,
+  "batch_size": 4,
+  "grad_accum": 4,
+  "lr": 0.0001,
+  "lr_encoder": 0.00015,
+  "depth_lr": 0.00015,
+  "depth_dropout": 0.3,
+  "no_height_aug": false,
+  "lr_scheduler": "cosine",
+  "warmup_epochs": 1.0,
+  "resolution": null,
+  "num_workers": 8,
+  "eval_interval": 2,
+  "patience": null,
+  "resume": null,
+  "seed": 0
+ },
+ "model_class": "RFDETRSegLarge",
+ "input": {
+  "channels": [
+   "r",
+   "g",
+   "b",
+   "height_above_table",
+   "valid_depth"
+  ],
+  "height_range_m": [
+   -0.05,
+   0.45
+  ],
+  "mean": [
+   0.485,
+   0.456,
+   0.406,
+   0.25,
+   0.5
+  ],
+  "std": [
+   0.229,
+   0.224,
+   0.225,
+   0.25,
+   0.5
+  ],
+  "depth_dropout": 0.3,
+  "height_aug": {
+   "holes_p": 0.5,
+   "holes_count": [
+    1,
+    4
+   ],
+   "hole_area_px": [
+    50.0,
+    2000.0
+   ],
+   "hole_on_object_p": 0.8,
+   "tilt_p": 0.5,
+   "tilt_mm": 8.0,
+   "warp_mm": 3.0,
+   "speckle_p": 0.5,
+   "speckle_mm": 1.5
+  }
+ },
+ "rfdetr_version": "unknown",
+ "dataset": {
+  "train": {
+   "images": 9307,
+   "masks": 87587,
+   "classes": [
+    "object"
+   ]
+  },
+  "valid": {
+   "images": 1085,
+   "masks": 10271,
+   "classes": [
+    "object"
+   ]
+  },
+  "test": {
+   "images": 608,
+   "masks": 5758,
+   "classes": [
+    "object"
+   ]
+  }
+ },
+ "git_commit": "6234a5cf78da5c3f8875ee72da56040bee08c93d",
+ "started": "2026-10-13T12:37:10",
+ "finished": "2026-10-13T19:49:11",
+ "train_seconds": 25920.5
+}

@@ -1,0 +1,164 @@
+{
+ "position": [
+  -0.34976,
+  -0.57207,
+  1.86742
+ ],
+ "look_at": [
+  -0.34805,
+  -0.59666,
+  0.9
+ ],
+ "up_hint": [
+  -0.017665,
+  -0.999522,
+  0.025375
+ ],
+ "hfov_deg": 60.4069,
+ "K": [
+  [
+   549.738,
+   0.0,
+   319.5
+  ],
+  [
+   0.0,
+   549.738,
+   239.5
+  ],
+  [
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "K_saved_by_capture_tool": [
+  [
+   570.342,
+   0.0,
+   319.5
+  ],
+  [
+   0.0,
+   570.342,
+   239.5
+  ],
+  [
+   0.0,
+   0.0,
+   1.0
+  ]
+ ],
+ "tape_distance_m": null,
+ "depth_scale": 1.0,
+ "source": "scripts/calibrate_camera_from_depth.py on the 2026-10-07 bare-table captures (table plane, near edge and both side edges from depth; averaged over the captures); focal length from the 28 in table width; depth scale assumed 1 (no tape measurement yet)",
+ "checks": {
+  "max_position_deviation_mm": 3.9,
+  "max_axis_deviation_deg": 0.408,
+  "table_width_from_sides_m": 0.7112,
+  "previous_position": [
+   -0.36294,
+   -0.58055,
+   1.86739
+  ],
+  "moved_from_previous_mm": 15.7,
+  "per_capture": {
+   "20261007_153140": {
+    "camera_height_m": 0.9701,
+    "plane_residual_std_mm": 6.5916,
+    "sides_from_parallel_deg": 2.3334,
+    "near_edge_from_perpendicular_deg": 0.3623,
+    "table_width_from_sides_m": 0.7158,
+    "edge_pixels": {
+     "near": 172,
+     "right": 69,
+     "left": 71
+    }
+   },
+   "20261007_155344": {
+    "camera_height_m": 0.9669,
+    "plane_residual_std_mm": 5.8666,
+    "sides_from_parallel_deg": 0.4238,
+    "near_edge_from_perpendicular_deg": 1.354,
+    "table_width_from_sides_m": 0.711,
+    "edge_pixels": {
+     "near": 273,
+     "right": 76,
+     "left": 83
+    }
+   },
+   "20261007_155417": {
+    "camera_height_m": 0.967,
+    "plane_residual_std_mm": 5.841,
+    "sides_from_parallel_deg": 0.0472,
+    "near_edge_from_perpendicular_deg": 1.0248,
+    "table_width_from_sides_m": 0.7106,
+    "edge_pixels": {
+     "near": 276,
+     "right": 85,
+     "left": 83
+    }
+   },
+   "20261007_160843": {
+    "camera_height_m": 0.9674,
+    "plane_residual_std_mm": 6.3116,
+    "sides_from_parallel_deg": 0.2157,
+    "near_edge_from_perpendicular_deg": 0.5967,
+    "table_width_from_sides_m": 0.7106,
+    "edge_pixels": {
+     "near": 237,
+     "right": 82,
+     "left": 79
+    }
+   },
+   "20261007_160859": {
+    "camera_height_m": 0.9671,
+    "plane_residual_std_mm": 6.2787,
+    "sides_from_parallel_deg": 0.314,
+    "near_edge_from_perpendicular_deg": 1.0323,
+    "table_width_from_sides_m": 0.7103,
+    "edge_pixels": {
+     "near": 261,
+     "right": 84,
+     "left": 84
+    }
+   },
+   "20261007_160917": {
+    "camera_height_m": 0.9667,
+    "plane_residual_std_mm": 6.5478,
+    "sides_from_parallel_deg": 0.1067,
+    "near_edge_from_perpendicular_deg": 1.281,
+    "table_width_from_sides_m": 0.7107,
+    "edge_pixels": {
+     "near": 271,
+     "right": 78,
+     "left": 85
+    }
+   },
+   "20261007_160931": {
+    "camera_height_m": 0.967,
+    "plane_residual_std_mm": 6.2031,
+    "sides_from_parallel_deg": 0.5959,
+    "near_edge_from_perpendicular_deg": 0.9161,
+    "table_width_from_sides_m": 0.7094,
+    "edge_pixels": {
+     "near": 268,
+     "right": 78,
+     "left": 83
+    }
+   },
+   "20261007_160952": {
+    "camera_height_m": 0.9671,
+    "plane_residual_std_mm": 6.1875,
+    "sides_from_parallel_deg": 0.2639,
+    "near_edge_from_perpendicular_deg": 1.2127,
+    "table_width_from_sides_m": 0.7112,
+    "edge_pixels": {
+     "near": 263,
+     "right": 79,
+     "left": 82
+    }
+   }
+  }
+ }
+}

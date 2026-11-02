@@ -70,6 +70,38 @@ bash stop_dexnet_pnp.sh
 
 ---
 
+## `grasp_test.sh`
+
+Tests the grasp network on the robot without suction. It takes a camera picture, finds one
+grasp, and shows it on the picture. Press Enter and the arm moves to that spot. Press Enter
+again and the arm goes home, then it plans the next grasp. Type `r` to plan again or `q` to quit.
+It starts only what it needs. The camera stays on after you quit, so the next run uses it
+straight away. `bash stop_dexnet_pnp.sh` turns it off.
+
+Everything is saved in `data/grasp_test/<timestamp>/`: a picture of each grasp, a picture
+of where the arm went, the numbers for each try (`rounds.jsonl`) and the terminal output.
+
+```bash
+bash grasp_test.sh
+```
+
+| Option | Description |
+| --- | --- |
+| `--no-arm` | Only find and draw grasps. The robot is not used. |
+| `--hover` | Stop 10 cm above the grasp instead of touching it. |
+| `--straight-down` | Always come straight down. |
+| `--offset-x M`, `--offset-y M` | Move every grasp by this many metres before the arm goes there. |
+| `--min-q Q` | Lowest grasp score to try (default 0.30). |
+| `--max-tilt-deg D` | Steepest grasp to try (default 35). |
+| `--checkpoint TAG` | Which network to use (default `seg_v1`). |
+
+```bash
+bash grasp_test.sh --no-arm    # check the grasps first
+bash grasp_test.sh --hover     # then let the arm go above them
+```
+
+---
+
 ## `snap_xtion.sh`
 
 Saves one picture of what the Xtion camera sees right now. If a camera stack is already

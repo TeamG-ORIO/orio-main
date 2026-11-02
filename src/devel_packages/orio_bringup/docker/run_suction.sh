@@ -13,6 +13,8 @@
 #                        $ORIO_GRASPING/runs/seg/*/checkpoint_best_total.pth); ignored otherwise
 #   SUCTION_SEG_MODEL    RF-DETR size it was trained as (default RFDETRSegLarge)
 #   SUCTION_SEG_THRESHOLD  lowest mask confidence kept (default 0.5)
+#   SUCTION_NODE_NAME    ROS node name (default suction_grasp_planner); the service is
+#                        /<name>/plan_grasp, so a second planner can run beside the first
 #   SUCTION_IMAGE, SUCTION_CONTAINER_NAME
 set -euo pipefail
 
@@ -69,9 +71,10 @@ exec docker run -d --name "$NAME" --restart unless-stopped \
     -v "$CKPT:/opt/checkpoint.pt:ro" \
     "${SEG_ARGS[@]}" \
     -v "$REPO/logging:/home/ros_ws/logging" \
+    -v "$REPO/data:/home/ros_ws/data" \
     -v "$REPO/src/devel_packages/orio_bringup/docker/suction_grasp_planner.py:/opt/suction_grasp_planner.py:ro" \
     "$IMAGE" \
     python /opt/suction_grasp_planner.py _checkpoint:=/opt/checkpoint.pt \
         _min_score:="$MIN_SCORE" _rot180:="$ROT180_PARAM" \
         _seg_checkpoint:="$SEG_PARAM" _seg_model:="${SUCTION_SEG_MODEL:-RFDETRSegLarge}" \
-        _seg_threshold:="${SUCTION_SEG_THRESHOLD:-0.5}"
+        _seg_threshold:="${SUCTION_SEG_THRESHOLD:-0.5}" __name:="${SUCTION_NODE_NAME:-suction_grasp_planner}"
