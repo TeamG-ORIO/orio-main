@@ -136,12 +136,16 @@ class CombinedPerceptionNode:
         rospy.loginfo("Grasp backend: %s", self.grasp_backend)
         use_item_mask = (self.grasp_backend == 'dexnet'
                          and bool(rospy.get_param('~dexnet/item_mask/enabled', False)))
+        # ~load_labelling_models forces the SAM/GroundingDINO load even for a planner
+        # backend, so /compute_grasps_labelling works alongside it (the full demo picks
+        # with the planner AND labels). Set by run_full_demo.sh via run_perception.sh.
+        load_labelling = bool(rospy.get_param('~load_labelling_models', False))
         # Re-entrant: the DexNet branch holds it while _detect_and_segment takes it again.
         self._inference_lock = threading.RLock()
 
         # ── Load models once (skipped for the planner backends without the item mask)
         self.sam = self.predictor = self.gdino_model = self.gdino_transform = None
-        if self.grasp_backend not in PLANNER_BACKENDS or use_item_mask:
+        if self.grasp_backend not in PLANNER_BACKENDS or use_item_mask or load_labelling:
             rospy.loginfo("Loading AI Models (SAM & GroundingDINO)...")
             self.sam = sam_model_registry[MODEL_TYPE](checkpoint=SAM_CHECKPOINT)
             self.sam.to(device=device)
@@ -155,7 +159,7 @@ class CombinedPerceptionNode:
             rospy.loginfo("Models loaded.")
         else:
             rospy.loginfo("%s backend: skipping SAM/GroundingDINO load "
-                          "(no item mask).", self.grasp_backend)
+                          "(no item mask, no labelling).", self.grasp_backend)
 
         # ── Pick-and-place TF ─────────────────────────────────────────────────
         self.tf_pnp = self._load_tf(PNP_TF_YAML)
@@ -595,9 +599,10 @@ class CombinedPerceptionNode:
         """
         if self.gdino_model is None:
             raise RuntimeError(
-                "SAM/GroundingDINO were not loaded (grasp_backend=dexnet with "
-                "dexnet.item_mask.enabled off). The labelling/classical path needs "
-                "them; start perception with grasp_backend=classical to use it.")
+                "SAM/GroundingDINO were not loaded (planner backend without the item "
+                "mask or labelling). The labelling/classical path needs them; start "
+                "perception with load_labelling_models:=true (run_full_demo.sh does) "
+                "or grasp_backend=classical.")
         if color_img.shape[2] == 4:
             color_img = color_img[:, :, :3]
 

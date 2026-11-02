@@ -50,12 +50,14 @@ exec docker run --rm $TTY_FLAGS --name "$NAME" \
     --volume="$REPO/data:/home/ros_ws/data" \
     --volume="$REPO/logging:/home/ros_ws/logging" \
     ${BACKEND:+--env="ORIO_GRASP_BACKEND=$BACKEND"} \
+    --env="ORIO_LOAD_LABELLING_MODELS=${ORIO_LOAD_LABELLING_MODELS:-0}" \
     "$IMAGE" \
     bash -lc 'source /opt/ros/noetic/setup.bash \
         && source /home/ros_ws/devel/setup.bash \
         && if [ -n "${ORIO_GRASP_BACKEND:-}" ]; then \
                export PYTHONPATH=/home/ros_ws/src/devel_packages/orio_perception/scripts:$PYTHONPATH; \
-               exec roslaunch orio_perception perception.launch grasp_backend:="$ORIO_GRASP_BACKEND"; \
+               lbl=false; [ "${ORIO_LOAD_LABELLING_MODELS:-0}" = "1" ] && lbl=true; \
+               exec roslaunch orio_perception perception.launch grasp_backend:="$ORIO_GRASP_BACKEND" load_labelling_models:="$lbl"; \
            else \
                cd /home/ros_ws/src/devel_packages/orio_perception/scripts \
                && exec python3 perception_control_combined_pass_through.py; \

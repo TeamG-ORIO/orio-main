@@ -663,14 +663,19 @@ if [ "$cam_ok" -ne 1 ]; then
 fi
 
 # ── Perception (serves /compute_grasps and /compute_grasps_labelling) ─────────
-PERCEPTION_CONF="backend=$PLANNER"
+# The labelling service needs SAM/GroundingDINO, which a planner backend skips by
+# default; ORIO_LOAD_LABELLING_MODELS=1 loads them alongside it. Part of the conf key,
+# so a stack started by run_dexnet_pnp_single.sh (no labelling models) is restarted
+# here rather than reused.
+LBL_MODELS=$([ "$USE_ZED" -eq 1 ] && echo 1 || echo 0)
+PERCEPTION_CONF="backend=$PLANNER labelling=$LBL_MODELS"
 if [ "$STACK_FRESH" -eq 0 ] && container_up orio_perception && conf_is perception "$PERCEPTION_CONF"; then
-    log "perception already running ($PLANNER backend)."
+    log "perception already running ($PLANNER backend, labelling models=$LBL_MODELS)."
 else
-    log "starting perception ($PLANNER backend)…"
+    log "starting perception ($PLANNER backend, labelling models=$LBL_MODELS)…"
     stop_detached perception
     docker rm -f orio_perception >/dev/null 2>&1 || true
-    start_detached perception bash -lc "ORIO_NO_TTY=1 ORIO_LOGGING=$ORIO_LOGGING bash '$DOCKER_DIR/run_perception.sh' $PLANNER"
+    start_detached perception bash -lc "ORIO_NO_TTY=1 ORIO_LOGGING=$ORIO_LOGGING ORIO_LOAD_LABELLING_MODELS=$LBL_MODELS bash '$DOCKER_DIR/run_perception.sh' $PLANNER"
     echo "$PERCEPTION_CONF" >"$STACK_DIR/perception.conf"
 fi
 
