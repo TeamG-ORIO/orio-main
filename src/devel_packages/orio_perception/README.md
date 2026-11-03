@@ -9,7 +9,7 @@ dependency.
 - `perception_control_combined_pass_through.py` — the perception node (services
   `/compute_grasps`, `/compute_grasps_labelling`, `/get_depth_at_grasp`; publishes
   `/grasp_poses`, `/grasp_poses_labelling_z1/z2`, `/grasp_point_depth`).
-- `grasp_solver.py`, `grasp_solver_extra.py`, `opt_label_location.py` — used by it.
+- `grasp_solver.py`, `opt_label_location.py` — used by it.
 
 ## Runtime assets (per-machine, git-ignored)
 
@@ -26,7 +26,7 @@ Open3D). Large assets live under this package but are git-ignored:
 
 The node finds them via env vars (default to this package dir):
 `ORIO_PERCEPTION_ASSETS` (weights + image dirs), `ORIO_GROUNDINGDINO_DIR`
-(checkout), `ORIO_REPO` (manipulation TF yamls). `launch_demo.sh` sets these.
+(checkout), `ORIO_REPO` (manipulation TF yamls). `orio_bringup/docker/run_perception.sh` sets these.
 
 ## Recreate the venv (fresh machine)
 

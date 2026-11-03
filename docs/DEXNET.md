@@ -67,17 +67,14 @@ pick loop  (orio/dexnet_pnp.py, container orio_docker_container, foreground)
    → FrankaArm.goto_joints: pre-pick, contact, vacuum on, retract, transit, drop, home
 ```
 
-Everything above is started by `run_dexnet_pnp_single.sh` (one terminal) or the tmux
-layout `orio_bringup/tmux/layouts/orio_dexnet_pnp.session.sh` via `launch_demo.sh`. The
-single-terminal script is the one that has been used for all hardware runs and is the one
-kept current.
+Everything above is started by `run_dexnet_pnp_single.sh` (one terminal).
 
 ### File map
 
 | Role | File |
 | --- | --- |
 | Planner service (runs in the TF1 container) | `src/devel_packages/orio_bringup/docker/dexnet_grasp_planner.py` |
-| Planner container image / start | `docker/Dockerfile.dexnet`, `docker/run_dexnet.sh` (`run_dexnet_local.sh` is a historical variant, superseded) |
+| Planner container image / start | `docker/Dockerfile.dexnet`, `docker/run_dexnet.sh` |
 | Service and message contract | `src/devel_packages/custom_msgs/srv/PlanDexnetGrasp.srv`, `msg/DexnetGrasp.msg` |
 | Perception node, Dex-Net branch | `perception_control_combined_pass_through.py`: `_plan_grasp_dexnet`, `_handle_pnp_dexnet`, `_build_bin_mask`, `_cropped_intrinsics`, `_resolve_pnp_intrinsics` |
 | Perception config | `src/devel_packages/orio_perception/config/grasp.yaml` (loaded by `launch/perception.launch`) |

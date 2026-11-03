@@ -158,7 +158,7 @@ bash grasp_test.sh --hover     # then let the arm go above them
 ## `snap_xtion.sh`
 
 Saves one picture of what the Xtion camera sees right now. If a camera stack is already
-running (for example a `run_dexnet_pnp_single.sh` or `launch_demo.sh` session in another
+running (for example a `run_dexnet_pnp_single.sh` or `run_full_demo.sh` session in another
 terminal) it uses that. Otherwise it starts only what the picture needs: the ROS 1 master
 container, `orio_docker_container` and the Xtion driver. It takes the picture and then
 stops **what it started**, leaving anything that was already running alone. A cold start

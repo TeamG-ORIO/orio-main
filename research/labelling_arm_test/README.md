@@ -147,7 +147,7 @@ and white balance at the time, and the FFS summary).
    docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs
    ```
 4. The demo's `orio_docker`, `orio/perception` images and the perception weights
-   (`orio_perception/{weights,SAM_weights}`), as for `launch_demo.sh`.
+   (`orio_perception/{weights,SAM_weights}`), as for `run_full_demo.sh`.
 
 Env: `ORIO_LUISA_HOST` (`snaak@iam-luisa`), `ORIO_FFS_DIR`, `ORIO_FFS_CHECKPOINT`,
 `ORIO_FFS_SCALE`, `ORIO_FFS_ITERS`, `ORIO_FFS_RATE`, `ORIO_VACUUM_PORT` (`/dev/ttyACM0`).

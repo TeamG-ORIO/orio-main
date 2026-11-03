@@ -1,4 +1,4 @@
-# Motion params for pick-place-label.py. Defaults reproduce the historic behaviour:
+# Motion params (read by orio_logging/recorder.py; pick-place-label.py, the original consumer, was removed). Defaults reproduce the historic behaviour:
 # approach straight down, ignoring the published grasp orientation.
 
 # Honour the grasp orientation from /grasp_poses. Enable together with

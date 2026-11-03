@@ -17,7 +17,7 @@ Run: `bash orio_run_docker.sh` (state machine); the cameras run in the same
 container via `roslaunch manipulation cameras.launch`.
 
 `docker/Dockerfile.dexnet` builds a separate `orio/dexnet` image for DexNet 4.0 suction
-grasping — see [DEXNET.md](DEXNET.md).
+grasping — see [docs/DEXNET.md](docs/DEXNET.md).
 
 ### frankapy in the container
 
@@ -43,25 +43,17 @@ controller that runs on the robots) stays a reference mirror under
 at build time (the SDK needs a GPU to download them); on a fresh machine the SDK
 downloads + optimizes them on the first neural-mode run, then reuses them.
 
-## tmux bring-up
+## Bring-up
 
-`launch_demo.sh` (repo root) runs the whole demo in one tmuxifier session: 9
-readiness-gated panes (`tmux/wait_for.sh`) in a tiled window, including the rerun
-recorder (`logging/rerun/<run_id>/`, see `docs/LOGGING.md`).
+Both demos run from one terminal, no tmux. See `COMMANDS.md` for the options.
 
 ```bash
-bash launch_demo.sh              # full demo
-bash launch_demo.sh --no-vacuum  # dry-run, no pneumatics
-bash launch_demo.sh --no-logging # no recorder / run events
-bash launch_demo.sh --live       # recorder also streams to a running `rerun` viewer
-bash stop_demo.sh                # flushes the recording, then tears the session down
+bash run_full_demo.sh            # full two-arm demo: pick, label, place
+bash run_dexnet_pnp_single.sh    # single-arm suction pick-and-place
+bash stop_dexnet_pnp.sh          # tear everything down
 ```
 
-- `tmux/layouts/orio.session.sh` — session layout (panes are titled; `stop_demo.sh` uses the titles).
-- `tmux/wait_for.sh` — readiness gates (roscore / container / topic / service).
-
-tmuxifier install (once per machine):
-`git clone https://github.com/jimeh/tmuxifier.git ~/.tmuxifier`.
+- `tmux/wait_for.sh` — readiness gates (roscore / container / topic / service) used by both launchers.
 
 ## Troubleshooting
 

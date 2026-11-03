@@ -86,7 +86,7 @@ cleanup() {
     echo
     if [ "$KEEP" -eq 1 ]; then
         log "--keep: leaving everything up."
-        [ "$STARTED_DOC" -eq 1 ]   && log "  robot 1 control PC: stop with  bash stop_demo.sh  (or ssh $CTRL_PC_USER@$CTRL_PC_HOST and kill franka_interface)"
+        [ "$STARTED_DOC" -eq 1 ]   && log "  robot 1 control PC: stop with  bash stop_dexnet_pnp.sh  (or ssh $CTRL_PC_USER@$CTRL_PC_HOST and kill franka_interface)"
         [ "$STARTED_LUISA" -eq 1 ] && log "  robot 2 control PC: ssh -t $LUISA 'cd ~/franka-interface-docker && ./run.sh tmux kill-session -t franka'"
         log "  containers: docker rm -f $ROS1_CONTAINER $CONTAINER"
         for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done

@@ -1,6 +1,6 @@
 # Run logging with rerun
 
-One `launch_demo.sh` session = one run folder `logging/rerun/<run_id>/` (git-ignored):
+One `run_full_demo.sh` or `run_dexnet_pnp_single.sh` run = one run folder `logging/rerun/<run_id>/` (git-ignored):
 
 ```
 logging/rerun/20260914_153000/
@@ -11,8 +11,8 @@ logging/rerun/20260914_153000/
 ```
 
 ```bash
-bash launch_demo.sh [--no-logging] [--live]              # recorder pane starts with roscore
-bash run_dexnet_pnp_single.sh [--no-logging] [--live]    # same, without tmux (recorder = bg process)
+bash run_full_demo.sh [--no-logging] [--live]            # recorder starts as a background process
+bash run_dexnet_pnp_single.sh [--no-logging] [--live]    # same
 python3 src/devel_packages/orio_logging/runs.py list     # or: open latest | summary | compare A B | du
 rerun logging/rerun/<run_id>/*.rrd                       # viewer (perception venv has `rerun`)
 ```
@@ -101,7 +101,7 @@ Two writers, one `recording_id` (the run id); the viewer merges the files.
 | Perception writer (worker thread) | `orio_perception/scripts/rerun_writer.py` |
 | Affordance panels | `orio_bringup/docker/dexnet_grasp_planner.py` (`_save_affordance_panel`) |
 | Event hooks | `state_machine.py`, `dexnet_pnp.py`, `pneumatic_control_recovery.py`, `dexnet_grasp_planner.py` |
-| Bring-up | `launch_demo.sh`, `orio.session.sh`, `stop_demo.sh`, `orio_run_docker.sh`, `run_dexnet.sh`, `run_dexnet_pnp_single.sh` |
+| Bring-up | `run_full_demo.sh`, `run_dexnet_pnp_single.sh`, `stop_dexnet_pnp.sh`, `orio_run_docker.sh`, `run_dexnet.sh` |
 
 Why this shape: the state machine runs on Python 3.8 in the container, where rerun stops
 at 0.22.1 and `.rrd` files are not portable across versions. So nothing in a container
@@ -174,8 +174,8 @@ collision 0.1 MB), resolved through `ROS_PACKAGE_PATH` which the recorder sets i
 - Every hook is fire-and-forget; `EventSink.emit` swallows exceptions. Missing `orio_core`
   on a node's path degrades to no events, not a crash.
 - `ORIO_LOGGING=0` disables everything in one switch.
-- `stop_demo.sh` sends Ctrl-C to the recorder and perception panes and waits up to 5 s
-  before killing the session; `.rrd` is append-only, so a hard kill loses at most rerun's
+- The launchers and `stop_dexnet_pnp.sh` send Ctrl-C to the recorder and perception and wait up to 5 s
+  before killing them; `.rrd` is append-only, so a hard kill loses at most rerun's
   batcher window (~200 ms) and the file still opens.
 
 ## Overhead
