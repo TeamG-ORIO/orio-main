@@ -13,13 +13,23 @@
          depth_mode: NONE by default, so the ZED SDK loads no depth model. Label depth comes
          from Fast-FoundationStereo on the rectified left/right pair (orio_bringup/docker/
          run_ffs.sh), which the wrapper still publishes. NEURAL (common.yaml's value) brings
-         the ZED's own depth back, e.g. for the labelling test's "depth zed" option. -->
+         the ZED's own depth back, e.g. for the labelling test's "depth zed" option.
+
+         grab_fps: 15, not zedm.yaml's 30, to halve the USB3 traffic (the link drops out,
+         docs/OPEN_ISSUES.md). 15 is the lowest the ZED-M captures at HD1080; the wrapper
+         forces anything lower up to 15. pub_fps: 5, how often frames are published. It
+         saves compute, not USB bandwidth. -->
     <arg name="depth_mode" default="NONE" />
+    <arg name="grab_fps" default="15" />
+    <arg name="pub_fps" default="5.0" />
 
     <include file="$(find zed_wrapper)/launch/zedm.launch">
         <arg name="publish_urdf" value="false" />
     </include>
 
-    <!-- After the include, so it overrides the value the node's common.yaml load set. -->
+    <!-- After the include, so these override the values the node's yaml loads set. -->
     <param name="/zedm/zed_node/depth/depth_mode" value="$(arg depth_mode)" />
+    <param name="/zedm/zed_node/general/grab_frame_rate" value="$(arg grab_fps)" />
+    <param name="/zedm/zed_node/general/pub_frame_rate" value="$(arg pub_fps)" />
+    <param name="/zedm/zed_node/point_cloud_freq" value="$(arg pub_fps)" />
 </launch>
