@@ -1,14 +1,16 @@
-# Fast-FoundationStereo as a ROS1 node, for research/labelling_arm_test.
+# Fast-FoundationStereo as a ROS1 node: the ZED's depth for label placement.
 #
 # Built ON TOP of `ffs`, the image the fast-foundationstereo repo's docker/dockerfile
 # produces (conda env `my`: Python 3.12, torch 2.6.0+cu124; it needs the xformers pin in
-# reference/dockerfile_xformers_pin.patch, see reference/ORIO_QUICKSTART.md). That image
+# research/labelling_arm_test/ffs/reference/dockerfile_xformers_pin.patch, see
+# ORIO_QUICKSTART.md beside it). That image
 # has no ROS. rospy and the message packages are pure Python and come from rospypi, as in
-# orio_bringup/docker/Dockerfile.suction. The fast-foundationstereo code, the checkpoint
-# and this directory are mounted by run_ffs_depth.sh, so nothing from the repos is baked in.
+# Dockerfile.suction. The fast-foundationstereo code, the checkpoint and the node
+# (orio_perception/scripts/ffs_depth_node.py) are mounted by run_ffs.sh, so nothing from
+# the repos is baked in.
 #
 # Build (no context needed):
-#   docker build -t orio/ffs-ros:latest - < research/labelling_arm_test/ffs/Dockerfile
+#   docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs
 FROM ffs
 
 # The base image ends with SHELL ["/bin/bash", "-c", "source ~/.bashrc && conda activate my"],
@@ -62,4 +64,4 @@ ENV MPLBACKEND=Agg
 # Detached container: unbuffered, so `docker logs -f` shows lines as they happen.
 ENV PYTHONUNBUFFERED=1
 
-CMD ["/opt/conda/envs/my/bin/python", "/opt/labelling_arm_test/ffs/ffs_depth_node.py"]
+CMD ["/opt/conda/envs/my/bin/python", "/opt/orio_perception_scripts/ffs_depth_node.py"]

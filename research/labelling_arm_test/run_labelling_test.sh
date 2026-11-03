@@ -28,12 +28,12 @@
 # container, the control PC, the ZED, Fast-FoundationStereo and perception stay up and the
 # next run reuses them. To stop everything: bash research/labelling_arm_test/stop_labelling_test.sh
 #
-# Nothing of the demo is changed: own containers (orio_ffs, orio_lbl_perception), own ROS
-# names (/ffs/*, /labelling_test/*), own logs (logging/labelling_test/). roscore,
-# orio_docker_container and the ZED launch are the same ones the other launchers use.
+# Own perception container (orio_lbl_perception), ROS names (/labelling_test/*) and logs
+# (logging/labelling_test/). roscore, orio_docker_container, the ZED launch and the
+# Fast-FoundationStereo container (orio_ffs, /ffs/*) are the same ones run_full_demo.sh uses.
 #
 # Env: ORIO_LUISA_HOST (snaak@iam-luisa), ORIO_CONTAINER, ORIO_FFS_DIR / ORIO_FFS_CHECKPOINT /
-#      ORIO_FFS_SCALE (see ffs/run_ffs_depth.sh), ORIO_VACUUM_PORT (/dev/ttyACM0).
+#      ORIO_FFS_SCALE (see orio_bringup/docker/run_ffs.sh), ORIO_VACUUM_PORT (/dev/ttyACM0).
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -296,15 +296,23 @@ fi
 
 # ── ZED ──────────────────────────────────────────────────────────────────────
 # The driver publishes a topic only while something subscribes, so the check itself
-# (one rostopic echo) is what makes an idle driver publish.
-if [ "$CAMS_FRESH" -eq 0 ] && topic_live /zedm/zed_node/left/image_rect_color; then
-    log "ZED already publishing."
+# (one rostopic echo) is what makes an idle driver publish. zed_only.launch starts it
+# without its own depth (no neural model); --depth zed needs that depth, so NEURAL then.
+# A running driver is reused only if it was started with the depth mode this run needs.
+ZED_DEPTH_MODE=$([ "$DEPTH" = zed ] && echo NEURAL || echo NONE)
+zed_depth_mode() {
+    timeout 6 docker exec "$ROS1_CONTAINER" bash -c \
+        "$_ROS1_SETUP; rosparam get /zedm/zed_node/depth/depth_mode" 2>/dev/null
+}
+if [ "$CAMS_FRESH" -eq 0 ] && topic_live /zedm/zed_node/left/image_rect_color \
+        && [ "$(zed_depth_mode)" = "$ZED_DEPTH_MODE" ]; then
+    log "ZED already publishing (depth mode $ZED_DEPTH_MODE)."
 else
-    log "starting ZED camera…"
+    log "starting ZED camera (depth mode $ZED_DEPTH_MODE)…"
     stop_detached zed
     docker exec "$CONTAINER" bash -c "pkill -f 'zed_only.launch|cameras.launch'" >/dev/null 2>&1 || true
     start_detached zed docker exec "$CONTAINER" bash -c \
-        "source /home/ros_ws/devel/setup.bash && roslaunch manipulation zed_only.launch"
+        "source /home/ros_ws/devel/setup.bash && roslaunch manipulation zed_only.launch depth_mode:=$ZED_DEPTH_MODE"
     if ! wait_for_topic_publishing /zedm/zed_node/left/image_rect_color 40; then
         echo
         log "CAMERA NOT PUBLISHING: /zedm/zed_node/left/image_rect_color. Check the ZED is"
@@ -321,12 +329,12 @@ if [ "$DEPTH" = ffs ]; then
     else
         log "starting Fast-FoundationStereo ($FFS_CONF)…"
         stop_detached ffs
-        start_detached ffs bash -lc "bash '$HERE/ffs/run_ffs_depth.sh' && docker logs -f $FFS_CONTAINER"
+        start_detached ffs bash -lc "bash '$REPO/src/devel_packages/orio_bringup/docker/run_ffs.sh' && docker logs -f $FFS_CONTAINER"
         echo "$FFS_CONF" >"$STACK_DIR/ffs.conf"
     fi
     if ! wait_for_service /ffs/compute 180; then
         log "/ffs/compute did not come up in 180s — check the [ffs] lines above (image built?"
-        log "checkpoint found? see ffs/run_ffs_depth.sh). Aborting."
+        log "checkpoint found? see orio_bringup/docker/run_ffs.sh). Aborting."
         rm -f "$STACK_DIR/ffs.conf"
         exit 1
     fi

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tear down everything run_dexnet_pnp_single.sh OR run_full_demo.sh started (they share
 # the stack): the pick loop / sequence and pneumatics (if a run is still going), the
-# control PC processes on iam-doc, the label arm's stack on iam-luisa, the cameras, the
-# grasp planner, perception, the RFID node, the main container and roscore.
+# control PC processes on iam-doc, the label arm's stack on iam-luisa, the cameras,
+# Fast-FoundationStereo, the grasp planner, perception, the RFID node, the main container
+# and roscore.
 #
 #   bash stop_dexnet_pnp.sh
 #
@@ -14,6 +15,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONTAINER="${ORIO_CONTAINER:-orio_docker_container}"
 DEXNET_CONTAINER="${DEXNET_CONTAINER_NAME:-orio_dexnet}"
 SUCTION_CONTAINER="${SUCTION_CONTAINER_NAME:-orio_suction}"
+FFS_CONTAINER="${ORIO_FFS_CONTAINER:-orio_ffs}"
 CTRL_PC_USER="${ORIO_CTRL_PC_USER:-student}"
 CTRL_PC_HOST="${ORIO_CTRL_PC_HOST:-iam-doc}"
 LUISA_PC="${ORIO_LUISA_HOST:-snaak@iam-luisa}"
@@ -21,7 +23,7 @@ LOG_DIR="$REPO/logging/dexnet_pnp"
 STACK_DIR="$LOG_DIR/stack"
 
 case "${1:-}" in
-    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,11p' "$0"; exit 0 ;;
     "") ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
 esac
@@ -113,9 +115,10 @@ for f in "$STACK_DIR"/*.pid; do
     rm -f "$f"
 done
 
-# 4. The containers. The planners run with --restart unless-stopped, so rm -f, not kill.
+# 4. The containers. The planners and Fast-FoundationStereo run with --restart
+#    unless-stopped, so rm -f, not kill.
 say "removing containers…"
-docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" orio_perception orio_cameras \
-    >/dev/null 2>&1 || true
+docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" \
+    orio_perception orio_cameras >/dev/null 2>&1 || true
 rm -f "$STACK_DIR"/*.conf "$LOG_DIR/current.affordance" "$REPO/logging/demo/current.affordance"
 say "done - everything is stopped"

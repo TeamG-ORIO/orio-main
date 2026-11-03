@@ -10,8 +10,11 @@ without robot 1. Here the depth comes from Fast-FoundationStereo on the ZED's re
 stereo pair (the experiment in `/home/orio/newest/zed/`, see `ffs/reference/`), so one arm
 and one camera are enough.
 
-Nothing outside this directory is changed. The test has its own containers (`orio_ffs`,
-`orio_lbl_perception`), ROS names (`/ffs/*`, `/labelling_test/*`) and logs
+The full demo now uses this depth too (`run_full_demo.sh`): the Fast-FoundationStereo
+node moved to `orio_perception/scripts/ffs_depth_node.py` (started by
+`orio_bringup/docker/run_ffs.sh`, image from `orio_bringup/docker/Dockerfile.ffs`), and
+both share its `orio_ffs` container. The test keeps its own perception container
+(`orio_lbl_perception`), ROS names (`/labelling_test/*`) and logs
 (`logging/labelling_test/`). It imports the demo's label placement, prompt, crop and
 camera TF rather than copying them, so it stays in step with the demo.
 
@@ -75,7 +78,7 @@ ZED (zed_only.launch, in orio_docker_container)
   left/right rect images + camera_info
         │
         ▼
-ffs/ffs_depth_node.py        container orio_ffs (image orio/ffs-ros)
+orio_perception/scripts/ffs_depth_node.py   container orio_ffs (image orio/ffs-ros)
   /ffs/compute  → /ffs/depth (32FC1 m), /ffs/left, /ffs/camera_info, /ffs/disp_vis
         │
         ▼
@@ -141,7 +144,7 @@ and white balance at the time, and the FFS summary).
    torchvision breaks). Already built here.
 3. **This test's image**, which adds rospy to it:
    ```bash
-   docker build -t orio/ffs-ros:latest - < research/labelling_arm_test/ffs/Dockerfile
+   docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs
    ```
 4. The demo's `orio_docker`, `orio/perception` images and the perception weights
    (`orio_perception/{weights,SAM_weights}`), as for `launch_demo.sh`.
@@ -156,5 +159,5 @@ Env: `ORIO_LUISA_HOST` (`snaak@iam-luisa`), `ORIO_FFS_DIR`, `ORIO_FFS_CHECKPOINT
 | `run_labelling_test.sh`, `stop_labelling_test.sh` | Launcher and teardown. |
 | `arm/labelling_arm_test.py` | The arm cycle (robot 2), runs in `orio_docker_container`. |
 | `perception/labelling_perception_node.py`, `run_lbl_perception.sh` | Label placement with measured depth, in the perception container. |
-| `ffs/ffs_depth_node.py`, `run_ffs_depth.sh`, `Dockerfile` | Fast-FoundationStereo as a ROS node, in its own container. |
+| `orio_perception/scripts/ffs_depth_node.py`, `orio_bringup/docker/run_ffs.sh`, `Dockerfile.ffs` (outside this directory) | Fast-FoundationStereo as a ROS node, in its own container. |
 | `ffs/reference/` | The original experiment: `ffs_orio_infer.py` (offline inference this follows), `ORIO_QUICKSTART.md` (setup, measured speed, gotchas), `assets_orio_K.txt`, the dockerfile patch. |

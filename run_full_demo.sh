@@ -18,10 +18,13 @@
 #   bash stop_dexnet_pnp.sh
 #
 #   bash run_full_demo.sh --fresh         # stop the running stack first, start clean
-#   bash run_full_demo.sh                 # dry-run (no vacuum), confirm each bin pick
+#   bash run_full_demo.sh                 # real suction (both cups), auto-pick
+#   bash run_full_demo.sh --no-vacuum     # dry-run: no pneumatics, move the cups by hand
+#   bash run_full_demo.sh --confirm       # confirm each bin pick
 #                                           #   (Enter = execute, r = regenerate, q = abort)
-#   bash run_full_demo.sh --vacuum        # start pneumatics (real suction, both cups)
-#   bash run_full_demo.sh --auto          # no per-pick Enter (auto-pick)
+#   bash run_full_demo.sh --no-label-check # test without labels: skip the label cup's
+#                                           #   vacuum check, carry on as if one was picked
+#   bash run_full_demo.sh --skip-item-setup # skip the item name/expiry GUI, use defaults
 #   bash run_full_demo.sh --straight-down # ignore grasp tilt, approach vertically
 #   bash run_full_demo.sh --no-zed        # skip the ZED: labelling poses will time out
 #                                           #   (arm 2 will sit in its recovery GUI)
@@ -38,12 +41,15 @@
 #   bash run_full_demo.sh --checkpoint <tag|path>   # suction network checkpoint
 #
 # The ZED is ON here (the labelling service needs it), unlike run_dexnet_pnp_single.sh.
+# It runs without its own depth (no ZED neural model): the label height is measured by
+# Fast-FoundationStereo on its stereo pair (orio_ffs container, orio_bringup/docker/run_ffs.sh).
 # Its USB3 link has been flaky (EPROTO drops — docs/OPEN_ISSUES.md); if it drops mid-run
 # arm 2's labelling pose times out and its recovery GUI opens.
 #
 # Env: ORIO_CONTAINER, ORIO_ROS1_CONTAINER, ORIO_CTRL_PC_USER/HOST/FI_PATH/ROBOT_IP,
 #      ORIO_LUISA_HOST/ROBOT_NUM/IP, ORIO_MASTER_IP, ORIO_CAM_ATTEMPTS,
-#      ORIO_PNP_OFFSET_X/Y, ORIO_GRASPING, SUCTION_CHECKPOINT.
+#      ORIO_PNP_OFFSET_X/Y, ORIO_GRASPING, SUCTION_CHECKPOINT,
+#      ORIO_FFS_DIR/CHECKPOINT/SCALE/ITERS (see run_ffs.sh).
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,6 +68,7 @@ LUISA_PC="${ORIO_LUISA_HOST:-snaak@iam-luisa}"
 WORKSTATION_HOST="$(hostname)"   # ROS master lives here; the control PCs point ROS at it
 DEXNET_CONTAINER="${DEXNET_CONTAINER_NAME:-orio_dexnet}"
 SUCTION_CONTAINER="${SUCTION_CONTAINER_NAME:-orio_suction}"
+FFS_CONTAINER="${ORIO_FFS_CONTAINER:-orio_ffs}"
 DOCKER_DIR="$REPO/src/devel_packages/orio_bringup/docker"
 WF="$REPO/src/devel_packages/orio_bringup/tmux/wait_for.sh"
 # shellcheck disable=SC1090
@@ -77,8 +84,8 @@ PERC_DIR="$REPO/src/devel_packages/orio_perception"
 PERC_VENV="${ORIO_PERCEPTION_VENV:-${ORIO_PERCEPTION_ASSETS:-$PERC_DIR}/venv}"
 
 # ── Args ────────────────────────────────────────────────────────────────────
-USE_VACUUM=0
-CONFIRM=1
+USE_VACUUM=1
+CONFIRM=0
 AFFORDANCE=1
 USE_ZED=1
 USE_RFID=1
@@ -89,19 +96,19 @@ SUCTION_CKPT="${SUCTION_CHECKPOINT:-}"
 ORIO_GRASPING="${ORIO_GRASPING:-$HOME/orio-grasping}"
 MIN_Q=""
 FRESH=0
+SKIP_ITEM_SETUP=0
 SM_EXTRA=()
 while [ $# -gt 0 ]; do
     arg="$1"; shift
     case "$arg" in
-        --vacuum)        USE_VACUUM=1 ;;
         --no-vacuum)     USE_VACUUM=0 ;;
-        --auto)          CONFIRM=0 ;;
         --confirm)       CONFIRM=1 ;;
         --straight-down) SM_EXTRA+=(--straight-down) ;;
         --max-tilt-deg)  SM_EXTRA+=(--max-tilt-deg "${1:?--max-tilt-deg needs degrees}"); shift ;;
         --max-declines)  SM_EXTRA+=(--max-declines "${1:?--max-declines needs a count}"); shift ;;
-        --check-vacuum)  SM_EXTRA+=(--check-vacuum) ;;
         --zero-item-depth) SM_EXTRA+=(--zero-item-depth) ;;
+        --no-label-check) SM_EXTRA+=(--no-label-check) ;;
+        --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
         --no-zed)        USE_ZED=0 ;;
         --no-rfid)       USE_RFID=0 ;;
         --no-logging)    export ORIO_LOGGING=0; LOGGING_REQUESTED=0 ;;
@@ -120,7 +127,7 @@ while [ $# -gt 0 ]; do
         --checkpoint)    SUCTION_CKPT="${1:?--checkpoint needs a run tag or a path}"; shift ;;
         --checkpoint=*)  SUCTION_CKPT="${arg#*=}" ;;
         --fresh)         FRESH=1 ;;
-        -h|--help) sed -n '2,48p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -230,7 +237,7 @@ log() { echo "[launcher] $*"; }
 # ── The stack: services that stay up between runs ───────────────────────────
 # Same mechanism and stack dir as run_dexnet_pnp_single.sh, extended with the second
 # control PC (luisa) and the RFID node. bash stop_dexnet_pnp.sh tears it all down.
-STACK_SERVICES=(roscore control_pc_fi control_pc_ros luisa planner zed xtion perception rfid)
+STACK_SERVICES=(roscore control_pc_fi control_pc_ros luisa planner zed ffs xtion perception rfid)
 
 start_detached() {  # $1 = name, rest = command (may be an exported function)
     local name="$1"; shift
@@ -258,6 +265,10 @@ topic_live()   {
         "$_ROS1_SETUP; timeout 4 rostopic echo -n 1 $1" >/dev/null 2>&1
 }
 conf_is() { [ "$(cat "$STACK_DIR/$1.conf" 2>/dev/null)" = "$2" ]; }
+zed_depth_mode() {  # the depth mode the running ZED driver was started with
+    timeout 6 docker exec "$ROS1_CONTAINER" bash -c \
+        "$_ROS1_SETUP; rosparam get /zedm/zed_node/depth/depth_mode" 2>/dev/null
+}
 
 # ── Teardown (this run only) ─────────────────────────────────────────────────
 _CLEANED=0
@@ -296,8 +307,8 @@ cleanup() {
         _n_aff=$(find "$AFFORDANCE_DIR" -name '*.png' 2>/dev/null | wc -l)
         [ "$_n_aff" -gt 0 ] && log "affordance panels ($_n_aff): $AFFORDANCE_DIR"
     fi
-    log "the stack (cameras, planner, perception, both control PCs, RFID) is still running;"
-    log "the next run reuses it. To stop everything: bash stop_dexnet_pnp.sh"
+    log "the stack (cameras, Fast-FoundationStereo, planner, perception, both control PCs, RFID)"
+    log "is still running; the next run reuses it. To stop everything: bash stop_dexnet_pnp.sh"
     sync; sleep 0.2
 }
 trap 'cleanup; exit 130' INT
@@ -309,6 +320,7 @@ trap cleanup EXIT
 follow roscore roscore
 follow "$PLANNER" planner
 [ "$USE_ZED" -eq 1 ] && follow cameras zed
+[ "$USE_ZED" -eq 1 ] && follow ffs ffs
 follow cameras xtion
 follow perception perception
 follow luisa luisa
@@ -327,8 +339,8 @@ else
     STACK_FRESH=1
     log "no roscore — starting the stack from scratch…"
     for s in "${STACK_SERVICES[@]}"; do stop_detached "$s"; done
-    docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" orio_perception orio_cameras \
-        >/dev/null 2>&1 || true
+    docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" \
+        orio_perception orio_cameras >/dev/null 2>&1 || true
     rm -f "$STACK_DIR"/*.conf
     log "starting roscore…"
     start_detached roscore bash "$DOCKER_DIR/run_roscore.sh"
@@ -597,10 +609,13 @@ if [ "$USE_ZED" -ne 1 ]; then
     log "recovery GUI. The pick pipeline is unaffected."
     stop_detached zed
     docker exec "$CONTAINER" bash -c "pkill -f 'zed_only.launch|cameras.launch'" >/dev/null 2>&1 || true
-elif [ "$CAMS_FRESH" -eq 0 ] && topic_live /zedm/zed_node/rgb/image_rect_color; then
-    log "ZED already publishing."
+elif [ "$CAMS_FRESH" -eq 0 ] && topic_live /zedm/zed_node/rgb/image_rect_color \
+        && [ "$(zed_depth_mode)" = NONE ]; then
+    log "ZED already publishing (no ZED depth)."
 else
-    log "starting ZED camera…"
+    # A ZED left running with its own depth (another launcher, or before this change)
+    # is restarted, so its neural depth model is not loaded alongside Fast-FoundationStereo.
+    log "starting ZED camera (no ZED depth: the label depth is Fast-FoundationStereo's)…"
     stop_detached zed
     docker exec "$CONTAINER" bash -c "pkill -f 'zed_only.launch|cameras.launch'" >/dev/null 2>&1 || true
     start_detached zed docker exec "$CONTAINER" bash -c \
@@ -662,13 +677,28 @@ if [ "$cam_ok" -ne 1 ]; then
     exit 1
 fi
 
+# ── Fast-FoundationStereo (label depth from the ZED pair: /ffs/compute) ──────
+# Started here and waited for after perception, so the two load their models together.
+if [ "$USE_ZED" -eq 1 ]; then
+    FFS_CONF="scale=${ORIO_FFS_SCALE:-0.5} iters=${ORIO_FFS_ITERS:-8} ckpt=${ORIO_FFS_CHECKPOINT:-default}"
+    if [ "$STACK_FRESH" -eq 0 ] && container_up "$FFS_CONTAINER" && conf_is ffs "$FFS_CONF"; then
+        log "Fast-FoundationStereo already running ($FFS_CONF)."
+    else
+        log "starting Fast-FoundationStereo ($FFS_CONF)…"
+        stop_detached ffs
+        start_detached ffs bash -lc "bash '$DOCKER_DIR/run_ffs.sh' && docker logs -f $FFS_CONTAINER"
+        echo "$FFS_CONF" >"$STACK_DIR/ffs.conf"
+    fi
+fi
+
 # ── Perception (serves /compute_grasps and /compute_grasps_labelling) ─────────
 # The labelling service needs SAM/GroundingDINO, which a planner backend skips by
 # default; ORIO_LOAD_LABELLING_MODELS=1 loads them alongside it. Part of the conf key,
 # so a stack started by run_dexnet_pnp_single.sh (no labelling models) is restarted
-# here rather than reused.
+# here rather than reused. lbl_depth=ffs restarts a perception from before the label
+# depth moved to Fast-FoundationStereo.
 LBL_MODELS=$([ "$USE_ZED" -eq 1 ] && echo 1 || echo 0)
-PERCEPTION_CONF="backend=$PLANNER labelling=$LBL_MODELS"
+PERCEPTION_CONF="backend=$PLANNER labelling=$LBL_MODELS lbl_depth=ffs"
 if [ "$STACK_FRESH" -eq 0 ] && container_up orio_perception && conf_is perception "$PERCEPTION_CONF"; then
     log "perception already running ($PLANNER backend, labelling models=$LBL_MODELS)."
 else
@@ -716,8 +746,16 @@ if ! wait_for_service /compute_grasps 90; then
 fi
 wait_for_service /compute_grasps_labelling 15 \
     || log "NOTE: /compute_grasps_labelling not up (yet) — labelling will fail until it is."
+if [ "$USE_ZED" -eq 1 ] && ! wait_for_service /ffs/compute 180; then
+    echo
+    log "/ffs/compute did not come up in 180s — check the [ffs] lines above (image built?"
+    log "checkpoint found? see src/devel_packages/orio_bringup/docker/run_ffs.sh)."
+    log "Aborting: without it no label pose has a depth."
+    rm -f "$STACK_DIR/ffs.conf"
+    exit 1
+fi
 
-# With --vacuum, both suction services must exist BEFORE any arm moves (see
+# With the vacuum on, both suction services must exist BEFORE any arm moves (see
 # run_dexnet_pnp_single.sh for the failure this prevents).
 if [ "$USE_VACUUM" -eq 1 ]; then
     if ! wait_for_service /orio/pnp_cup/on 30 || ! wait_for_service /orio/lbl_cup/on 10; then
@@ -725,14 +763,14 @@ if [ "$USE_VACUUM" -eq 1 ]; then
         log "VACUUM NOT AVAILABLE: the cup services never appeared — the pneumatics node"
         log "is not running. Check the [pneumatics] logs above (ClearCore port/firmware)."
         log "Aborting before the sequence: running with no suction moves the arms for nothing."
-        log "Re-run without --vacuum for a dry run."
+        log "Re-run with --no-vacuum for a dry run."
         exit 1
     fi
 fi
 
 # ── The sequence in the FOREGROUND so its prompts can read the keyboard ───────
 log "starting the full sequence (Ctrl-C or closing this terminal stops this run; the stack stays up)…"
-log "a Tkinter window will open for the item name/expiry before any motion."
+[ "$SKIP_ITEM_SETUP" -eq 0 ] && log "a Tkinter window will open for the item name/expiry before any motion."
 echo "[launcher] sm flags: ${SM_EXTRA[*]}"
 docker exec -e ORIO_LOGGING="$ORIO_LOGGING" -it "$CONTAINER" bash -c \
     "source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && \

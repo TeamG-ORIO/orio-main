@@ -31,6 +31,7 @@ Type 'q' + Enter at any idle moment to stop cleanly.
 """
 
 import argparse
+import datetime
 import json
 import logging
 import os
@@ -46,7 +47,6 @@ import rospy
 import smach
 import smach_ros
 import tkinter as tk
-import yaml
 from threading import Lock
 from tkinter import ttk, messagebox
 
@@ -58,6 +58,7 @@ from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 from custom_msgs.srv import AddLabeledItem
 import CollisionChecker
+import RobotUtil as rt
 
 try:
     from orio_core.events import TOPIC as EVENTS_TOPIC, EventSink
@@ -82,14 +83,29 @@ PICK_BOUNDS = {'x_min': -0.2, 'x_max': 0.55, 'y_min': -0.8, 'y_max': -0.1,
 # Straight-down tool orientation, the IK default.
 VERTICAL_ORI = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])
 
-# ── ZED CAMERA PARAMETERS ────────────────────────────────────────────────────────
+# ── LABEL PLACEMENT ──────────────────────────────────────────────────────────────
+# The label pose arrives from perception in panda_link0 with its z measured
+# (Fast-FoundationStereo on the ZED), so nothing is carried over from arm 1's pick.
 
-LBL_WIDTH, LBL_HEIGHT = 1920, 1080
-LBL_FX, LBL_FY        = 1509.65, 1509.65
-LBL_CX, LBL_CY        = 964.33, 559.28  # Adjusted for cropping
-DEPTH_UNIT_LBL        = 1000.0
-CAMERA_HEIGHT         = 1.0  # metres above the robot base frame
-LBL_TF_YAML           = '../manipulation/config/zed_to_label_tf.yaml'
+# The XY box ApplyLabel has always accepted a label pose in, plus a z band: z is the
+# item's top, and items lie on the table (which the camera sees at z ~ 0.004), so a flat
+# pouch comes out near 0 and a box at its height. Below the table is a depth error, and
+# nothing we label is taller than ~0.35 m. Outside the box the pose is refused unmoved.
+LABEL_POSE_BOUNDS = {'x_min': 0.2, 'x_max': 0.7, 'y_min': -0.6, 'y_max': 0.6,
+                     'z_min': -0.01, 'z_max': 0.40}
+# Label IK retries re-seed with this much random change (rad) per joint around the nominal
+# seed. compute_pick_joints re-seeds over the whole joint range, which can converge on a
+# configuration that reaches the zone from behind; on arm 2 that swings out over the
+# dispenser side of the cell.
+LABEL_SEED_JITTER = 0.6
+# A label solution with the base (joint 1) or upper arm (joint 3) turned further than this
+# (rad) is that from-behind configuration, whatever seed produced it: refused.
+LABEL_MAX_BASE_TURN = 2.0
+# A label is the same rectangle turned by 180 deg about the cup, so the published pose and
+# the pose turned by this about the tool axis place it identically. Both are solved and the
+# one with the smaller joint motion wins, instead of turning the wrist 120 deg one way when
+# 30 deg the other way would do.
+LABEL_TOOL_FLIP = np.diag([-1.0, -1.0, 1.0])
 
 # ──────────────────────────────────────────────────────────────────────────────────
 
@@ -155,7 +171,7 @@ recovery_event_arm2 = threading.Event()
 # Ensures only one Tkinter window exists at a time — Tkinter is not thread-safe
 _gui_lock = Lock()
 
-test_vacuum = False  # Set from --check-vacuum: poll the vacuum sensor in assert_vacuum()
+no_label_check = False  # Set from --no-label-check: skip the label cup's sensor checks
 
 # When True, vacuum service calls and sensor asserts are skipped (dry-run
 # without pneumatics). Set in main() from --no-vacuum / ORIO_DISABLE_PNEUMATICS.
@@ -277,18 +293,6 @@ def call_trigger_service(service_name):
     return False
 
 
-def load_tf(yaml_path):
-    with open(yaml_path, 'r') as f:
-        data = yaml.safe_load(f)
-    t = data['pose']['translation']
-    r = data['pose']['rotation']
-    rot_mat = R.from_quat([r['x'], r['y'], r['z'], r['w']]).as_matrix()
-    tf = np.eye(4)
-    tf[:3, :3] = rot_mat
-    tf[:3, 3] = [t['x'], t['y'], t['z']]
-    return tf
-
-
 # ==============================================================================
 # SECTION 1: SYSTEM SETUP & DATA MANAGEMENT
 # ==============================================================================
@@ -351,16 +355,14 @@ class RobotHardware:
         self.latest_label_pose_z1 = None
         self.latest_label_pose_z2 = None
         rospy.Subscriber("/grasp_poses",              PoseArray, self._pose_callback,          queue_size=1)
-        rospy.Subscriber("/grasp_poses_labelling_z1", PoseArray, self._label_pose_callback_z1, queue_size=1)
-        rospy.Subscriber("/grasp_poses_labelling_z2", PoseArray, self._label_pose_callback_z2, queue_size=1)
+        # World-frame label poses with measured z (perception's /compute_grasps_labelling)
+        rospy.Subscriber("/label_pose_z1", PoseArray, self._label_pose_callback_z1, queue_size=1)
+        rospy.Subscriber("/label_pose_z2", PoseArray, self._label_pose_callback_z2, queue_size=1)
 
         # Stored dynamically per cycle
         self.current_fetch_depth = 0.0
         self.pick_up_pre_joints = None
         self.pick_up_final_joints = None
-
-        # Zed to label arm Transform
-        self.tf_lbl = load_tf(LBL_TF_YAML)
 
         # Collision Checker
         self.la_collision_checker = CollisionChecker.CollisionChecker(arm_number=2)
@@ -483,8 +485,10 @@ class RobotHardware:
     def assert_vacuum(self, cup, expected_state, timeout=1.0):
         """Poll the vacuum sensor for `cup` ('pnp'|'lbl') until it matches
         `expected_state`; raise RuntimeError if it doesn't within `timeout` s."""
-        global test_vacuum, disable_pneumatics
-        if disable_pneumatics or not test_vacuum:
+        global disable_pneumatics, no_label_check
+        if disable_pneumatics:
+            return
+        if cup == 'lbl' and no_label_check:
             return
         attr = 'pnp_has_item' if cup == 'pnp' else 'lbl_has_item'
         deadline = rospy.Time.now() + rospy.Duration(timeout)
@@ -512,12 +516,9 @@ class RobotHardware:
             fname = f"obs_arm{arm_number}_free.p"
         return os.path.join(script_dir, "obstacles_files", fname)
 
-    def check_collision(self, q7, arm_number, label_zone=None):
-        """Return True if the 7-DOF config q7 is in collision with scene obstacles.
-
-        Obstacles are loaded from the obstacle file for the given arm / label_zone
-        and cached after the first call so subsequent checks are fast.
-        """
+    def _obstacles(self, arm_number, label_zone=None):
+        """(obs_points, obs_axes) from the obstacle file for the given arm / label_zone,
+        cached after the first call so subsequent checks are fast."""
         cache_key = (arm_number, label_zone)
         if not hasattr(self, '_obs_cache'):
             self._obs_cache = {}
@@ -529,8 +530,33 @@ class RobotHardware:
             self._obs_cache[cache_key] = (obs_points, obs_axes)
             log.info("Arm%d: cached %d obstacles from '%s'",
                      arm_number, len(obs_points), obs_file)
-        obs_points, obs_axes = self._obs_cache[cache_key]
+        return self._obs_cache[cache_key]
+
+    def check_collision(self, q7, arm_number, label_zone=None):
+        """Return True if the 7-DOF config q7 is in collision with scene obstacles."""
+        obs_points, obs_axes = self._obstacles(arm_number, label_zone)
         return self.la_collision_checker.DetectCollision(q7, obs_points, obs_axes)
+
+    def _label_collisions(self, q7, allow_tool_on_table=False):
+        """(block, obstacle) pairs of the arm-2 configuration q7 that collide.
+
+        With allow_tool_on_table the cup's block may touch a table-level obstacle: the
+        table is modelled with its top at z = 0 and the block reaches ~1 cm past the cup,
+        so a label on a flat pouch (z ~ 0.005) would otherwise always count as a table
+        collision, though touching there is the point of the placement."""
+        obs_points, obs_axes = self._obstacles(2)
+        cc = self.la_collision_checker
+        cc.CompCollisionBlockPoints(q7)
+        tool_block = len(cc.Cidx) - 1
+        hits = []
+        for i in range(len(cc.Cpoints)):
+            for j in range(len(obs_points)):
+                if (allow_tool_on_table and i == tool_block
+                        and np.asarray(obs_points[j])[:, 2].max() <= 0.001):
+                    continue
+                if rt.CheckBoxBoxCollision(cc.Cpoints[i], cc.Caxes[i], obs_points[j], obs_axes[j]):
+                    hits.append((i, j))
+        return hits
 
     def compute_pick_joints(self, task_pos, target_ori=None,
                             label_zone=None, max_attempts=10,
@@ -683,13 +709,14 @@ class RobotHardware:
                     n_poses=len(self.latest_pose_msg.poses), ok=True)
         return task_pos, target_ori
 
-    def compute_label_joints(self, zone_number, item_depth, max_attempts=10,
-                             pose_bounds=None):
-        """Call /compute_grasps_labelling, wait for the pose on the matching topic,
-        and return (pre_joints, final_joints) via IK — mirrors compute_pick_joints().
-        """
-        log.info("[compute_label_joints] Requesting label pose for zone %d, item_depth=%.4f",
-                 zone_number, item_depth)
+    def compute_label_joints(self, zone_number, arm1_depth=None, max_attempts=10):
+        """Call /compute_grasps_labelling, wait for the world-frame label pose on the
+        matching topic, and return (pre_joints, final_joints) via the label IK.
+
+        The pose's z is the item's top measured by Fast-FoundationStereo. arm1_depth, the
+        pick height arm 1 carried over (what this used to place at), is only logged next
+        to it for comparison."""
+        log.info("[compute_label_joints] Requesting label pose for zone %d", zone_number)
 
         for attempt in range(1, max_attempts + 1):
             if zone_number == 1:
@@ -710,16 +737,8 @@ class RobotHardware:
                 raise RuntimeError(f"No labelling pose received for zone {zone_number} within timeout")
 
             p = msg.poses[0]
-
-            Z = CAMERA_HEIGHT - item_depth
-            X = (p.position.x - LBL_CX) * Z / LBL_FX
-            Y = (p.position.y - LBL_CY) * Z / LBL_FY
-            pos = self.tf_lbl @ np.array([X, Y, Z, 1.0])
-
-            task_pos = [pos[0], pos[1], item_depth]
+            task_pos = [p.position.x, p.position.y, p.position.z + LABEL_PLACE_CORRECTION_Z]
             task_ori = [p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w]
-            log.info("item_depth=%.4f  X=%.4f Y=%.4f Z=%.4f  pos(world)=%s  task_pos=%s  task_ori=%s",
-                     item_depth, X, Y, Z, np.round(pos[:3], 4), np.round(task_pos, 4), np.round(task_ori, 4))
 
             if any(np.isnan(v) for v in task_pos + task_ori):
                 log.warning("[compute_label_joints] Attempt %d/%d: NaN values in pose for zone %d "
@@ -727,14 +746,24 @@ class RobotHardware:
                             attempt, max_attempts, zone_number, task_pos, task_ori)
                 continue
 
-            if pose_bounds is not None:
-                x, y = task_pos[0], task_pos[1]
-                if (x < pose_bounds.get('x_min', -np.inf) or x > pose_bounds.get('x_max', np.inf) or
-                        y < pose_bounds.get('y_min', -np.inf) or y > pose_bounds.get('y_max', np.inf)):
-                    err_msg = (f"[compute_label_joints] Zone {zone_number} pose (x={x:.4f}, y={y:.4f}) "
-                               f"is outside bounds {pose_bounds}")
-                    log.error(err_msg)
-                    raise RuntimeError(err_msg)
+            if arm1_depth is not None:
+                log.info("[compute_label_joints] Zone %d measured z=%.4f m (arm 1 carried over "
+                         "%.4f m, difference %+.4f m)", zone_number, task_pos[2], arm1_depth,
+                         task_pos[2] - arm1_depth)
+
+            x, y, z = task_pos
+            b = LABEL_POSE_BOUNDS
+            if not (b['x_min'] <= x <= b['x_max'] and b['y_min'] <= y <= b['y_max']):
+                err_msg = (f"[compute_label_joints] Zone {zone_number} pose (x={x:.4f}, y={y:.4f}) "
+                           f"is outside bounds {b}")
+                log.error(err_msg)
+                raise RuntimeError(err_msg)
+            if not (b['z_min'] <= z <= b['z_max']):
+                err_msg = (f"[compute_label_joints] Zone {zone_number} z={z:.4f} m is outside "
+                           f"[{b['z_min']}, {b['z_max']}]: the measured depth looks wrong "
+                           f"(the table is at z ~ 0)")
+                log.error(err_msg)
+                raise RuntimeError(err_msg)
 
             task_ori_Mat = R.from_quat(task_ori).as_matrix()
             rpy = R.from_quat(task_ori).as_euler('xyz', degrees=True)
@@ -743,10 +772,90 @@ class RobotHardware:
                      task_pos[0], task_pos[1], task_pos[2],
                      rpy[0], rpy[1], rpy[2])
 
-            return self.compute_pick_joints(task_pos, target_ori=task_ori_Mat, label_zone=zone_number,
-                                            check_collisions=True, arm_number=2)
+            return self._label_ik(task_pos, task_ori_Mat, zone_number)
 
         raise RuntimeError(f"NaN values in labelling pose for zone {zone_number} after {max_attempts} attempts")
+
+    def _label_ik(self, task_pos, target_ori, zone_number, max_attempts=10):
+        """(pre_joints, final_joints) for the label pose, from whichever of the two
+        equivalent tool orientations (LABEL_TOOL_FLIP) needs the smaller joint motion from
+        where arm 2 is now."""
+        try:
+            q_now = np.asarray(self.label_arm.get_joints(), dtype=float)
+        except Exception as exc:  # noqa: BLE001 — LABELLING_SAFE is where APPLY starts from
+            log.warning("[IK] arm2 get_joints failed (%s); using LABELLING_SAFE", exc)
+            q_now = np.asarray(self.pose_to_joints("LABELLING_SAFE"), dtype=float)
+        best = None
+        for flipped in (False, True):
+            ori = target_ori @ LABEL_TOOL_FLIP if flipped else target_ori
+            name = "flipped" if flipped else "published"
+            try:
+                pre, final = self._solve_label_joints(task_pos, ori, zone_number, max_attempts)
+            except RuntimeError as exc:
+                log.warning("[IK] %s orientation: %s", name, exc)
+                continue
+            travel = float(np.abs(np.asarray(pre) - q_now).sum())
+            log.info("[IK] %s orientation: joint 7 %.0f deg (%+.0f deg from now), "
+                     "total joint travel to pre %.2f rad",
+                     name, np.degrees(pre[6]), np.degrees(pre[6] - q_now[6]), travel)
+            if best is None or travel < best[0]:
+                best = (travel, pre, final, name)
+        if best is None:
+            raise RuntimeError(f"[IK] no collision-free label solution for {np.round(task_pos, 4)} "
+                               f"in either tool orientation")
+        travel, pre, final, name = best
+        log.info("[IK] using the %s orientation (travel %.2f rad)", name, travel)
+        return pre, final
+
+    def _solve_label_joints(self, task_pos, target_ori, zone_number, max_attempts):
+        """(pre_joints, final_joints) for one label orientation: collision-checked against
+        the arm-2 obstacles and FK-validated as compute_pick_joints does, with the cup
+        allowed to meet the table at the final pose (see _label_collisions), retries
+        re-seeded near the nominal seed and from-behind configurations refused (see
+        LABEL_SEED_JITTER / LABEL_MAX_BASE_TURN)."""
+        task_pos = np.asarray(task_pos, dtype=float)
+        pre_pos = task_pos + np.array([0.0, 0.0, APPROACH_DISTANCE])
+        for attempt in range(max_attempts):
+            seed = [0.0] * self.chain_length
+            seed[4] = -1.5   # tool pointing down
+            if attempt > 0:
+                for i in range(1, 8):
+                    lo, hi = self.ik_chain.links[i].bounds
+                    seed[i] = float(np.clip(seed[i] + random.uniform(-LABEL_SEED_JITTER, LABEL_SEED_JITTER), lo, hi))
+            pre = self.ik_chain.inverse_kinematics(
+                target_position=list(pre_pos), target_orientation=target_ori,
+                orientation_mode="all", initial_position=seed)
+            final = self.ik_chain.inverse_kinematics(
+                target_position=list(task_pos), target_orientation=target_ori,
+                orientation_mode="all", initial_position=pre)
+            if max(abs(pre[1]), abs(pre[3]), abs(final[1]), abs(final[3])) > LABEL_MAX_BASE_TURN:
+                log.warning("[IK] attempt %d/%d reaches the zone from behind (joint 1 %.2f, "
+                            "joint 3 %.2f rad), retrying with a new seed",
+                            attempt + 1, max_attempts, final[1], final[3])
+                continue
+            hits_pre = self._label_collisions(pre[1:8])
+            hits_final = self._label_collisions(final[1:8], allow_tool_on_table=True)
+            if hits_pre or hits_final:
+                log.warning("[IK] attempt %d/%d in collision (pre %s, final %s as "
+                            "(block, obstacle)), retrying with a new seed",
+                            attempt + 1, max_attempts, hits_pre, hits_final)
+                continue
+            IK_RESIDUAL_THRESHOLD = 0.02  # metres
+            pre_err = np.linalg.norm(self.ik_chain.forward_kinematics(list(pre))[:3, 3] - pre_pos)
+            final_err = np.linalg.norm(self.ik_chain.forward_kinematics(list(final))[:3, 3] - task_pos)
+            if pre_err > IK_RESIDUAL_THRESHOLD or final_err > IK_RESIDUAL_THRESHOLD:
+                log.warning("[IK] attempt %d/%d large FK residual (pre=%.4f m, final=%.4f m > %.3f m threshold) — retrying",
+                            attempt + 1, max_attempts, pre_err, final_err, IK_RESIDUAL_THRESHOLD)
+                continue
+            log.info("[IK] Arm2 label IK attempt %d/%d OK — target=(%s) pre=%s final=%s (FK err pre=%.4f m final=%.4f m)",
+                     attempt + 1, max_attempts, np.round(task_pos, 4),
+                     np.round(pre[1:8], 4), np.round(final[1:8], 4), pre_err, final_err)
+            events.emit('ik', 'arm2', target=list(task_pos), pre=pre[1:8], final=final[1:8],
+                        attempt=attempt + 1, err_pre=pre_err, err_final=final_err,
+                        label_zone=zone_number)
+            return pre[1:8], final[1:8]
+        raise RuntimeError(f"[IK] no collision-free configuration for target={np.round(task_pos, 4)} "
+                           f"after {max_attempts} attempts")
 
     def pose_to_joints(self, location_tag, depth_offset=0.0):
         """Resolve a location tag to joint angles via IK.
@@ -823,6 +932,10 @@ opts = None
 # Item metadata provided by the operator at startup
 _item_name = ""
 _item_expiry = ""
+
+# Used instead of the setup GUI with --skip-item-setup
+DEFAULT_ITEM_NAME = "test_item"
+DEFAULT_EXPIRY_DAYS = 7
 
 # Cycle counter for output tracking
 _items_placed_output = 0
@@ -1477,12 +1590,10 @@ class ApplyLabel(smach.State):
 
         try:
             zone_number = 1 if target_zone == 'A' else 2
-            log.info("[ApplyLabel] Applying label to zone %s (zone_number=%d, depth=%.4f)",
-                     target_zone, zone_number, manager.depths[target_zone])
+            log.info("[ApplyLabel] Applying label to zone %s (zone_number=%d)",
+                     target_zone, zone_number)
             pre_joints, final_joints = hardware.compute_label_joints(
-                zone_number,
-                manager.depths[target_zone] + LABEL_PLACE_CORRECTION_Z,
-                pose_bounds={'x_min': 0.2, 'x_max': 0.7, 'y_min': -0.6, 'y_max': 0.6})
+                zone_number, arm1_depth=manager.depths[target_zone])
             log.info("[ApplyLabel] IK pre_joints=%s  final_joints=%s",
                      np.round(pre_joints, 4), np.round(final_joints, 4))
 
@@ -1624,9 +1735,6 @@ def _parse_args():
     parser.add_argument('--max-tilt-deg', type=float, default=45.0,
                         help="Refuse grasps whose approach tilt exceeds this "
                              "(only when honouring grasp orientation).")
-    parser.add_argument('--check-vacuum', action='store_true',
-                        help="Poll the vacuum sensor after grasp/release and "
-                             "fail the state if it disagrees.")
     parser.add_argument('--confirm', action='store_true',
                         help="Before each bin pick, wait for Enter (execute), 'r' "
                              "(regenerate the grasp), or 'q' (abort). Safe for bring-up.")
@@ -1641,6 +1749,12 @@ def _parse_args():
                              "position after the planner returns it, before the arm moves.")
     parser.add_argument('--offset-y', type=float, default=0.0, metavar='M',
                         help="World-frame Y correction (metres), as --offset-x.")
+    parser.add_argument('--no-label-check', action='store_true',
+                        help="Testing without labels: skip the label cup's vacuum checks, "
+                             "so the run carries on as if a label had been picked up.")
+    parser.add_argument('--skip-item-setup', action='store_true',
+                        help="Skip the item setup GUI and use a default item name and "
+                             "expiry (%s, today + %d days)." % (DEFAULT_ITEM_NAME, DEFAULT_EXPIRY_DAYS))
     parser.add_argument('--check-only', action='store_true',
                         help="Only check that BOTH robots (franka-interface 1 and 2) are "
                              "ready, then exit 0 if ready / non-zero if not. No motion. "
@@ -1672,7 +1786,7 @@ def _check_only():
 
 
 def main():
-    global hardware, _item_name, _item_expiry, disable_pneumatics, test_vacuum, opts, console
+    global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_check, opts, console
     opts = _parse_args()
     rospy.init_node('full_sequence_fsm')
 
@@ -1684,15 +1798,22 @@ def main():
     log.info("[Main] Node started (run events %s)", "on" if events.enabled else "off")
 
     disable_pneumatics = _resolve_disable_pneumatics(opts)
-    test_vacuum = opts.check_vacuum and not disable_pneumatics
     if disable_pneumatics:
         log.warning("[Main] PNEUMATICS DISABLED — vacuum commands and sensor "
                     "checks are no-ops (dry-run mode). Move the cups by hand.")
+    no_label_check = opts.no_label_check
+    if no_label_check:
+        log.warning("[Main] NO LABEL CHECK — the label cup's vacuum checks are skipped.")
 
     random.seed(1)
 
     # Collect item metadata via GUI before any motion starts.
-    _item_name, _item_expiry = _show_item_setup_gui()
+    if opts.skip_item_setup:
+        _item_name = DEFAULT_ITEM_NAME
+        _item_expiry = (datetime.date.today()
+                        + datetime.timedelta(days=DEFAULT_EXPIRY_DAYS)).isoformat()
+    else:
+        _item_name, _item_expiry = _show_item_setup_gui()
     if _item_name is None:
         log.warning("[Main] Setup cancelled by operator — exiting cleanly.")
         events.emit('shutdown', 'operator_cancel')
@@ -1701,7 +1822,8 @@ def main():
     events.emit('operator', 'setup', item=_item_name, expiry=_item_expiry,
                 no_vacuum=disable_pneumatics, straight_down=opts.straight_down,
                 confirm=opts.confirm, max_tilt_deg=opts.max_tilt_deg,
-                max_declines=opts.max_declines, check_vacuum=test_vacuum,
+                max_declines=opts.max_declines,
+                no_label_check=no_label_check, skip_item_setup=opts.skip_item_setup,
                 zero_item_depth=opts.zero_item_depth,
                 offset_x=opts.offset_x, offset_y=opts.offset_y)
 

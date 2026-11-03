@@ -16,8 +16,9 @@ them (research/labelling_arm_test/perception does). The focal length comes from 
 camera_info and the baseline from the right one (P[3] = -fx * baseline), so this follows
 whatever resolution the wrapper runs at; nothing is hard-coded.
 
-Runs inside the orio/ffs-ros container (ffs/Dockerfile) with the fast-foundationstereo
-repo mounted at $ORIO_FFS_DIR. The inference mirrors reference/ffs_orio_infer.py, the
+Runs inside the orio/ffs-ros container (orio_bringup/docker/Dockerfile.ffs, started by
+run_ffs.sh there) with the fast-foundationstereo repo mounted at $ORIO_FFS_DIR. The
+inference mirrors research/labelling_arm_test/ffs/reference/ffs_orio_infer.py, the
 offline script this was checked against.
 
 Params:

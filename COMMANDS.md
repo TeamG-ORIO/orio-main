@@ -70,6 +70,9 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
 
 - Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2).
 - Uses the ZED for label placement. If it won't start, replug it or use `--no-zed`.
+- Measures how high to put the label with Fast-FoundationStereo on the ZED's two images
+  (the ZED's own depth is off). Build its image once:
+  `docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs`
 - If an arm fails mid-run, a recovery window opens for it; the other keeps going.
 - When the bin is empty, it asks you to refill it. Enter to go on, `q` to finish.
 
@@ -81,10 +84,10 @@ bash run_full_demo.sh
 
 | Option | Description |
 | --- | --- |
-| `--vacuum` | Turn on real suction (both cups). |
-| `--no-vacuum` | No suction; test run only (default). |
-| `--auto` | Pick from the bin without asking each time. |
-| `--confirm` | Ask before each bin pick: Enter to pick, `r` to try another grasp (default). |
+| `--no-vacuum` | No suction; test run only. |
+| `--confirm` | Ask before each bin pick: Enter to pick, `r` to try another grasp. |
+| `--no-label-check` | Do not check the label cup; go on as if a label was picked up. |
+| `--skip-item-setup` | Skip the item window; use `test_item`, expiring in 7 days. |
 | `--straight-down` | Always move straight down to the item. |
 | `--offset-x M`, `--offset-y M` | Move every pick by this many metres. |
 | `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.30. |
@@ -101,8 +104,9 @@ bash run_full_demo.sh
 **Examples:**
 
 ```bash
-bash run_full_demo.sh --vacuum                 # the real demo
-bash run_full_demo.sh --no-zed --auto          # picking only, no labelling
+bash run_full_demo.sh                                       # the real demo
+bash run_full_demo.sh --no-zed                              # picking only, no labelling
+bash run_full_demo.sh --no-label-check --skip-item-setup   # test without labels
 ```
 
 ---

@@ -106,6 +106,22 @@ LBL_RGB_TOPIC   = "/zedm/zed_node/rgb/image_rect_color"
 LBL_DEPTH_TOPIC = "/zedm/zed_node/depth/depth_registered"
 LBL_ZONE1_TOPIC = "/grasp_poses_labelling_z1"
 LBL_ZONE2_TOPIC = "/grasp_poses_labelling_z2"
+# The label pose in panda_link0 with its measured z (full_sequence.py). The two topics
+# above keep the legacy content, the label PIXEL in x/y, for state_machine.py, which
+# back-projects it at the pick height carried over from arm 1.
+LBL_WORLD_Z1_TOPIC = "/label_pose_z1"
+LBL_WORLD_Z2_TOPIC = "/label_pose_z2"
+# Label depth: Fast-FoundationStereo on the ZED pair (orio_bringup/docker/run_ffs.sh), not
+# the ZED's own depth, which was too noisy (zed_only.launch now starts it without depth).
+# One /ffs/compute call publishes the left frame, its camera_info and the depth with the
+# same stamp.
+FFS_COMPUTE_SRV = "/ffs/compute"
+FFS_LEFT_TOPIC  = "/ffs/left"
+FFS_DEPTH_TOPIC = "/ffs/depth"
+FFS_INFO_TOPIC  = "/ffs/camera_info"
+# Half-width of the window whose median depth is used at the label pixel: one pixel can
+# be a hole or an outlier; 7x7 at 1080p is still well inside a label's footprint.
+LBL_DEPTH_WINDOW = 3
 LBL_TF_YAML     = os.path.join(_REPO_ROOT, "src/devel_packages/manipulation/config/zed_to_label_tf.yaml")
 
 LBL_WIDTH, LBL_HEIGHT = 1920, 1080
@@ -180,16 +196,27 @@ class CombinedPerceptionNode:
         rospy.Subscriber(PNP_RGB_TOPIC,   RosImage, lambda m: setattr(self, 'pnp_rgb_msg',   m))
         rospy.Subscriber(PNP_DEPTH_TOPIC, RosImage, lambda m: setattr(self, 'pnp_depth_msg', m))
 
-        self.lbl_rgb_msg   = None
-        self.lbl_depth_msg = None
-        rospy.Subscriber(LBL_RGB_TOPIC,   RosImage, lambda m: setattr(self, 'lbl_rgb_msg',   m))
-        rospy.Subscriber(LBL_DEPTH_TOPIC, RosImage, lambda m: setattr(self, 'lbl_depth_msg', m))
+        # Fast-FoundationStereo output for labelling: left frames and camera_infos kept by
+        # stamp so the ones belonging to a depth message can be found; the depth's arrival
+        # time tells a fresh result from the one before the request.
+        self.ffs_lefts = {}
+        self.ffs_infos = {}
+        self.ffs_depth_msg = None
+        self.ffs_depth_rx = rospy.Time(0)
+        rospy.Subscriber(FFS_LEFT_TOPIC, RosImage, self._keep_by_stamp(self.ffs_lefts),
+                         queue_size=1, buff_size=2 ** 24)
+        rospy.Subscriber(FFS_INFO_TOPIC, CameraInfo, self._keep_by_stamp(self.ffs_infos),
+                         queue_size=1)
+        rospy.Subscriber(FFS_DEPTH_TOPIC, RosImage, self._on_ffs_depth, queue_size=1,
+                         buff_size=2 ** 24)
 
         # ── Publishers ────────────────────────────────────────────────────────
         self.target_frame = "panda_link0"
         self.pnp_pub        = rospy.Publisher(PNP_POSE_TOPIC,       PoseArray, queue_size=1)
         self.lbl_pub1       = rospy.Publisher(LBL_ZONE1_TOPIC,      PoseArray, queue_size=1)
         self.lbl_pub2       = rospy.Publisher(LBL_ZONE2_TOPIC,      PoseArray, queue_size=1)
+        self.lbl_world_pubs = {1: rospy.Publisher(LBL_WORLD_Z1_TOPIC, PoseArray, queue_size=1),
+                               2: rospy.Publisher(LBL_WORLD_Z2_TOPIC, PoseArray, queue_size=1)}
         self.depth_query_pub = rospy.Publisher('/grasp_point_depth', Float32,   queue_size=1)
 
         # ── Grasp backend config ──────────────────────────────────────────────
@@ -917,6 +944,66 @@ class CombinedPerceptionNode:
         res.message = str(depth_m)
         return res
 
+    # ── Labelling depth (Fast-FoundationStereo) ───────────────────────────────
+
+    @staticmethod
+    def _keep_by_stamp(store, keep=30):
+        def cb(msg):
+            store[msg.header.stamp.to_nsec()] = msg
+            while len(store) > keep:
+                del store[min(store)]
+        return cb
+
+    def _on_ffs_depth(self, msg):
+        self.ffs_depth_msg = msg
+        self.ffs_depth_rx = rospy.Time.now()
+
+    def _ffs_frames(self):
+        """(left RGB uint8, depth in metres with NaN where invalid, camera_info) of one
+        fresh Fast-FoundationStereo computation. Raises RuntimeError with the reason."""
+        t_req = rospy.Time.now()
+        try:
+            rospy.wait_for_service(FFS_COMPUTE_SRV, timeout=5.0)
+            resp = rospy.ServiceProxy(FFS_COMPUTE_SRV, Trigger)()
+        except Exception as exc:  # noqa: BLE001 — reported in the response
+            raise RuntimeError(f"{FFS_COMPUTE_SRV} unavailable: {exc}")
+        if not resp.success:
+            raise RuntimeError(f"{FFS_COMPUTE_SRV}: {resp.message}")
+        rospy.loginfo("[FFS] %s", resp.message)
+        deadline = rospy.Time.now() + rospy.Duration(10.0)
+        while rospy.Time.now() < deadline:
+            depth_msg = self.ffs_depth_msg
+            if depth_msg is not None and self.ffs_depth_rx > t_req:
+                key = depth_msg.header.stamp.to_nsec()
+                if key in self.ffs_lefts and key in self.ffs_infos:
+                    color, depth = self.decode_ros_images(self.ffs_lefts[key], depth_msg)
+                    if color is None:
+                        raise RuntimeError("could not decode the FFS left/depth images")
+                    depth = depth.astype(np.float32)
+                    depth[~np.isfinite(depth) | (depth <= 0)] = np.nan
+                    return np.ascontiguousarray(color[:, :, :3]), depth, self.ffs_infos[key]
+            rospy.sleep(0.05)
+        raise RuntimeError(f"no {FFS_DEPTH_TOPIC} with its {FFS_LEFT_TOPIC} + "
+                           f"{FFS_INFO_TOPIC} within 10 s")
+
+    @staticmethod
+    def _sample_depth(depth, u, v, r=LBL_DEPTH_WINDOW):
+        """(median depth in the window around (u, v), number of valid pixels used)."""
+        win = depth[max(v - r, 0):v + r + 1, max(u - r, 0):u + r + 1]
+        vals = win[np.isfinite(win)]
+        if vals.size == 0:
+            return None, 0
+        return float(np.median(vals)), int(vals.size)
+
+    @staticmethod
+    def _normalise_label_angle(angle_deg):
+        """The angle in (-90, 90]. A label is the same rectangle turned by 180 deg, and
+        get_object_orientation's `angle % 180` jumps between ~0 and ~180 for a nearly
+        axis-aligned item, so without this the commanded tool yaw flips by 180 deg from one
+        frame to the next for an identical placement."""
+        a = angle_deg % 180.0
+        return a - 180.0 if a > 90.0 else a
+
     # ── Labelling service ─────────────────────────────────────────────────────
 
     def handle_labelling(self, req):
@@ -924,28 +1011,23 @@ class CombinedPerceptionNode:
         rospy.loginfo("Labelling grasp computation triggered!")
 
         try:
-            rgb_msg   = rospy.wait_for_message(LBL_RGB_TOPIC,   RosImage, timeout=3.0)
-            depth_msg = rospy.wait_for_message(LBL_DEPTH_TOPIC, RosImage, timeout=3.0)
-        except rospy.ROSException:
+            color_full, depth_full, info = self._ffs_frames()
+        except RuntimeError as exc:
+            rospy.logerr("[Label] %s", exc)
             res.success = False
-            res.message = "Timeout: Could not grab images from labelling camera."
+            res.message = str(exc)
             return res
-
-        color_base, depth_base = self.decode_ros_images(rgb_msg, depth_msg)
-        if color_base is None:
+        if depth_full.shape != color_full.shape[:2]:
             res.success = False
-            res.message = "Failed to decode labelling camera images."
+            res.message = f"depth {depth_full.shape} and colour {color_full.shape[:2]} differ in size"
+            rospy.logerr("[Label] %s", res.message)
             return res
+        fx, fy, cx, cy = info.K[0], info.K[4], info.K[2], info.K[5]
 
-        color_base = color_base[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
-        depth_base = depth_base[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
+        color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
 
         Image.fromarray(color_base).save(
             os.path.join(HOME, "ZED_imgs", f"input_color_{rospy.Time.now().secs}.png"))
-
-        # Principal point adjusted for crop offset
-        lbl_cx = LBL_CX - LBL_CROP_X1
-        lbl_cy = LBL_CY - LBL_CROP_Y1
 
         best_masks, boxes_xyxy, phrases, logits = self._detect_and_segment(color_base)
         if best_masks is None:
@@ -958,8 +1040,11 @@ class CombinedPerceptionNode:
         for mask in best_masks:
             joint_mask = (joint_mask | mask).astype(np.uint8)
 
-        opt_x1, opt_y1, opt_ang_deg1 = opt_label_loc(color_base, joint_mask, label_zone_num=1, visualize=False)
-        opt_x2, opt_y2, opt_ang_deg2 = opt_label_loc(color_base, joint_mask, label_zone_num=2, visualize=False)
+        placements = {}
+        for zone in (1, 2):
+            opt_x, opt_y, opt_ang = opt_label_loc(color_base, joint_mask, label_zone_num=zone, visualize=False)
+            placements[zone] = (None if opt_x is None
+                                else (opt_x, opt_y, self._normalise_label_angle(opt_ang)))
 
         # Save debug image for labelling with SAM masks and GroundingDINO bounding boxes
         import cv2
@@ -976,98 +1061,65 @@ class CombinedPerceptionNode:
             label = f"{phrases[i]} {float(logits[i]):.2f}"
             cv2.putText(debug_lbl, label, (int(x1), max(int(y1) - 6, 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color_rgb, 1)
-        if opt_x1 is not None:
-            cv2.circle(debug_lbl, (opt_x1, opt_y1), 8, (255, 128, 0), -1)
-            cv2.putText(debug_lbl, f"Z1 {opt_ang_deg1:.1f}deg", (opt_x1 + 10, opt_y1),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 128, 0), 1)
-        if opt_x2 is not None:
-            cv2.circle(debug_lbl, (opt_x2, opt_y2), 8, (128, 0, 255), -1)
-            cv2.putText(debug_lbl, f"Z2 {opt_ang_deg2:.1f}deg", (opt_x2 + 10, opt_y2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (128, 0, 255), 1)
-        cx, cy = int(lbl_cx), int(lbl_cy)
-        cv2.drawMarker(debug_lbl, (cx, cy), (0, 0, 0), cv2.MARKER_CROSS, 40, 4)
-        cv2.drawMarker(debug_lbl, (cx, cy), (255, 255, 255), cv2.MARKER_CROSS, 36, 2)
-        cv2.putText(debug_lbl, f"CX={cx} CY={cy}", (cx + 14, cy - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3)
-        cv2.putText(debug_lbl, f"CX={cx} CY={cy}", (cx + 14, cy - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+        stamp = rospy.Time.now()
+        zones_log, parts = {}, []
+        for zone, dot in ((1, (255, 128, 0)), (2, (128, 0, 255))):
+            if placements[zone] is None:
+                zones_log[zone] = None
+                parts.append(f"Zone{zone}=FAIL (no placement)")
+                continue
+            opt_x, opt_y, ang_deg = placements[zone]
+            u, v = int(opt_x) + LBL_CROP_X1, int(opt_y) + LBL_CROP_Y1
+            z_cam, n = self._sample_depth(depth_full, u, v)
+            zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
+                               'depth': float(z_cam) if z_cam is not None else 0.0}
+            cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 8, dot, -1)
+            cv2.putText(debug_lbl, f"Z{zone} {ang_deg:.1f}deg "
+                        + (f"{z_cam:.3f}m" if z_cam is not None else "NO DEPTH"),
+                        (int(opt_x) + 10, int(opt_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
+            if z_cam is None:
+                rospy.logerr(f"No valid depth within {LBL_DEPTH_WINDOW} px of the Zone {zone} "
+                             f"pixel ({u}, {v}). Aborting zone {zone}.")
+                parts.append(f"Zone{zone}=FAIL (no depth)")
+                continue
+
+            quat = R_scipy.from_matrix(
+                self.tf_lbl[:3, :3] @ R_scipy.from_euler('z', np.radians(ang_deg)).as_matrix()
+            ).as_quat()
+            cam = np.array([(u - cx) * z_cam / fx, (v - cy) * z_cam / fy, z_cam, 1.0])
+            world = self.tf_lbl @ cam
+
+            # Legacy topic: the label pixel (state_machine.py back-projects it itself).
+            legacy = PoseArray()
+            legacy.header.stamp, legacy.header.frame_id = stamp, self.target_frame
+            p = Pose()
+            p.position.x, p.position.y, p.position.z = float(u), float(v), 0.0
+            p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = quat
+            legacy.poses.append(p)
+            (self.lbl_pub1 if zone == 1 else self.lbl_pub2).publish(legacy)
+
+            msg = PoseArray()
+            msg.header.stamp, msg.header.frame_id = stamp, self.target_frame
+            p = Pose()
+            p.position.x, p.position.y, p.position.z = world[:3]
+            p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w = quat
+            msg.poses.append(p)
+            self.lbl_world_pubs[zone].publish(msg)
+
+            rospy.loginfo("[Label] zone %d: px (%d, %d) depth %.3f m (%d px) -> camera "
+                          "(%.3f, %.3f, %.3f) -> world (%.3f, %.3f, %.3f), angle %.1f deg",
+                          zone, u, v, z_cam, n, cam[0], cam[1], cam[2],
+                          world[0], world[1], world[2], ang_deg)
+            parts.append(f"Zone{zone}=OK world ({world[0]:.3f}, {world[1]:.3f}, {world[2]:.3f})")
+
         Image.fromarray(debug_lbl).save(
             os.path.join(HOME, "Segmented_imgs", f"debug_label_{rospy.Time.now().secs}.png"))
 
-        time = rospy.Time.now()
-        pose_array_msg1 = PoseArray()
-        pose_array_msg1.header.stamp    = time
-        pose_array_msg1.header.frame_id = self.target_frame
-
-        pose_array_msg2 = PoseArray()
-        pose_array_msg2.header.stamp    = time
-        pose_array_msg2.header.frame_id = self.target_frame
-
-
-        if opt_x1 is not None:
-            depth_val1 = depth_base[opt_y1, opt_x1]
-
-            if depth_val1 == 0:
-                rospy.logerr(f"Depth is 0 at Zone 1 pixel ({opt_x1}, {opt_y1}). Aborting zone 1.")
-            else:
-                Z1 = depth_val1 # / DEPTH_UNIT_LBL
-                X1 = (opt_x1 - LBL_CX) * Z1 / LBL_FX
-                Y1 = (opt_y1 - LBL_CY) * Z1 / LBL_FY
-                print("Zone 1 Optx1: ", opt_x1)
-                print("Zone 1 Opty1: ", opt_y1)
-                print("Zone 1 X1: ", X1)
-                print("Zone 1 Y1: ", Y1)
-                print("Zone 1 Z1: ", Z1)
-                opt_x_adj = opt_x1 + LBL_CROP_X1
-                opt_y_adj = opt_y1 + LBL_CROP_Y1
-                pos1 = np.array([opt_x_adj, opt_y_adj, 0.0, 1.0])
-                ang1 = np.radians(opt_ang_deg1)
-                quat1 = R_scipy.from_matrix(
-                    self.tf_lbl[:3, :3] @ R_scipy.from_euler('z', ang1).as_matrix()
-                ).as_quat()
-                p1 = Pose()
-                p1.position.x, p1.position.y, p1.position.z = pos1[0], pos1[1], pos1[2]
-                p1.orientation.x, p1.orientation.y, p1.orientation.z, p1.orientation.w = quat1
-                print("Zone 1 x: ",p1.position.x, " y: ", p1.position.y)
-                pose_array_msg1.poses.append(p1)
-                self.lbl_pub1.publish(pose_array_msg1)
-        else:
-            depth_val1 = 0
-
-        if opt_x2 is not None:
-            depth_val2 = depth_base[opt_y2, opt_x2]
-            if depth_val2 == 0:
-                rospy.logerr(f"Depth is 0 at Zone 2 pixel ({opt_x2}, {opt_y2}). Aborting zone 2.")
-            else:
-                Z2 = depth_val2 # / DEPTH_UNIT_LBL
-                X2 = (opt_x2 - lbl_cx) * Z2 / LBL_FX
-                Y2 = (opt_y2 - lbl_cy) * Z2 / LBL_FY
-                print("Zone 2 Optx1: ", opt_x2)
-                print("Zone 2 Opty1: ", opt_y2)
-                print("Zone 2 X1: ", X2)
-                print("Zone 2 Y1: ", Y2)
-                print("Zone 2 Z1: ", Z2)
-                opt_x_adj = opt_x2 + LBL_CROP_X1
-                opt_y_adj = opt_y2 + LBL_CROP_Y1
-                pos2 = np.array([opt_x_adj, opt_y_adj, 0.0, 1.0])
-                ang2 = np.radians(opt_ang_deg2)
-                quat2 = R_scipy.from_matrix(
-                    self.tf_lbl[:3, :3] @ R_scipy.from_euler('z', ang2).as_matrix()
-                ).as_quat()
-                p2 = Pose()
-                p2.position.x, p2.position.y, p2.position.z = pos2[0], pos2[1], pos2[2]
-                p2.orientation.x, p2.orientation.y, p2.orientation.z, p2.orientation.w = quat2
-                print("Zone 2 x: ", p2.position.x, " y: ", p2.position.y)
-                pose_array_msg2.poses.append(p2)
-                self.lbl_pub2.publish(pose_array_msg2)
-        else:
-            depth_val2 = 0
-
-        res.success = bool((depth_val1 != 0) or (depth_val2 != 0))
-        res.message = f"Zone1={'OK' if depth_val1 != 0 else 'FAIL'}, Zone2={'OK' if depth_val2 != 0 else 'FAIL'}"
-        self.rlog.lbl(color_base, best_masks, boxes_xyxy, phrases, logits, ok=res.success, reason=res.message, zones={
-            1: {'x': opt_x1, 'y': opt_y1, 'angle_deg': opt_ang_deg1, 'depth': float(depth_val1)} if opt_x1 is not None else None,
-            2: {'x': opt_x2, 'y': opt_y2, 'angle_deg': opt_ang_deg2, 'depth': float(depth_val2)} if opt_x2 is not None else None})
+        res.success = any(part.startswith(f"Zone{z}=OK") for part in parts for z in (1, 2))
+        res.message = ", ".join(parts)
+        self.rlog.lbl(color_base, best_masks, boxes_xyxy, phrases, logits, ok=res.success,
+                      reason=res.message, zones=zones_log)
         return res
 
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Start the Fast-FoundationStereo depth node (ffs_depth_node.py) in its own container.
-# Long-running, like orio_bringup/docker/run_suction.sh: start it once at bring-up, it
-# serves /ffs/compute and publishes /ffs/depth for the ZED-M. A ROS master must be up.
+# Start the Fast-FoundationStereo depth node (orio_perception/scripts/ffs_depth_node.py)
+# in its own container. Long-running, like run_suction.sh: start it once at bring-up, it
+# serves /ffs/compute and publishes /ffs/depth for the ZED-M, which perception's
+# /compute_grasps_labelling reads. A ROS master must be up.
 #
 # Env:
 #   ORIO_FFS_DIR         fast-foundationstereo checkout with the team's weights/ folder
@@ -15,7 +16,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TEST_DIR="$(dirname "$HERE")"                 # research/labelling_arm_test
+REPO="$(cd "$HERE/../../../.." && pwd)"
+SCRIPTS="$REPO/src/devel_packages/orio_perception/scripts"
 NAME="${ORIO_FFS_CONTAINER:-orio_ffs}"
 IMAGE="${ORIO_FFS_IMAGE:-orio/ffs-ros:latest}"
 FFS_DIR="${ORIO_FFS_DIR:-/home/orio/newest/zed/fast-foundationstereo}"
@@ -28,12 +30,12 @@ if [ ! -f "$FFS_DIR/core/utils/utils.py" ]; then
 fi
 if [ ! -f "$CKPT" ]; then
     echo "No checkpoint at $CKPT (set ORIO_FFS_CHECKPOINT)." >&2
-    echo "  See reference/ORIO_QUICKSTART.md for where the weights come from." >&2
+    echo "  See research/labelling_arm_test/ffs/reference/ORIO_QUICKSTART.md for where the weights come from." >&2
     exit 1
 fi
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-    echo "Image $IMAGE missing. Build it (needs the \`ffs\` image first, see README.md):" >&2
-    echo "  docker build -t $IMAGE - < $HERE/Dockerfile" >&2
+    echo "Image $IMAGE missing. Build it (needs the \`ffs\` image first, see Dockerfile.ffs):" >&2
+    echo "  docker build -t $IMAGE - < $HERE/Dockerfile.ffs" >&2
     exit 1
 fi
 CKPT="$(readlink -f "$CKPT")"
@@ -48,9 +50,9 @@ exec docker run -d --name "$NAME" --restart unless-stopped \
     -e ORIO_FFS_DIR=/opt/fast-foundationstereo \
     -v "$FFS_DIR:/opt/fast-foundationstereo:ro" \
     -v "$CKPT:/opt/ffs_checkpoint.pth:ro" \
-    -v "$TEST_DIR:/opt/labelling_arm_test:ro" \
+    -v "$SCRIPTS:/opt/orio_perception_scripts:ro" \
     "$IMAGE" \
-    /opt/conda/envs/my/bin/python /opt/labelling_arm_test/ffs/ffs_depth_node.py \
+    /opt/conda/envs/my/bin/python /opt/orio_perception_scripts/ffs_depth_node.py \
         _model:=/opt/ffs_checkpoint.pth \
         _scale:="${ORIO_FFS_SCALE:-0.5}" \
         _valid_iters:="${ORIO_FFS_ITERS:-8}" \
