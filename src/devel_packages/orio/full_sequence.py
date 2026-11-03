@@ -38,6 +38,7 @@ import os
 import pickle
 import queue
 import random
+import signal
 import sys
 import threading
 
@@ -168,6 +169,37 @@ def _init_events():
 
 # Set to trigger a clean shutdown from any thread
 shutdown_event = threading.Event()
+
+# Set by Ctrl-C (_install_sigint_handler). Unlike a 'q' shutdown, which lets the
+# in-flight motion finish, this stops both arms mid-motion.
+interrupted = threading.Event()
+
+
+def _install_sigint_handler():
+    """Make Ctrl-C stop BOTH arms. Call after the FrankaArm objects exist.
+
+    Each FrankaArm() installs its own SIGINT handler, and the last one wins: it
+    cancels only that arm's motion and calls sys.exit(0). That neither shuts ROS
+    down nor stops the smach threads, so the other arm carries on (and switches
+    its cup back on). This handler only sets flags: the motion loop of each arm
+    sees them, cancels its own skill and unwinds the state. A second Ctrl-C exits
+    at once, for when something is stuck (e.g. a recovery GUI is open).
+    """
+    def _on_sigint(sig, frame):
+        if interrupted.is_set():
+            print("\n[ORIO] Second Ctrl-C: exiting now.", flush=True)
+            os._exit(130)
+        print("\n[ORIO] Ctrl-C: stopping both arms (Ctrl-C again to force exit).",
+              flush=True)
+        interrupted.set()
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, _on_sigint)
+
+
+def _raise_if_interrupted():
+    if interrupted.is_set():
+        raise KeyboardInterrupt
 
 # Per-arm recovery events — set while that arm is in the recovery GUI.
 # The other arm only waits on the opposing event when it needs zone access.
@@ -438,6 +470,7 @@ class RobotHardware:
         never recovers from hits the deadline and aborts the state.
         """
         arm = self._arm(arm_name)
+        _raise_if_interrupted()      # Ctrl-C: issue no new motion
         motion_fn(*args, **kwargs)   # issue asynchronously
         deadline = rospy.Time.now() + rospy.Duration(timeout)
         rate = rospy.Rate(20)
@@ -445,6 +478,7 @@ class RobotHardware:
         while True:
             try:
                 if arm.is_skill_done(ignore_errors=False):
+                    _raise_if_interrupted()   # done because Ctrl-C cancelled it
                     return faults
             except Exception as exc:   # FrankaArmException / ...NotReadyException
                 faults += 1
@@ -468,9 +502,9 @@ class RobotHardware:
                     % (desc, arm_name, timeout,
                        "" if not faults else " after %d controller fault(s)" % faults))
             # On a 'q' shutdown the in-flight motion is allowed to FINISH (as in
-            # state_machine.py); the states exit at their loop points. Only a ROS
-            # shutdown (Ctrl-C) aborts mid-motion.
-            if rospy.is_shutdown():
+            # state_machine.py); the states exit at their loop points. Ctrl-C (or a
+            # ROS shutdown) aborts mid-motion.
+            if interrupted.is_set() or rospy.is_shutdown():
                 self._abort_skill(arm_name)
                 raise KeyboardInterrupt
             rate.sleep()
@@ -1147,10 +1181,19 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
 
 
 def _safe_execute(state_name, fn, userdata):
-    """Run fn(userdata); catch any exception, store diagnostics, and return 'failed'."""
+    """Run fn(userdata); catch any exception, store diagnostics, and return 'failed'.
+
+    After Ctrl-C the state was stopped on purpose: return 'failed' without the
+    error report, and the recovery state ends this arm instead of opening its GUI.
+    """
     try:
         return fn(userdata)
-    except Exception as exc:
+    except (Exception, KeyboardInterrupt) as exc:
+        if interrupted.is_set():
+            log.warning("[%s] stopped by Ctrl-C", state_name)
+            return 'failed'
+        if isinstance(exc, KeyboardInterrupt):
+            raise
         log.error("[%s] Unhandled exception: %s", state_name, exc)
         events.emit('error', state_name, msg=str(exc), ok=False)
         userdata.recovery_failed_state = state_name
@@ -1168,6 +1211,8 @@ class HumanRecoveryArm1(smach.State):
                              input_keys=['recovery_failed_state', 'recovery_error_msg'])
 
     def execute(self, userdata):
+        if interrupted.is_set():
+            return 'shutdown'
         log.warning("[ARM1 Recovery] Pausing ARM1 — showing GUI (ARM2 continues)")
         recovery_event_arm1.set()
         with manager.lock:  # release any zone locks held by the failed state
@@ -1199,6 +1244,8 @@ class HumanRecoveryArm2(smach.State):
                              input_keys=['recovery_failed_state', 'recovery_error_msg'])
 
     def execute(self, userdata):
+        if interrupted.is_set():
+            return 'shutdown'
         log.warning("[ARM2 Recovery] Pausing ARM2 — showing GUI (ARM1 continues)")
         recovery_event_arm2.set()
         with manager.lock:  # release any zone locks held by the failed state
@@ -1397,6 +1444,7 @@ class DropToZone(smach.State):
                     break
 
         if not target_zone:
+            _raise_if_interrupted()   # this loop has no other way out on Ctrl-C
             log.debug("[DropToZone] No empty zone available → wait")
             rospy.sleep(0.5)
             return 'wait'
@@ -1623,8 +1671,12 @@ class ApplyLabel(smach.State):
             log.info("[ApplyLabel] IK pre_joints=%s  final_joints=%s",
                      np.round(pre_joints, 4), np.round(final_joints, 4))
 
-            log.info("[ApplyLabel] Registering label — item='%s' expiry='%s'", _item_name, _item_expiry)
-            call_add_item_service(_item_name, _item_expiry)
+            if opts.no_rfid:
+                log.info("[ApplyLabel] RFID off (--no-rfid): label not registered")
+            else:
+                log.info("[ApplyLabel] Registering label — item='%s' expiry='%s'",
+                         _item_name, _item_expiry)
+                call_add_item_service(_item_name, _item_expiry)
 
             arm2 = hardware.label_arm
             hardware._move('arm2', arm2.goto_joints, pre_joints, duration=5, desc="goto label pre")
@@ -1693,6 +1745,9 @@ def _parse_args():
     parser.add_argument('--skip-item-setup', action='store_true',
                         help="Skip the item setup GUI and use a default item name and "
                              "expiry (%s, today + %d days)." % (DEFAULT_ITEM_NAME, DEFAULT_EXPIRY_DAYS))
+    parser.add_argument('--no-rfid', action='store_true',
+                        help="Do not register labels with the RFID inventory node "
+                             "(skips the 5 s wait for /inventory/add_item on each label).")
     parser.add_argument('--check-only', action='store_true',
                         help="Only check that BOTH robots (franka-interface 1 and 2) are "
                              "ready, then exit 0 if ready / non-zero if not. No motion. "
@@ -1778,6 +1833,7 @@ def main():
         max_tilt_deg=opts.max_tilt_deg,
         grasp_offset=(opts.offset_x, opts.offset_y),
         zero_item_depth=opts.zero_item_depth)
+    _install_sigint_handler()   # after the FrankaArms: they install their own
 
     # Map each ARM1 recovery outcome back to the corresponding state (or finish on shutdown)
     arm1_recovery_transitions = {s: s for s in ARM1_STATES}
@@ -1834,8 +1890,12 @@ def main():
         sis.start()
         log.info("[Main] Starting state machine execution")
         outcome = top_sm.execute()
-        log.info("[Main] State machine finished with outcome: %s", outcome)
-        events.emit('shutdown', 'finished', outcome=outcome)
+        if interrupted.is_set():
+            log.warning("[Main] Stopped by Ctrl-C: both arms stopped")
+            events.emit('shutdown', 'interrupt')
+        else:
+            log.info("[Main] State machine finished with outcome: %s", outcome)
+            events.emit('shutdown', 'finished', outcome=outcome)
     except (rospy.ROSInterruptException, KeyboardInterrupt):
         log.warning("[Main] Interrupt received — requesting clean shutdown")
         events.emit('shutdown', 'interrupt')

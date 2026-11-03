@@ -96,7 +96,7 @@ bash run_full_demo.sh
 | `--planner NAME` | `suction` (default) or `dexnet` (see `docs/DEXNET.md`). |
 | `--checkpoint TAG` | Which grasp network to use (a run tag or a file path). |
 | `--no-zed` | Run without the ZED. Labels cannot be placed. |
-| `--no-rfid` | Do not start the RFID inventory node. |
+| `--no-rfid` | Do not start the RFID inventory node or register labels. |
 | `--no-affordance` | Do not save the grasp pictures (a bit faster). |
 | `--no-logging` | Do not record this run. |
 | `--live` | Also show the recording in an open `rerun` viewer. |

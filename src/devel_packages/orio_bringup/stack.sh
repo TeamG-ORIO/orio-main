@@ -347,6 +347,8 @@ _control_pc_tripwire() {
         | awk '
             /libprotobuf/                                        { next }
             /RobotStateMessage/                                  { next }
+            # the tail of a parse-glitch line that arrived split in two (its field list)
+            /(current|last_motion)_errors_/                      { next }
             /ParsingFromArray Exception/                         { next }
             /done_skill_id error/                                { next }
             /[Cc]aught Franka Exception/                         { next }

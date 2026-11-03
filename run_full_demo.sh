@@ -29,7 +29,7 @@
 #   bash run_full_demo.sh --straight-down # ignore grasp tilt, approach vertically
 #   bash run_full_demo.sh --no-zed        # skip the ZED: labelling poses will time out
 #                                           #   (arm 2 will sit in its recovery GUI)
-#   bash run_full_demo.sh --no-rfid       # skip the RFID inventory node
+#   bash run_full_demo.sh --no-rfid       # skip the RFID node and label registration
 #   bash run_full_demo.sh --no-logging    # skip the rerun recorder for this run
 #   bash run_full_demo.sh --live          # also stream to a running `rerun` viewer
 #   bash run_full_demo.sh --no-affordance # skip the per-grasp affordance panels
@@ -94,7 +94,7 @@ while [ $# -gt 0 ]; do
         --no-pnp-vacuum-test) SM_EXTRA+=(--no-pnp-vacuum-test) ;;
         --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
         --no-zed)        USE_ZED=0 ;;
-        --no-rfid)       USE_RFID=0 ;;
+        --no-rfid)       USE_RFID=0; SM_EXTRA+=(--no-rfid) ;;
         --no-logging)    export ORIO_LOGGING=0; LOGGING_REQUESTED=0 ;;
         --logging)       export ORIO_LOGGING=1; LOGGING_REQUESTED=1 ;;
         --live)          export ORIO_RERUN_LIVE=1 ;;
@@ -243,7 +243,7 @@ if [ "$USE_RFID" -eq 1 ]; then
         log "      will log a warning per label and continue. --no-rfid silences this."
     fi
 else
-    log "RFID node DISABLED (--no-rfid): label registration will log a warning per label."
+    log "RFID node DISABLED (--no-rfid): labels are not registered."
 fi
 
 # Pneumatics (both cups), run-scoped.
