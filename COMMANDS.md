@@ -63,7 +63,8 @@ bash run_dexnet_pnp_single.sh --vacuum --offset-y -0.015   # cup lands 1.5 cm to
 
 Runs the full demo in one terminal: arm 1 picks items from the bin with the new grasp
 network and moves them through the label zones to the output box, while arm 2 applies
-labels. A window asks for the item name and expiry first.
+labels. A window asks for the item and expiry first: pick the item from the list, or
+choose **Other…** to type a new one.
 Press **Ctrl-C** to stop the run; the stack stays up for the next run (shared with
 `run_dexnet_pnp_single.sh`). To stop everything, run `bash stop_dexnet_pnp.sh`.
 Each run saves a log to `logging/demo/<timestamp>.log`.

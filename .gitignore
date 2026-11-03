@@ -47,6 +47,9 @@ dataset/
 *.sqlite3
 !src/devel_packages/orio_rfid/seed_medical_inventory.db
 
+# Item catalog files written by the item setup window; local to this machine.
+src/devel_packages/orio_rfid/item_catalog/
+
 # --- Regenerable debug captures ---
 depth_image.png
 depth_raw.npy

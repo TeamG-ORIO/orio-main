@@ -16,6 +16,13 @@ RFID inventory subsystem for ORIO (part of the SVD/Encore demo).
 (paths resolved relative to the file, so it works from any CWD). To reset the catalog
 to the seed: `rm medical_inventory.db` and restart `db_manager.py`.
 
+## Item pictures (`item_catalog/`)
+The item setup window at the start of a run (`orio/item_setup_gui.py`) lists every item
+name in the database, plus the ones in `item_catalog/items.json`.
+- `items.json` — item names and their pictures. Add an entry to give an item a picture.
+- `images/` — the pictures (cropped JPEGs). Items without one use `images/default.png`.
+- `local_items.json` — names typed in through **Other…** (git-ignored).
+
 ## Dependencies
 - `sllurp` (Impinj LLRP) — `pip install sllurp`
 - `mercury` — built from the `RFID/python-mercuryapi` **submodule**

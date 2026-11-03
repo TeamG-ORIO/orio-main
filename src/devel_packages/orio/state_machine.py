@@ -23,6 +23,7 @@ import random
 import pickle
 import yaml
 import CollisionChecker
+from item_setup_gui import show_item_setup_gui
 
 try:
     from orio_core.events import TOPIC as EVENTS_TOPIC, EventSink
@@ -1205,97 +1206,6 @@ class ApplyLabel(smach.State):
 # SECTION 5: MAIN EXECUTION FUNCTION
 # ==============================================================================
 
-def _show_item_setup_gui():
-    """Blocking Tkinter dialog to collect item name and expiry date before the run starts.
-
-    Returns (item_name: str, expiry: str).  Closing the window without submitting
-    raises SystemExit so the operator cannot accidentally start without metadata.
-    """
-    result = {'name': None, 'expiry': None}
-
-    def _run():
-        root = tk.Tk()
-        root.title("[ORIO] Label Registration Setup")
-        root.configure(bg='#1e1e2e')
-        root.resizable(False, False)
-
-        # ── Header ──────────────────────────────────────────────────────────
-        header = tk.Frame(root, bg='#89b4fa', pady=8)
-        header.pack(fill='x')
-        tk.Label(header, text="  ORIO — Label Registration Setup",
-                 font=('Helvetica', 14, 'bold'), fg='#1e1e2e', bg='#89b4fa').pack()
-
-        # ── Fields ───────────────────────────────────────────────────────────
-        fields = tk.Frame(root, bg='#1e1e2e', padx=20, pady=16)
-        fields.pack(fill='x')
-
-        tk.Label(fields, text="Item name:", font=('Courier', 11),
-                 fg='#cdd6f4', bg='#1e1e2e', anchor='w').grid(row=0, column=0, sticky='w', pady=(0, 8))
-        name_var = tk.StringVar()
-        name_entry = tk.Entry(fields, textvariable=name_var, font=('Courier', 12),
-                              bg='#313244', fg='#cdd6f4', insertbackground='white',
-                              relief='flat', width=30)
-        name_entry.grid(row=0, column=1, padx=(12, 0), pady=(0, 8))
-
-        tk.Label(fields, text="Expiry date\n(YYYY-MM-DD):", font=('Courier', 11),
-                 fg='#cdd6f4', bg='#1e1e2e', anchor='w').grid(row=1, column=0, sticky='w')
-        expiry_var = tk.StringVar()
-        expiry_entry = tk.Entry(fields, textvariable=expiry_var, font=('Courier', 12),
-                                bg='#313244', fg='#cdd6f4', insertbackground='white',
-                                relief='flat', width=30)
-        expiry_entry.grid(row=1, column=1, padx=(12, 0))
-
-        # ── Error label (hidden until validation fails) ──────────────────────
-        err_var = tk.StringVar()
-        err_label = tk.Label(root, textvariable=err_var, font=('Courier', 10),
-                             fg='#f38ba8', bg='#1e1e2e')
-        err_label.pack(padx=20, anchor='w')
-
-        # ── Buttons ───────────────────────────────────────────────────────────
-        btn_frame = tk.Frame(root, bg='#1e1e2e', pady=12)
-        btn_frame.pack(fill='x', padx=20)
-
-        def on_submit():
-            name   = name_var.get().strip()
-            expiry = expiry_var.get().strip()
-            if not name:
-                err_var.set("Item name cannot be empty.")
-                return
-            if not expiry:
-                err_var.set("Expiry date cannot be empty.")
-                return
-            # Basic format check
-            import re
-            if not re.match(r'^\d{4}-\d{2}-\d{2}$', expiry):
-                err_var.set("Expiry must be YYYY-MM-DD format.")
-                return
-            result['name']   = name
-            result['expiry'] = expiry
-            root.destroy()
-
-        def on_cancel():
-            if messagebox.askyesno("Cancel", "Abort the run?", parent=root):
-                root.destroy()
-
-        tk.Button(btn_frame, text="Start Run →", command=on_submit,
-                  bg='#a6e3a1', fg='#1e1e2e', font=('Helvetica', 12, 'bold'),
-                  relief='flat', padx=16, pady=6).pack(side='left', padx=(0, 12))
-        tk.Button(btn_frame, text="Cancel", command=on_cancel,
-                  bg='#f38ba8', fg='#1e1e2e', font=('Helvetica', 12, 'bold'),
-                  relief='flat', padx=16, pady=6).pack(side='left')
-
-        root.protocol("WM_DELETE_WINDOW", on_cancel)
-        name_entry.focus_set()
-        # Allow Enter key to submit
-        root.bind('<Return>', lambda _: on_submit())
-        root.lift()
-        root.mainloop()
-
-    _run()
-
-    return result['name'], result['expiry']  # both None if cancelled
-
-
 def _shutdown_listener():
     """Background thread: sets shutdown_event when the operator types 'q' + Enter."""
     print("\n[ORIO] Type 'q' + Enter to stop cleanly.")
@@ -1341,7 +1251,7 @@ def main():
     random.seed(1)
 
     # Collect item metadata via GUI before any motion starts.
-    _item_name, _item_expiry = _show_item_setup_gui()
+    _item_name, _item_expiry = show_item_setup_gui()
     if _item_name is None:
         log.warning("[Main] Setup cancelled by operator — exiting cleanly.")
         events.emit('shutdown', 'operator_cancel')
