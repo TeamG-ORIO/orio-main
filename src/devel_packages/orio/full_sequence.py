@@ -54,7 +54,7 @@ from frankapy import FrankaArm
 from autolab_core import RigidTransform
 from geometry_msgs.msg import PoseArray
 from scipy.spatial.transform import Rotation as R
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Int32, String
 from std_srvs.srv import Trigger
 from custom_msgs.srv import AddLabeledItem
 import CollisionChecker
@@ -75,6 +75,11 @@ LABEL_PLACE_CORRECTION_Z = 0.00  # To prevent excessive interference with the ob
 POSES_FILE        = "joint_angles.json"
 TARGET_POSES_FILE = "Target_Task_Poses.json"
 URDF_FILE         = "panda_arm_hand.urdf"
+
+# The ClearCore's has-item thresholds on the raw vacuum reading (0-4095). Only quoted in
+# failure messages; the firmware decides. Keep in step with pneumatic_control.ino.
+VAC_THRESHOLD_HIGH = 1000
+VAC_THRESHOLD_LOW = 800
 
 # Same safe workspace box FetchInput has always enforced on the incoming grasp pose (world).
 PICK_BOUNDS = {'x_min': -0.2, 'x_max': 0.55, 'y_min': -0.8, 'y_max': -0.1,
@@ -171,7 +176,8 @@ recovery_event_arm2 = threading.Event()
 # Ensures only one Tkinter window exists at a time — Tkinter is not thread-safe
 _gui_lock = Lock()
 
-no_label_check = False  # Set from --no-label-check: skip the label cup's sensor checks
+no_label_vacuum_check = False  # Set from --no-label-vacuum-check: skip the label cup's sensor checks
+no_pnp_vacuum_test = False     # Set from --no-pnp-vacuum-test: skip the pick cup's sensor checks
 
 # When True, vacuum service calls and sensor asserts are skipped (dry-run
 # without pneumatics). Set in main() from --no-vacuum / ORIO_DISABLE_PNEUMATICS.
@@ -374,6 +380,13 @@ class RobotHardware:
                          lambda msg: setattr(self, 'pnp_has_item', msg.data), queue_size=1)
         rospy.Subscriber("orio/vacuum/lbl_has_item", Bool,
                          lambda msg: setattr(self, 'lbl_has_item', msg.data), queue_size=1)
+        # Raw sensor readings, only to explain a failed vacuum check (None = none received)
+        self.pnp_raw = None
+        self.lbl_raw = None
+        rospy.Subscriber("orio/vacuum/pnp_raw", Int32,
+                         lambda msg: setattr(self, 'pnp_raw', msg.data), queue_size=1)
+        rospy.Subscriber("orio/vacuum/lbl_raw", Int32,
+                         lambda msg: setattr(self, 'lbl_raw', msg.data), queue_size=1)
 
         log.info("[Hardware] Initialization complete")
 
@@ -485,22 +498,34 @@ class RobotHardware:
     def assert_vacuum(self, cup, expected_state, timeout=1.0):
         """Poll the vacuum sensor for `cup` ('pnp'|'lbl') until it matches
         `expected_state`; raise RuntimeError if it doesn't within `timeout` s."""
-        global disable_pneumatics, no_label_check
+        global disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test
         if disable_pneumatics:
             return
-        if cup == 'lbl' and no_label_check:
+        if cup == 'lbl' and no_label_vacuum_check:
+            return
+        if cup == 'pnp' and no_pnp_vacuum_test:
             return
         attr = 'pnp_has_item' if cup == 'pnp' else 'lbl_has_item'
+        raw_attr = 'pnp_raw' if cup == 'pnp' else 'lbl_raw'
+        readings = []
         deadline = rospy.Time.now() + rospy.Duration(timeout)
         while rospy.Time.now() < deadline:
             if getattr(self, attr) == expected_state:
                 return
+            if getattr(self, raw_attr) is not None:
+                readings.append(getattr(self, raw_attr))
             rospy.sleep(0.05)
         actual = getattr(self, attr)
         action = "pick up" if expected_state else "release"
+        if not readings:
+            raw = "no raw readings received"
+        elif expected_state:
+            raw = f"peak raw {max(readings)}, needs > {VAC_THRESHOLD_HIGH}"
+        else:
+            raw = f"lowest raw {min(readings)}, needs < {VAC_THRESHOLD_LOW}"
         raise RuntimeError(
             f"{cup.upper()} vacuum failed to {action} item "
-            f"(expected={expected_state}, actual={actual})"
+            f"(expected={expected_state}, actual={actual}; {raw})"
         )
 
     def _get_obs_file(self, arm_number, label_zone):
@@ -1749,9 +1774,12 @@ def _parse_args():
                              "position after the planner returns it, before the arm moves.")
     parser.add_argument('--offset-y', type=float, default=0.0, metavar='M',
                         help="World-frame Y correction (metres), as --offset-x.")
-    parser.add_argument('--no-label-check', action='store_true',
+    parser.add_argument('--no-label-vacuum-check', action='store_true',
                         help="Testing without labels: skip the label cup's vacuum checks, "
                              "so the run carries on as if a label had been picked up.")
+    parser.add_argument('--no-pnp-vacuum-test', action='store_true',
+                        help="Skip the pick cup's vacuum checks (e.g. while its sensor is "
+                             "broken), so the run carries on as if the item had been picked up.")
     parser.add_argument('--skip-item-setup', action='store_true',
                         help="Skip the item setup GUI and use a default item name and "
                              "expiry (%s, today + %d days)." % (DEFAULT_ITEM_NAME, DEFAULT_EXPIRY_DAYS))
@@ -1786,7 +1814,7 @@ def _check_only():
 
 
 def main():
-    global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_check, opts, console
+    global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test, opts, console
     opts = _parse_args()
     rospy.init_node('full_sequence_fsm')
 
@@ -1801,9 +1829,12 @@ def main():
     if disable_pneumatics:
         log.warning("[Main] PNEUMATICS DISABLED — vacuum commands and sensor "
                     "checks are no-ops (dry-run mode). Move the cups by hand.")
-    no_label_check = opts.no_label_check
-    if no_label_check:
-        log.warning("[Main] NO LABEL CHECK — the label cup's vacuum checks are skipped.")
+    no_label_vacuum_check = opts.no_label_vacuum_check
+    if no_label_vacuum_check:
+        log.warning("[Main] NO LABEL VACUUM CHECK — the label cup's vacuum checks are skipped.")
+    no_pnp_vacuum_test = opts.no_pnp_vacuum_test
+    if no_pnp_vacuum_test:
+        log.warning("[Main] NO PNP VACUUM TEST — the pick cup's vacuum checks are skipped.")
 
     random.seed(1)
 
@@ -1823,7 +1854,8 @@ def main():
                 no_vacuum=disable_pneumatics, straight_down=opts.straight_down,
                 confirm=opts.confirm, max_tilt_deg=opts.max_tilt_deg,
                 max_declines=opts.max_declines,
-                no_label_check=no_label_check, skip_item_setup=opts.skip_item_setup,
+                no_label_vacuum_check=no_label_vacuum_check,
+                no_pnp_vacuum_test=no_pnp_vacuum_test, skip_item_setup=opts.skip_item_setup,
                 zero_item_depth=opts.zero_item_depth,
                 offset_x=opts.offset_x, offset_y=opts.offset_y)
 

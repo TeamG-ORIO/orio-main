@@ -22,8 +22,10 @@
 #   bash run_full_demo.sh --no-vacuum     # dry-run: no pneumatics, move the cups by hand
 #   bash run_full_demo.sh --confirm       # confirm each bin pick
 #                                           #   (Enter = execute, r = regenerate, q = abort)
-#   bash run_full_demo.sh --no-label-check # test without labels: skip the label cup's
-#                                           #   vacuum check, carry on as if one was picked
+#   bash run_full_demo.sh --no-label-vacuum-check # test without labels: skip the label
+#                                           #   cup's vacuum check, carry on as if one was picked
+#   bash run_full_demo.sh --no-pnp-vacuum-test # skip the pick cup's vacuum check, carry
+#                                           #   on as if the item was picked (broken sensor)
 #   bash run_full_demo.sh --skip-item-setup # skip the item name/expiry GUI, use defaults
 #   bash run_full_demo.sh --straight-down # ignore grasp tilt, approach vertically
 #   bash run_full_demo.sh --no-zed        # skip the ZED: labelling poses will time out
@@ -107,7 +109,8 @@ while [ $# -gt 0 ]; do
         --max-tilt-deg)  SM_EXTRA+=(--max-tilt-deg "${1:?--max-tilt-deg needs degrees}"); shift ;;
         --max-declines)  SM_EXTRA+=(--max-declines "${1:?--max-declines needs a count}"); shift ;;
         --zero-item-depth) SM_EXTRA+=(--zero-item-depth) ;;
-        --no-label-check) SM_EXTRA+=(--no-label-check) ;;
+        --no-label-vacuum-check) SM_EXTRA+=(--no-label-vacuum-check) ;;
+        --no-pnp-vacuum-test) SM_EXTRA+=(--no-pnp-vacuum-test) ;;
         --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
         --no-zed)        USE_ZED=0 ;;
         --no-rfid)       USE_RFID=0 ;;
@@ -182,6 +185,10 @@ STACK_DIR="$REPO/logging/dexnet_pnp/stack"
 mkdir -p "$STACK_DIR"
 CONTROL_PC_LOG="$STACK_DIR/control_pc.log"
 AFFORDANCE_DIR="$LOG_DIR/$RUN_STAMP.affordance"
+# Raw vacuum sensor readings at 10 Hz, written by the pneumatics node (in the main
+# container, where $REPO/logging is /home/ros_ws/logging). Own file: they'd bury the log.
+VACUUM_LOG="$LOG_DIR/$RUN_STAMP.vacuum.csv"
+VACUUM_LOG_CONT="/home/ros_ws/logging/demo/$RUN_STAMP.vacuum.csv"
 AFFORDANCE_LINK="$LOG_DIR/current.affordance"
 AFFORDANCE_LINK_CONT="/home/ros_ws/logging/demo/current.affordance"
 
@@ -307,6 +314,7 @@ cleanup() {
         _n_aff=$(find "$AFFORDANCE_DIR" -name '*.png' 2>/dev/null | wc -l)
         [ "$_n_aff" -gt 0 ] && log "affordance panels ($_n_aff): $AFFORDANCE_DIR"
     fi
+    [ -s "${VACUUM_LOG:-}" ] && log "raw vacuum readings: $VACUUM_LOG"
     log "the stack (cameras, Fast-FoundationStereo, planner, perception, both control PCs, RFID)"
     log "is still running; the next run reuses it. To stop everything: bash stop_dexnet_pnp.sh"
     sync; sleep 0.2
@@ -513,12 +521,28 @@ luisa_up() {
     timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=8 "$LUISA_PC" \
         "docker exec franka-interface bash -lc 'tmux has-session -t franka'" >/dev/null 2>&1
 }
+# Same wedge as control PC 1's: after a std::bad_cast its franka-interface still accepts
+# skills but never runs them, so every move times out. Its output lives only in the tmux
+# window, whose scrollback starts with the session, so this means "since it started".
+luisa_wedged() {
+    timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=8 "$LUISA_PC" \
+        "docker exec franka-interface bash -lc 'tmux capture-pane -p -J -t franka:franka_interface -S -'" \
+        2>/dev/null | grep -q bad_cast
+}
+LUISA_REUSE=0
 if [ "$STACK_FRESH" -eq 0 ] && luisa_up; then
+    if luisa_wedged; then
+        log "control PC 2 hit std::bad_cast since it started (franka-interface is wedged) — restarting it."
+    else
+        LUISA_REUSE=1
+    fi
+fi
+if [ "$LUISA_REUSE" -eq 1 ]; then
     log "control PC 2 (luisa) already running."
 else
-    if [ "$STACK_FRESH" -eq 1 ] && luisa_up; then
-        # New master: the old session points at a roscore that no longer exists.
-        log "restarting control PC 2 (luisa) — its session points at the old master…"
+    if luisa_up; then
+        # --fresh: new master, the old session points at a roscore that no longer exists.
+        [ "$STACK_FRESH" -eq 1 ] && log "restarting control PC 2 (luisa) — its session points at the old master…"
         timeout 30 ssh -o BatchMode=yes -o ConnectTimeout=8 "$LUISA_PC" \
             "docker exec franka-interface bash -lc 'tmux kill-session -t franka'" >/dev/null 2>&1 || true
     fi
@@ -731,7 +755,7 @@ fi
 # ── Pneumatics (both cups), run-scoped like the pick launcher ────────────────
 if [ "$USE_VACUUM" -eq 1 ]; then
     log "starting pneumatics (pnp + lbl cups)…"
-    run_bg pneumatics docker exec -e ORIO_LOGGING="$ORIO_LOGGING" \
+    run_bg pneumatics docker exec -e ORIO_LOGGING="$ORIO_LOGGING" -e ORIO_VACUUM_LOG="$VACUUM_LOG_CONT" \
         -e ORIO_VACUUM_PORT="${ORIO_VACUUM_PORT:-/dev/ttyACM0}" "$CONTAINER" bash -c \
         "source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && \
          python3 -u pneumatic_control_recovery.py"

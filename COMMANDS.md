@@ -86,7 +86,8 @@ bash run_full_demo.sh
 | --- | --- |
 | `--no-vacuum` | No suction; test run only. |
 | `--confirm` | Ask before each bin pick: Enter to pick, `r` to try another grasp. |
-| `--no-label-check` | Do not check the label cup; go on as if a label was picked up. |
+| `--no-label-vacuum-check` | Do not check the label cup; go on as if a label was picked up. |
+| `--no-pnp-vacuum-test` | Do not check the pick cup; go on as if the item was picked up. |
 | `--skip-item-setup` | Skip the item window; use `test_item`, expiring in 7 days. |
 | `--straight-down` | Always move straight down to the item. |
 | `--offset-x M`, `--offset-y M` | Move every pick by this many metres. |
@@ -104,9 +105,9 @@ bash run_full_demo.sh
 **Examples:**
 
 ```bash
-bash run_full_demo.sh                                       # the real demo
-bash run_full_demo.sh --no-zed                              # picking only, no labelling
-bash run_full_demo.sh --no-label-check --skip-item-setup   # test without labels
+bash run_full_demo.sh                                              # the real demo
+bash run_full_demo.sh --no-zed                                     # picking only, no labelling
+bash run_full_demo.sh --no-label-vacuum-check --skip-item-setup   # test without labels
 ```
 
 ---
