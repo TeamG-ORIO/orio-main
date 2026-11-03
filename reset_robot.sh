@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Reset a Franka arm to its home joints from ONE terminal (no tmux).
+# Reset the Franka arms to their home joints from ONE terminal (no tmux).
 #
-# Brings up only what the reset needs — the ROS1 master container, the robot's control PC
+# Brings up only what the reset needs — the ROS1 master container, each robot's control PC
 # (franka-interface + ROS action server), the orio container — runs reset_joints.py inside
-# the container in the foreground, then tears down what THIS script started. Anything that
-# was already running (roscore, orio_docker_container, a live control PC) is reused and
-# left alone.
+# the container in the foreground (robot 1, then robot 2), then tears down what THIS script
+# started. Anything that was already running (roscore, orio_docker_container, a live
+# control PC) is reused and left alone.
 #
-#   bash reset_robot.sh                 # robot 1 (iam-doc), reset_joints()
-#   bash reset_robot.sh --robot 2       # robot 2 (iam-luisa)
+#   bash reset_robot.sh                 # both arms: robot 1 (iam-doc), then robot 2 (iam-luisa)
+#   bash reset_robot.sh --robot 1       # robot 1 only (also -1)
+#   bash reset_robot.sh --robot 2       # robot 2 only (also -2)
 #   bash reset_robot.sh --unlock        # open the brakes first (lock_arms.py --unlock N)
 #   bash reset_robot.sh --pose          # reset_pose() instead of reset_joints()
-#   bash reset_robot.sh --keep          # leave roscore/container/control PC up afterwards
+#   bash reset_robot.sh --keep          # leave roscore/container/control PCs up afterwards
 #   bash reset_robot.sh --open-gripper  # also open the Franka Hand (robot 1 with hand only)
 #   bash reset_robot.sh --close-gripper # also close it
 #
@@ -27,7 +28,7 @@ STACK_DIR="$LOG_DIR/stack"
 source "$REPO/src/devel_packages/orio_bringup/stack.sh"
 
 # ── Args ────────────────────────────────────────────────────────────────────
-ROBOT=1
+ROBOT=both
 UNLOCK=0
 KEEP=0
 GRIPPER=none
@@ -36,25 +37,40 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --robot) shift; ROBOT="$1" ;;
         --robot=*) ROBOT="${1#*=}" ;;
+        -1) ROBOT=1 ;;
         -2) ROBOT=2 ;;
         --unlock) UNLOCK=1 ;;
         --pose) RESET_ARGS+=(--use_pose) ;;
         --keep) KEEP=1 ;;
         --open-gripper)  GRIPPER=open ;;
         --close-gripper) GRIPPER=close ;;
-        -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
     shift
 done
-case "$ROBOT" in 1|2) ;; *) echo "--robot must be 1 or 2" >&2; exit 2 ;; esac
-RESET_ARGS+=(--robot_num "$ROBOT")
+case "$ROBOT" in
+    1|2)  ROBOTS=("$ROBOT") ;;
+    both) ROBOTS=(1 2) ;;
+    *) echo "--robot must be 1, 2 or both" >&2; exit 2 ;;
+esac
+GRIPPER_ARGS=()
 case "$GRIPPER" in
-    none)  RESET_ARGS+=(--no_gripper) ;;
-    close) RESET_ARGS+=(--close_grippers) ;;
+    none)  GRIPPER_ARGS=(--no_gripper) ;;
+    close) GRIPPER_ARGS=(--close_grippers) ;;
     open)  ;;   # reset_joints.py opens the hand by default
 esac
-CONTROL_PC_LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S).robot${ROBOT}.control_pc.log"
+# Only robot 1 has a hand: with both arms, the gripper option applies to robot 1 alone.
+reset_args() {  # $1 = robot number
+    local a=("${RESET_ARGS[@]}" --robot_num "$1")
+    if [ "$1" -eq 2 ] && [ "${#ROBOTS[@]}" -gt 1 ]; then
+        a+=(--no_gripper)
+    else
+        a+=("${GRIPPER_ARGS[@]}")
+    fi
+    echo "${a[*]}"
+}
+CONTROL_PC_LOG="$LOG_DIR/$(date +%Y%m%d_%H%M%S).robot1.control_pc.log"
 
 # ── Teardown: only what this script started ──────────────────────────────────
 cleanup() {
@@ -97,29 +113,49 @@ stack_bringup_roscore || exit 1
 
 # ── 2. Brakes ────────────────────────────────────────────────────────────────
 if [ "$UNLOCK" -eq 1 ]; then
-    unlock_robot "$ROBOT" || exit 1
+    for r in "${ROBOTS[@]}"; do unlock_robot "$r" || exit 1; done
 fi
 
-# ── 3. Control PC ────────────────────────────────────────────────────────────
-if [ "$ROBOT" -eq 1 ]; then
-    control_pc_bringup || exit 1
-else
-    luisa_bringup || exit 1
-fi
+# ── 3. Control PCs ───────────────────────────────────────────────────────────
+for r in "${ROBOTS[@]}"; do
+    if [ "$r" -eq 1 ]; then
+        control_pc_bringup || exit 1    # robot 1, iam-doc
+    else
+        luisa_bringup || exit 1         # robot 2, iam-luisa
+    fi
+done
 
 # ── 4. orio container (frankapy lives on its PYTHONPATH) ─────────────────────
 main_container_bringup || exit 1
 
-# ── 5. Reset (foreground) ────────────────────────────────────────────────────
-wait_for_topic "/robot_state_publisher_node_${ROBOT}/robot_state" 60 \
-    || { log "robot $ROBOT never published its state - the control PC did not come up. See $CONTROL_PC_LOG. Aborting."; exit 1; }
-log "running reset_joints.py ${RESET_ARGS[*]} on robot $ROBOT - ARM WILL MOVE"
-run_in_container "python3 reset_joints.py ${RESET_ARGS[*]}"
-rc=$?
-if [ "$rc" -eq 0 ]; then
-    log "reset finished."
-else
-    log "reset FAILED (exit $rc). If FrankaArm timed out: the brakes are probably locked -"
-    log "re-run with --unlock, or  python3 src/devel_packages/orio_bringup/lock_arms.py --unlock $ROBOT"
+# ── 5. Reset (foreground, one arm at a time) ─────────────────────────────────
+# Wait for every arm's state first, so a dead control PC aborts before anything moves.
+# A freshly started luisa roslaunch takes longer to publish.
+for r in "${ROBOTS[@]}"; do
+    if [ "$r" -eq 1 ]; then
+        wait_for_topic "/robot_state_publisher_node_1/robot_state" 60 \
+            || { log "robot 1 never published its state - the control PC did not come up. See $CONTROL_PC_LOG. Aborting."; exit 1; }
+    else
+        wait_for_topic "/robot_state_publisher_node_2/robot_state" 90 \
+            || { log "robot 2 never published its state - check the [luisa] lines above. Aborting."; exit 1; }
+    fi
+done
+rc=0
+FAILED=()
+for r in "${ROBOTS[@]}"; do
+    args="$(reset_args "$r")"
+    log "running reset_joints.py $args on robot $r - ARM WILL MOVE"
+    run_in_container "python3 reset_joints.py $args"
+    r_rc=$?
+    if [ "$r_rc" -eq 0 ]; then
+        log "robot $r reset finished."
+    else
+        log "robot $r reset FAILED (exit $r_rc)."
+        FAILED+=("$r"); rc="$r_rc"
+    fi
+done
+if [ "${#FAILED[@]}" -gt 0 ]; then
+    log "reset FAILED on robot ${FAILED[*]}. If FrankaArm timed out: the brakes are probably locked -"
+    log "re-run with --unlock, or  python3 src/devel_packages/orio_bringup/lock_arms.py --unlock N"
 fi
 exit "$rc"

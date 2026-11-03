@@ -23,7 +23,7 @@ PCs, cameras, planner, perception) stays up and the next run reuses it. The stop
 tears it all down.
 
 [COMMANDS.md](COMMANDS.md) lists every command with its options, including the helpers:
-`grasp_test.sh` (plan and visit grasps without suction), `reset_robot.sh` (home an arm),
+`grasp_test.sh` (plan and visit grasps without suction), `reset_robot.sh` (home the arms),
 `snap_xtion.sh` (save one camera frame) and `lock_arms.py` (brakes via Desk).
 
 ## Where things are
