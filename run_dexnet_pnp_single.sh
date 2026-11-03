@@ -226,6 +226,10 @@ CONTROL_PC_LOG="$STACK_DIR/control_pc.log"
 # relative, so it resolves the same in the container ($REPO/logging is mounted there at
 # /home/ros_ws/logging).
 AFFORDANCE_DIR="$LOG_DIR/$RUN_STAMP.affordance"
+# Raw vacuum sensor readings at 10 Hz, written by the pneumatics node (in the main
+# container, where $REPO/logging is /home/ros_ws/logging). Own file: they'd bury the log.
+VACUUM_LOG="$LOG_DIR/$RUN_STAMP.vacuum.csv"
+VACUUM_LOG_CONT="/home/ros_ws/logging/dexnet_pnp/$RUN_STAMP.vacuum.csv"
 AFFORDANCE_LINK="$LOG_DIR/current.affordance"
 AFFORDANCE_LINK_CONT="/home/ros_ws/logging/dexnet_pnp/current.affordance"
 
@@ -375,6 +379,7 @@ cleanup() {
         _n_aff=$(find "$AFFORDANCE_DIR" -name '*.png' 2>/dev/null | wc -l)
         [ "$_n_aff" -gt 0 ] && log "affordance panels ($_n_aff): $AFFORDANCE_DIR"
     fi
+    [ -s "${VACUUM_LOG:-}" ] && log "raw vacuum readings: $VACUUM_LOG"
     log "the stack (cameras, planner, perception, control PC) is still running; the next run"
     log "reuses it. To stop everything: bash stop_dexnet_pnp.sh"
     # Give the tee (process substitution) a moment to flush the final lines to the file.
@@ -855,7 +860,7 @@ if [ "$USE_VACUUM" -eq 1 ]; then
     # with no suction (see the 20260922_150030 run). The ClearCore is reachable from in
     # there — the container is --privileged with -v /dev:/dev, so /dev/ttyACM0 is the same
     # device node. ORIO_VACUUM_PORT still overrides it.
-    run_bg pneumatics docker exec -e ORIO_LOGGING="$ORIO_LOGGING" \
+    run_bg pneumatics docker exec -e ORIO_LOGGING="$ORIO_LOGGING" -e ORIO_VACUUM_LOG="$VACUUM_LOG_CONT" \
         -e ORIO_VACUUM_PORT="${ORIO_VACUUM_PORT:-/dev/ttyACM0}" "$CONTAINER" bash -c \
         "source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && \
          python3 -u pneumatic_control_recovery.py"

@@ -46,7 +46,7 @@ import rospy
 from frankapy import FrankaArm
 from geometry_msgs.msg import PoseArray
 from scipy.spatial.transform import Rotation as R
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Int32, String
 from std_srvs.srv import Trigger
 
 try:
@@ -59,6 +59,10 @@ APPROACH_DISTANCE = 0.1                 # metres, world +Z offset contact → pr
 POSES_FILE = "joint_angles.json"
 TARGET_POSES_FILE = "Target_Task_Poses.json"  # OUTPUT1/2, L2_INTER (Cartesian + rotation)
 URDF_FILE = "panda_arm_hand.urdf"
+# The ClearCore's has-item thresholds on the raw vacuum reading (0-4095). Only quoted in
+# failure messages; the firmware decides. Keep in step with pneumatic_control.ino.
+VAC_THRESHOLD_HIGH = 1000
+VAC_THRESHOLD_LOW = 800
 
 # Where items go. state_machine.py's PlaceOutput drops at OUTPUT1/OUTPUT2 (over the output
 # box), reaching in by item_depth + this margin — NOT the DROP_ZONE joint pose, which sits
@@ -194,6 +198,10 @@ class DexnetPickPlace:
         rospy.Subscriber("orio/vacuum/pnp_has_item", Bool,
                          lambda m: setattr(self, 'pnp_has_item', m.data),
                          queue_size=1)
+        # Raw sensor reading, only to explain a failed vacuum check (None = none received).
+        self.pnp_raw = None
+        rospy.Subscriber("orio/vacuum/pnp_raw", Int32,
+                         lambda m: setattr(self, 'pnp_raw', m.data), queue_size=1)
         rospy.loginfo("[Hardware] Initialisation complete")
 
     def _pose_cb(self, msg):
@@ -307,14 +315,23 @@ class DexnetPickPlace:
         it doesn't within timeout. No-op unless test_vacuum and pneumatics on."""
         if disable_pneumatics or not test_vacuum:
             return
+        readings = []
         deadline = rospy.Time.now() + rospy.Duration(timeout)
         while rospy.Time.now() < deadline:
             if self.pnp_has_item == expected_state:
                 return
+            if self.pnp_raw is not None:
+                readings.append(self.pnp_raw)
             rospy.sleep(0.05)
         action = "pick up" if expected_state else "release"
-        raise RuntimeError("PNP vacuum failed to %s item (expected=%s, actual=%s)"
-                           % (action, expected_state, self.pnp_has_item))
+        if not readings:
+            raw = "no raw readings received"
+        elif expected_state:
+            raw = "peak raw %d, needs > %d" % (max(readings), VAC_THRESHOLD_HIGH)
+        else:
+            raw = "lowest raw %d, needs < %d" % (min(readings), VAC_THRESHOLD_LOW)
+        raise RuntimeError("PNP vacuum failed to %s item (expected=%s, actual=%s; %s)"
+                           % (action, expected_state, self.pnp_has_item, raw))
 
     # ── IK (mirrors state_machine.py.compute_pick_joints) ─────────────────────
     def compute_pick_joints(self, task_pos, target_ori=None):

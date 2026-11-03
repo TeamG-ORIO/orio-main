@@ -37,6 +37,7 @@ docker run --privileged --rm $RUN_FLAGS \
     -v "$(pwd)/src/git_packages:/home/ros_ws/src/git_packages" \
     -v "$FRANKAPY_DIR:/home/ros_ws/src/git_packages/frankapy" \
     -v "$(pwd)/research:/home/ros_ws/research" \
+    -v "$(pwd)/logging:/home/ros_ws/logging" \
     -v "/usr/local/zed/resources/:/usr/local/zed/resources/" \
     --gpus all \
     orio_docker "${RUN_CMD[@]}"
