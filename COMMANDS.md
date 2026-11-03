@@ -11,11 +11,11 @@ Commonly used commands with usage examples. Run all commands from the repo root.
 
 ---
 
-## `run_dexnet_pnp_single.sh`
+## `run_pickup-only.sh`
 
 Starts the suction pick-and-place system in one terminal and picks items from the bin.
 Press **Ctrl-C** to stop picking. The cameras, planner and robot connection keep running,
-so the next run starts fast. To stop everything, run `bash stop_dexnet_pnp.sh`.
+so the next run starts fast. To stop everything, run `bash stop_all.sh`.
 Each run saves a log to `logging/dexnet_pnp/<timestamp>.log`.
 
 Before the first run, build the planner image:
@@ -31,7 +31,7 @@ docker build -t orio/suction:latest - < src/devel_packages/orio_bringup/docker/D
 **Base command:**
 
 ```bash
-bash run_dexnet_pnp_single.sh
+bash run_pickup-only.sh
 ```
 
 | Option | Description |
@@ -53,8 +53,8 @@ bash run_dexnet_pnp_single.sh
 **Examples:**
 
 ```bash
-bash run_dexnet_pnp_single.sh --vacuum --auto --straight-down
-bash run_dexnet_pnp_single.sh --vacuum --offset-y -0.015   # cup lands 1.5 cm too high
+bash run_pickup-only.sh --vacuum --auto --straight-down
+bash run_pickup-only.sh --vacuum --offset-y -0.015   # cup lands 1.5 cm too high
 ```
 
 ---
@@ -66,7 +66,7 @@ network and moves them through the label zones to the output box, while arm 2 ap
 labels. A window asks for the item and expiry first: pick the item from the list, or
 choose **Other…** to type a new one.
 Press **Ctrl-C** to stop the run; the stack stays up for the next run (shared with
-`run_dexnet_pnp_single.sh`). To stop everything, run `bash stop_dexnet_pnp.sh`.
+`run_pickup-only.sh`). To stop everything, run `bash stop_all.sh`.
 Each run saves a log to `logging/demo/<timestamp>.log`.
 
 - Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2).
@@ -76,6 +76,14 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
   `docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs`
 - If an arm fails mid-run, a recovery window opens for it; the other keeps going.
 - When the bin is empty, it asks you to refill it. Enter to go on, `q` to finish.
+- A dashboard window shows both arms and both label zones live.
+- To swap items in the bin, press **Pause** on the dashboard (or Space). Both arms finish
+  their move and stop. Anything an arm holds stays held. Press **Resume** when done. If
+  arm 1 had already chosen an item in the bin, it chooses again.
+- **E-STOP** on the dashboard is the same as Ctrl-C: both arms stop at once. This is not
+  the robots' own e-stop button.
+- **SHUTDOWN** on the dashboard ends the run cleanly: both arms finish their move, go home,
+  and the suction turns off (a held item drops at home).
 
 **Base command:**
 
@@ -97,6 +105,7 @@ bash run_full_demo.sh
 | `--checkpoint TAG` | Which grasp network to use (a run tag or a file path). |
 | `--no-zed` | Run without the ZED. Labels cannot be placed. |
 | `--no-rfid` | Do not start the RFID inventory node or register labels. |
+| `--no-dashboard` | Do not open the dashboard window. |
 | `--no-affordance` | Do not save the grasp pictures (a bit faster). |
 | `--no-logging` | Do not record this run. |
 | `--live` | Also show the recording in an open `rerun` viewer. |
@@ -113,14 +122,14 @@ bash run_full_demo.sh --no-label-vacuum-check --skip-item-setup   # test without
 
 ---
 
-## `stop_dexnet_pnp.sh`
+## `stop_all.sh`
 
-Stops everything `run_dexnet_pnp_single.sh` or `run_full_demo.sh` started: cameras,
+Stops everything `run_pickup-only.sh` or `run_full_demo.sh` started: cameras,
 planner, both robot connections and containers. Turns the suction off first if a run is
 still going.
 
 ```bash
-bash stop_dexnet_pnp.sh
+bash stop_all.sh
 ```
 
 ---
@@ -131,7 +140,7 @@ Tests the grasp network on the robot without suction. It takes a camera picture,
 grasp, and shows it on the picture. Press Enter and the arm moves to that spot. Press Enter
 again and the arm goes home, then it plans the next grasp. Type `r` to plan again or `q` to quit.
 It starts only what it needs. The camera stays on after you quit, so the next run uses it
-straight away. `bash stop_dexnet_pnp.sh` turns it off.
+straight away. `bash stop_all.sh` turns it off.
 
 Everything is saved in `data/grasp_test/<timestamp>/`: a picture of each grasp, a picture
 of where the arm went, the numbers for each try (`rounds.jsonl`) and the terminal output.
@@ -160,7 +169,7 @@ bash grasp_test.sh --hover     # then let the arm go above them
 ## `snap_xtion.sh`
 
 Saves one picture of what the Xtion camera sees right now. If a camera stack is already
-running (for example a `run_dexnet_pnp_single.sh` or `run_full_demo.sh` session in another
+running (for example a `run_pickup-only.sh` or `run_full_demo.sh` session in another
 terminal) it uses that. Otherwise it starts only what the picture needs: the ROS 1 master
 container, `orio_docker_container` and the Xtion driver. It takes the picture and then
 stops **what it started**, leaving anything that was already running alone. A cold start

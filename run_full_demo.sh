@@ -3,18 +3,18 @@
 # output items, with the grasp planned by the orio-grasping suction network by default
 # (or DexNet with --planner dexnet).
 #
-# Built like run_dexnet_pnp_single.sh: every service starts in the background and merges
+# Built like run_pickup-only.sh: every service starts in the background and merges
 # its output into THIS terminal, each line prefixed with a [module] label, and the
-# sequence (full_sequence.py) runs in the FOREGROUND so its prompts own the keyboard. Two
-# Tkinter windows will open from the sequence: the item name/expiry setup at start, and
-# the per-arm recovery dialog when a state fails.
+# sequence (full_sequence.py) runs in the FOREGROUND so its prompts own the keyboard. Its
+# Tkinter windows: the item name/expiry setup at start, the live dashboard (Pause/Resume;
+# --no-dashboard to skip it), and the per-arm recovery dialog when a state fails.
 #
 # Ctrl-C stops THIS RUN only (sequence, pneumatics, recorder). The slow-to-start stack —
 # roscore, the main container, BOTH control PCs (iam-doc for arm 1, iam-luisa for arm 2),
 # the grasp planner, the ZED, the Xtion, perception and the RFID inventory node — stays
-# up, and the next run (this launcher or run_dexnet_pnp_single.sh: they share the stack)
+# up, and the next run (this launcher or run_pickup-only.sh: they share the stack)
 # reuses whatever of it is still healthy. To tear the whole stack down:
-#   bash stop_dexnet_pnp.sh
+#   bash stop_all.sh
 #
 #   bash run_full_demo.sh --fresh         # stop the running stack first, start clean
 #   bash run_full_demo.sh                 # real suction (both cups), auto-pick
@@ -41,7 +41,7 @@
 #   bash run_full_demo.sh --planner dexnet
 #   bash run_full_demo.sh --checkpoint <tag|path>   # suction network checkpoint
 #
-# The ZED is ON here (the labelling service needs it), unlike run_dexnet_pnp_single.sh.
+# The ZED is ON here (the labelling service needs it), unlike run_pickup-only.sh.
 # It runs without its own depth (no ZED neural model): the label height is measured by
 # Fast-FoundationStereo on its stereo pair (orio_ffs container, orio_bringup/docker/run_ffs.sh).
 # Its USB3 link has been flaky (EPROTO drops — docs/OPEN_ISSUES.md); if it drops mid-run
@@ -60,7 +60,7 @@ LOG_TAG=launcher
 # shellcheck disable=SC1091
 source "$REPO/src/devel_packages/orio_bringup/stack.sh"
 
-# Run logging (docs/LOGGING.md). ON by default; see run_dexnet_pnp_single.sh.
+# Run logging (docs/LOGGING.md). ON by default; see run_pickup-only.sh.
 export ORIO_LOGGING="${ORIO_LOGGING:-1}"
 export ORIO_RUN_ID="${ORIO_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 export ORIO_RUN_DIR="${ORIO_RUN_DIR:-$REPO/logging/rerun/$ORIO_RUN_ID}"
@@ -95,6 +95,7 @@ while [ $# -gt 0 ]; do
         --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
         --no-zed)        USE_ZED=0 ;;
         --no-rfid)       USE_RFID=0; SM_EXTRA+=(--no-rfid) ;;
+        --no-dashboard)  SM_EXTRA+=(--no-dashboard) ;;
         --no-logging)    export ORIO_LOGGING=0; LOGGING_REQUESTED=0 ;;
         --logging)       export ORIO_LOGGING=1; LOGGING_REQUESTED=1 ;;
         --live)          export ORIO_RERUN_LIVE=1 ;;
@@ -127,10 +128,10 @@ SM_EXTRA+=(--offset-x "$PNP_OFFSET_X" --offset-y "$PNP_OFFSET_Y")
 planner_resolve || exit 2
 
 # ── This run's files, and the output filter ──────────────────────────────────
-# Run logs live in logging/demo/; the STACK is SHARED with run_dexnet_pnp_single.sh (same
-# stack dir), so either launcher reuses it and stop_dexnet_pnp.sh stops it.
+# Run logs live in logging/demo/; the STACK is SHARED with run_pickup-only.sh (same
+# stack dir), so either launcher reuses it and stop_all.sh stops it.
 run_log_paths demo
-log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]'
+log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|\[Pause\]|\[Stop\]|\[Dashboard\]'
 
 STACK_SERVICES=(roscore control_pc_fi control_pc_ros planner zed ffs xtion perception rfid)
 STACK_CONTAINERS=("$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" "$PERCEPTION_CONTAINER" orio_cameras)
@@ -142,7 +143,7 @@ cleanup() {
     recorder_flush
     local cups=()
     [ "$USE_VACUUM" -eq 1 ] && cups=(pnp_cup lbl_cup)
-    stop_run_in_container 'full_sequence\.py|pneumatic_control_recovery\.py' "${cups[@]}"
+    stop_run_in_container 'full_sequence\.py|orio_dashboard\.py|pneumatic_control_recovery\.py' "${cups[@]}"
     kill_bg
     log "done. Full log saved to: $LOG_FILE"
     [ "$ORIO_LOGGING" != "0" ] && [ -f "$ORIO_RUN_DIR/recorder.rrd" ] && \
@@ -154,7 +155,7 @@ cleanup() {
     fi
     [ -s "${VACUUM_LOG:-}" ] && log "raw vacuum readings: $VACUUM_LOG"
     log "the stack (cameras, Fast-FoundationStereo, planner, perception, both control PCs, RFID)"
-    log "is still running; the next run reuses it. To stop everything: bash stop_dexnet_pnp.sh"
+    log "is still running; the next run reuses it. To stop everything: bash stop_all.sh"
     sync; sleep 0.2
 }
 install_cleanup_traps
@@ -170,7 +171,7 @@ follow perception perception
 
 if [ "$FRESH" -eq 1 ]; then
     log "--fresh: stopping the running stack first…"
-    bash "$REPO/stop_dexnet_pnp.sh"
+    bash "$REPO/stop_all.sh"
 fi
 
 # ── Bring-up ─────────────────────────────────────────────────────────────────
@@ -221,7 +222,7 @@ xtion_bringup || exit 1
 # Perception (serves /compute_grasps and /compute_grasps_labelling). The labelling service
 # needs SAM/GroundingDINO, which a planner backend skips by default;
 # ORIO_LOAD_LABELLING_MODELS=1 loads them alongside it. Part of the conf key, so a stack
-# started by run_dexnet_pnp_single.sh (no labelling models) is restarted here rather than
+# started by run_pickup-only.sh (no labelling models) is restarted here rather than
 # reused. lbl_depth=ffs restarts a perception from before the label depth moved to
 # Fast-FoundationStereo.
 LBL_MODELS=$([ "$USE_ZED" -eq 1 ] && echo 1 || echo 0)

@@ -39,8 +39,10 @@ import pickle
 import queue
 import random
 import signal
+import subprocess
 import sys
 import threading
+import time
 
 import ikpy.chain
 import numpy as np
@@ -56,7 +58,7 @@ from autolab_core import RigidTransform
 from geometry_msgs.msg import PoseArray
 from scipy.spatial.transform import Rotation as R
 from std_msgs.msg import Bool, Int32, String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, TriggerResponse
 from custom_msgs.srv import AddLabeledItem
 import CollisionChecker
 from item_setup_gui import show_item_setup_gui
@@ -183,18 +185,43 @@ def _install_sigint_handler():
     down nor stops the smach threads, so the other arm carries on (and switches
     its cup back on). This handler only sets flags: the motion loop of each arm
     sees them, cancels its own skill and unwinds the state. A second Ctrl-C exits
-    at once, for when something is stuck (e.g. a recovery GUI is open).
+    at once, for when something is stuck.
     """
-    def _on_sigint(sig, frame):
-        if interrupted.is_set():
-            print("\n[ORIO] Second Ctrl-C: exiting now.", flush=True)
-            os._exit(130)
-        print("\n[ORIO] Ctrl-C: stopping both arms (Ctrl-C again to force exit).",
-              flush=True)
-        interrupted.set()
-        shutdown_event.set()
+    signal.signal(signal.SIGINT, lambda sig, frame: request_estop("Ctrl-C"))
 
-    signal.signal(signal.SIGINT, _on_sigint)
+
+def request_estop(source):
+    """Stop both arms mid-motion (Ctrl-C, or the dashboard's E-STOP). A second
+    request exits at once, skipping the clean-up."""
+    if interrupted.is_set():
+        print("\n[ORIO] Second %s: exiting now." % source, flush=True)
+        os._exit(130)
+    print("\n[ORIO] %s: stopping both arms (%s again to force exit)." % (source, source),
+          flush=True)
+    events.emit('operator', 'estop', source=source)
+    interrupted.set()
+    shutdown_event.set()
+
+
+# Set by the dashboard's SHUTDOWN: each arm finishes its move and ends its task at the
+# next pause point (never in contact with an item), then main() sends both arms home,
+# turns the cups off and exits.
+stop_home = threading.Event()
+
+
+def request_home_shutdown():
+    if stop_home.is_set() or interrupted.is_set():
+        return False
+    log.warning("[Stop] Shutdown requested: each arm finishes its move, then both go home")
+    events.emit('operator', 'shutdown_home')
+    stop_home.set()
+    shutdown_event.set()
+    return True
+
+
+def _stopping():
+    """True once an E-stop/Ctrl-C or a SHUTDOWN is under way."""
+    return interrupted.is_set() or stop_home.is_set()
 
 
 def _raise_if_interrupted():
@@ -208,6 +235,116 @@ recovery_event_arm2 = threading.Event()
 
 # Ensures only one Tkinter window exists at a time — Tkinter is not thread-safe
 _gui_lock = Lock()
+
+
+# ==============================================================================
+# PAUSE (dashboard) & LIVE STATUS
+# ==============================================================================
+
+class PauseControl:
+    """Operator pause, from the dashboard (/orio/pause, /orio/resume).
+
+    A paused arm finishes the motion it is in and waits before its next one (gate()).
+    The cups are left as they are, so a held item or label stays held. The move that
+    follows a cup action at contact (retract after a pick, move away after a release)
+    is never gated, so an arm does not stop touching an item.
+
+    `epoch` counts pauses: FetchInput compares it to tell whether the input bin may have
+    been changed after it planned its grasp.
+    """
+
+    def __init__(self):
+        self._running = threading.Event()
+        self._running.set()
+        self._lock = Lock()
+        self.epoch = 0
+        self.held = {'arm1': False, 'arm2': False}   # True while that arm waits in gate()
+
+    @property
+    def paused(self):
+        return not self._running.is_set()
+
+    def pause(self):
+        with self._lock:
+            if self.paused:
+                return False
+            self.epoch += 1
+            self._running.clear()
+        log.warning("[Pause] Pause requested: each arm stops after its current motion")
+        events.emit('operator', 'pause', epoch=self.epoch)
+        return True
+
+    def resume(self):
+        with self._lock:
+            if not self.paused:
+                return False
+            self._running.set()
+        log.warning("[Pause] Resumed")
+        events.emit('operator', 'resume', epoch=self.epoch)
+        return True
+
+    def gate(self, arm, raise_on_stop=True):
+        """Wait here while paused. Returns True if it waited.
+
+        This is also where a SHUTDOWN (stop_home) ends the arm's task, paused or not.
+
+        A 'q' or Ctrl-C while waiting stops both arms where they are rather than
+        letting them finish their task, since the operator may have hands in the
+        cell: it sets `interrupted`.
+
+        Either way it then raises KeyboardInterrupt, or returns for callers outside
+        _safe_execute that check shutdown_event themselves (raise_on_stop=False).
+        """
+        if stop_home.is_set():
+            if raise_on_stop:
+                raise KeyboardInterrupt
+            return False
+        if self._running.is_set():
+            return False
+        self.held[arm] = True
+        log.info("[Pause] %s paused (last: %s)", arm.upper(), arm_status.get(arm, 'activity'))
+        try:
+            while not self._running.wait(0.2):
+                if stop_home.is_set():
+                    if raise_on_stop:
+                        raise KeyboardInterrupt
+                    return True
+                if shutdown_event.is_set() or interrupted.is_set() or rospy.is_shutdown():
+                    interrupted.set()
+                    if raise_on_stop:
+                        raise KeyboardInterrupt
+                    return True
+        finally:
+            self.held[arm] = False
+        log.info("[Pause] %s resuming", arm.upper())
+        return True
+
+
+class ArmStatus:
+    """What each arm is doing, for the dashboard. Written by the states, read by the
+    status publisher. `target` is where the arm is working: bin, A, B, output,
+    dispenser, or home/safe (none)."""
+
+    def __init__(self):
+        self._lock = Lock()
+        self._arms = {a: {'activity': 'Starting up', 'moving': False, 'cup': False,
+                          'target': None} for a in ('arm1', 'arm2')}
+
+    def set(self, arm, **fields):
+        with self._lock:
+            self._arms[arm].update(fields)
+
+    def get(self, arm, key):
+        with self._lock:
+            return self._arms[arm][key]
+
+    def snapshot(self):
+        with self._lock:
+            return {a: dict(v) for a, v in self._arms.items()}
+
+
+pause_ctl = PauseControl()
+arm_status = ArmStatus()
 
 no_label_vacuum_check = False  # Set from --no-label-vacuum-check: skip the label cup's sensor checks
 no_pnp_vacuum_test = False     # Set from --no-pnp-vacuum-test: skip the pick cup's sensor checks
@@ -238,6 +375,7 @@ class Console:
         self._q = queue.Queue()
         self._waiting = threading.Event()
         self._lock = Lock()   # one prompt at a time
+        self.prompt = None    # the open prompt, shown on the dashboard
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -267,6 +405,7 @@ class Console:
             sys.stderr.flush()
             print(prompt)
             sys.stdout.flush()
+            self.prompt = prompt
             self._waiting.set()
             try:
                 while not shutdown_event.is_set() and not rospy.is_shutdown():
@@ -277,6 +416,7 @@ class Console:
                 return None
             finally:
                 self._waiting.clear()
+                self.prompt = None
 
 
 console = None  # constructed in main()
@@ -314,6 +454,9 @@ def _is_vacuum_service(service_name):
 def call_trigger_service(service_name):
     """Call a ROS Trigger service. With disable_pneumatics, vacuum cup services
     are skipped (no-op, returns True); vision services are unaffected."""
+    for prefix, arm in (('/orio/pnp_cup/', 'arm1'), ('/orio/lbl_cup/', 'arm2')):
+        if service_name.startswith(prefix):   # commanded cup state, for the dashboard
+            arm_status.set(arm, cup=service_name.endswith('/on'))
     if disable_pneumatics and _is_vacuum_service(service_name):
         log.info("[Vacuum] disabled — skipping %s", service_name)
         return True
@@ -436,7 +579,8 @@ class RobotHardware:
         return self.pick_and_place_arm if name == 'arm1' else self.label_arm
 
     # ── Motion with a timeout (ported from dexnet_pnp.py) ─────────────────────
-    def _move(self, arm_name, motion_fn, *args, timeout=None, desc="motion", **kwargs):
+    def _move(self, arm_name, motion_fn, *args, timeout=None, desc="motion",
+              pausable=True, **kwargs):
         """Run a blocking FrankaArm motion (reset_joints/goto_joints) with a HARD
         timeout, so a dead control PC can't hang us forever.
 
@@ -445,7 +589,19 @@ class RobotHardware:
         We instead issue it non-blocking and poll is_skill_done() against a
         deadline, raising a clear error on expiry — which the per-arm recovery
         GUI then catches like any other state failure.
+
+        While paused (dashboard), waits before issuing the motion. pausable=False
+        for the move right after a cup action at contact (see PauseControl).
         """
+        if pausable:
+            pause_ctl.gate(arm_name)
+        arm_status.set(arm_name, activity=desc, moving=True)
+        try:
+            self._move_timed(arm_name, motion_fn, args, kwargs, timeout, desc)
+        finally:
+            arm_status.set(arm_name, moving=False)
+
+    def _move_timed(self, arm_name, motion_fn, args, kwargs, timeout, desc):
         duration = kwargs.get("duration", 5)
         if timeout is None:
             timeout = float(duration) + self.motion_timeout_margin
@@ -971,7 +1127,7 @@ class ZoneManager:
     def __init__(self):
         self.lock = Lock()
         self.states = {'A': 'EMPTY', 'B': 'EMPTY'}  # Initial states: EMPTY, NEEDS_LABEL, READY_FOR_PICKUP
-        self.busy = {'A': False, 'B': False}        # Initial busy flags
+        self.busy = {'A': False, 'B': False}        # False, or the arm using it ('arm1'/'arm2')
         self.depths = {'A': 0.0, 'B': 0.0}          # Tracks object depth per zone
 
     def set_state(self, zone, new_state):
@@ -1003,6 +1159,11 @@ _items_placed_output = 0
 _pick_n = 0
 # Consecutive planner declines (module level: FetchInput is re-entered per attempt)
 _declines = 0
+# Labels applied (dashboard)
+_labels_applied = 0
+# The two arm state machines and the run's start time (dashboard), set in main()
+_machines = {}
+_run_started = None
 
 # ==============================================================================
 # SECTION 2: HUMAN RECOVERY GUI & HELPERS
@@ -1169,6 +1330,14 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
                   relief='flat', padx=16, pady=6).pack(side='left')
 
         root.protocol("WM_DELETE_WINDOW", on_estop)
+
+        def poll_stop():   # E-STOP/Ctrl-C or SHUTDOWN from elsewhere: close and end this arm
+            if _stopping():
+                result['choice'] = 'shutdown'
+                root.destroy()
+                return
+            root.after(300, poll_stop)
+        root.after(300, poll_stop)
         root.lift()
         root.focus_force()
         root.mainloop()
@@ -1183,14 +1352,16 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
 def _safe_execute(state_name, fn, userdata):
     """Run fn(userdata); catch any exception, store diagnostics, and return 'failed'.
 
-    After Ctrl-C the state was stopped on purpose: return 'failed' without the
-    error report, and the recovery state ends this arm instead of opening its GUI.
+    After an E-stop/Ctrl-C or SHUTDOWN the state was stopped on purpose: return
+    'failed' without the error report, and the recovery state ends this arm instead
+    of opening its GUI.
     """
     try:
         return fn(userdata)
     except (Exception, KeyboardInterrupt) as exc:
-        if interrupted.is_set():
-            log.warning("[%s] stopped by Ctrl-C", state_name)
+        if _stopping():
+            log.warning("[%s] stopped (%s)", state_name,
+                        "E-stop" if interrupted.is_set() else "shutdown")
             return 'failed'
         if isinstance(exc, KeyboardInterrupt):
             raise
@@ -1211,7 +1382,7 @@ class HumanRecoveryArm1(smach.State):
                              input_keys=['recovery_failed_state', 'recovery_error_msg'])
 
     def execute(self, userdata):
-        if interrupted.is_set():
+        if _stopping():
             return 'shutdown'
         log.warning("[ARM1 Recovery] Pausing ARM1 — showing GUI (ARM2 continues)")
         recovery_event_arm1.set()
@@ -1244,7 +1415,7 @@ class HumanRecoveryArm2(smach.State):
                              input_keys=['recovery_failed_state', 'recovery_error_msg'])
 
     def execute(self, userdata):
-        if interrupted.is_set():
+        if _stopping():
             return 'shutdown'
         log.warning("[ARM2 Recovery] Pausing ARM2 — showing GUI (ARM1 continues)")
         recovery_event_arm2.set()
@@ -1284,6 +1455,10 @@ class TaskSelector(smach.State):
             if shutdown_event.is_set():
                 return 'shutdown'
             rospy.sleep(0.2)
+        arm_status.set('arm1', activity="Choosing the next task")
+        pause_ctl.gate('arm1', raise_on_stop=False)
+        if shutdown_event.is_set():
+            return 'shutdown'
 
         log.debug("[TaskSelector] Evaluating zone states: %s  busy: %s",
                   manager.states, manager.busy)
@@ -1351,20 +1526,43 @@ class FetchInput(smach.State):
             print("[Loop] Unrecognised input %r — Enter to execute, 'r' to regenerate, "
                   "'q' to abort." % answer)
 
+    def _bin_changed(self, epoch, above_bin):
+        """Pause point before the cup reaches the bin. True if there was a pause after
+        the grasp was planned (the operator may have swapped the bin's items): the grasp
+        is dropped and planned again. An arm above the bin goes home first, out of the
+        camera's view."""
+        pause_ctl.gate('arm1')
+        if pause_ctl.epoch == epoch:
+            return False
+        log.info("[FetchInput] Paused after the grasp was planned: the bin may have "
+                 "changed, so planning a new grasp")
+        events.emit('operator', 'regrasp_after_pause', pick=_pick_n, above_bin=above_bin)
+        if above_bin:
+            hardware._move('arm1', hardware.pick_and_place_arm.reset_joints, duration=3,
+                           desc="clear the bin to re-scan", pausable=False)
+        arm_status.set('arm1', target=None)
+        return True
+
     def _run(self, userdata):
         global _pick_n, _declines
         if shutdown_event.is_set():
             return 'no_grasp'   # DECIDE_HUB turns this into a clean shutdown
+        pause_ctl.gate('arm1')
         _pick_n += 1
         events.emit('pick', n=_pick_n)
         log.info("[FetchInput] Entering state")
+        arm_status.set('arm1', activity="Planning a grasp", target='bin')
 
+        epoch = pause_ctl.epoch   # a pause after this point invalidates the grasp
         grasp = hardware.request_grasp()
         if grasp is None:
+            arm_status.set('arm1', activity="No grasp found (%d in a row), scanning again"
+                           % (_declines + 1), target=None)
             _declines += 1
             if _declines >= opts.max_declines:
                 log.info("[FetchInput] Planner declined %d times in a row — bin empty "
                          "or no reliable grasp. Waiting for a refill.", _declines)
+                arm_status.set('arm1', activity="Bin empty: refill it, then Enter in the terminal")
                 if not self._await_refill():
                     log.info("[FetchInput] Operator ended the run.")
                     events.emit('shutdown', 'bin_empty', declines=_declines,
@@ -1403,20 +1601,27 @@ class FetchInput(smach.State):
         log.info("[FetchInput] IK pre_joints:   %s", np.round(hardware.pick_up_pre_joints, 4))
         log.info("[FetchInput] IK final_joints: %s", np.round(hardware.pick_up_final_joints, 4))
 
+        if self._bin_changed(epoch, above_bin=False):
+            return 'no_grasp'
         log.info("[FetchInput] Moving to pre-pick")
         hardware._move('arm1', hardware.pick_and_place_arm.goto_joints,
-                       hardware.pick_up_pre_joints, duration=3, desc="goto pre-pick")
+                       hardware.pick_up_pre_joints, duration=3, desc="goto pre-pick",
+                       pausable=False)
 
+        if self._bin_changed(epoch, above_bin=True):
+            return 'no_grasp'
         log.info("[FetchInput] Descending to pick")
         hardware._move('arm1', hardware.pick_and_place_arm.goto_joints,
-                       hardware.pick_up_final_joints, duration=2, desc="descend to contact")
+                       hardware.pick_up_final_joints, duration=2, desc="descend to contact",
+                       pausable=False)
 
         call_trigger_service('/orio/pnp_cup/on')
         rospy.sleep(1.0)
 
         log.info("[FetchInput] Retracting to pre-pick height")
         hardware._move('arm1', hardware.pick_and_place_arm.goto_joints,
-                       hardware.pick_up_pre_joints, duration=2, desc="retract")
+                       hardware.pick_up_pre_joints, duration=2, desc="retract",
+                       pausable=False)
         hardware.label_arm.wait_for_skill()
 
         hardware.assert_vacuum('pnp', True)
@@ -1435,21 +1640,24 @@ class DropToZone(smach.State):
 
     def _run(self, userdata):
         log.info("[DropToZone] Entering state (item_depth=%.4f)", userdata.item_depth)
+        pause_ctl.gate('arm1')
         target_zone = None
         with manager.lock:
             for z in ['A', 'B']:
                 if manager.states[z] == 'EMPTY' and not manager.busy[z]:
                     target_zone = z
-                    manager.busy[z] = True
+                    manager.busy[z] = 'arm1'
                     break
 
         if not target_zone:
             _raise_if_interrupted()   # this loop has no other way out on Ctrl-C
             log.debug("[DropToZone] No empty zone available → wait")
+            arm_status.set('arm1', activity="Holding the item, waiting for a free zone")
             rospy.sleep(0.5)
             return 'wait'
 
         log.info("[DropToZone] Targeting zone %s", target_zone)
+        arm_status.set('arm1', target=target_zone)
         manager.depths[target_zone] = userdata.item_depth
 
         try:
@@ -1464,7 +1672,8 @@ class DropToZone(smach.State):
                 call_trigger_service('/orio/pnp_cup/off')
                 rospy.sleep(1.0)
 
-                hardware._move('arm1', arm1.reset_joints, duration=2, desc="reset after drop A")
+                hardware._move('arm1', arm1.reset_joints, duration=2, desc="reset after drop A",
+                               pausable=False)
             else:
                 int1_joints = hardware.pose_to_joints("L1_INTER", depth_offset=manager.depths[target_zone])
                 int2_joints = hardware.pose_to_joints("L2_INTER", depth_offset=manager.depths[target_zone])
@@ -1476,7 +1685,9 @@ class DropToZone(smach.State):
                 hardware.assert_vacuum('pnp', True)
                 call_trigger_service('/orio/pnp_cup/off')
                 rospy.sleep(1.0)
-                hardware._move('arm1', arm1.reset_joints, duration=2, desc="reset after drop B")
+                hardware._move('arm1', arm1.reset_joints, duration=2, desc="reset after drop B",
+                               pausable=False)
+            arm_status.set('arm1', target=None)
 
             hardware.label_arm.wait_for_skill()
 
@@ -1509,12 +1720,13 @@ class RetrieveFromZone(smach.State):
             for z in ['A', 'B']:
                 if manager.states[z] == 'READY_FOR_PICKUP' and not manager.busy[z]:
                     target_zone = z
-                    manager.busy[z] = True
+                    manager.busy[z] = 'arm1'
                     break
 
         if not target_zone:
             log.debug("[RetrieveFromZone] No ready zones → no_items")
             return 'no_items'
+        arm_status.set('arm1', target=target_zone)
 
         depth = manager.depths[target_zone]
         userdata.retrieved_depth = depth
@@ -1541,7 +1753,8 @@ class RetrieveFromZone(smach.State):
             rospy.sleep(1.0)
 
             log.info("[RetrieveFromZone] Retracting to pre-pick height")
-            hardware._move('arm1', arm1.goto_joints, pre_pick_joints, duration=2, desc="retract at zone")
+            hardware._move('arm1', arm1.goto_joints, pre_pick_joints, duration=2, desc="retract at zone",
+                           pausable=False)
             hardware._move('arm1', arm1.goto_joints, int_joints, duration=2, desc="transit from zone")
             hardware.label_arm.wait_for_skill()
 
@@ -1581,6 +1794,7 @@ class PlaceOutput(smach.State):
         log.info("[PlaceOutput] drop_joints: %s", np.round(drop_joints, 4))
 
         arm1 = hardware.pick_and_place_arm
+        arm_status.set('arm1', target='output')
         if userdata.retrieved_zone == 'A':
             hardware._move('arm1', arm1.goto_joints, int_joints, duration=3, desc="transit L2_INTER")
         hardware._move('arm1', arm1.goto_joints, drop_joints, duration=3, desc="goto output")
@@ -1588,7 +1802,9 @@ class PlaceOutput(smach.State):
         call_trigger_service('/orio/pnp_cup/off')
         rospy.sleep(1.0)
 
-        hardware._move('arm1', arm1.reset_joints, duration=3, desc="reset after output")
+        hardware._move('arm1', arm1.reset_joints, duration=3, desc="reset after output",
+                       pausable=False)
+        arm_status.set('arm1', target=None)
         hardware.label_arm.wait_for_skill()
 
         hardware.assert_vacuum('pnp', False)
@@ -1612,6 +1828,8 @@ class GetLabel(smach.State):
 
     def _run(self, userdata):
         log.info("[GetLabel] Entering state")
+        pause_ctl.gate('arm2')
+        arm_status.set('arm2', target='dispenser')
         arm2 = hardware.label_arm
         hardware._move('arm2', arm2.goto_joints, hardware.label_arm_dispenser_pre,
                        duration=5, desc="goto dispenser pre")
@@ -1621,9 +1839,10 @@ class GetLabel(smach.State):
         rospy.sleep(1.0)
 
         hardware._move('arm2', arm2.goto_joints, hardware.label_arm_dispenser_pre,
-                       duration=2, desc="retract from dispenser")
+                       duration=2, desc="retract from dispenser", pausable=False)
         safe_joints = hardware.pose_to_joints("LABELLING_SAFE")
         hardware._move('arm2', arm2.goto_joints, safe_joints, duration=3, desc="goto labelling safe")
+        arm_status.set('arm2', target=None)
 
         hardware.assert_vacuum('lbl', True)
         log.info("[GetLabel] Exiting: succeeded")
@@ -1639,6 +1858,7 @@ class ApplyLabel(smach.State):
                              output_keys=['recovery_failed_state', 'recovery_error_msg'])
 
     def _run(self, userdata):
+        global _labels_applied
         if shutdown_event.is_set():
             return 'shutdown'
         # Spin-wait while ARM1 is in human recovery (it may be accessing zones)
@@ -1646,6 +1866,7 @@ class ApplyLabel(smach.State):
             if shutdown_event.is_set():
                 return 'shutdown'
             rospy.sleep(0.2)
+        pause_ctl.gate('arm2')
 
         log.info("[ApplyLabel] Entering state (zones: %s  busy: %s)",
                  manager.states, manager.busy)
@@ -1654,14 +1875,16 @@ class ApplyLabel(smach.State):
             for z in ['A', 'B']:
                 if manager.states[z] == 'NEEDS_LABEL' and not manager.busy[z]:
                     target_zone = z
-                    manager.busy[z] = True
+                    manager.busy[z] = 'arm2'
                     break
 
         if not target_zone:
             log.debug("[ApplyLabel] No zone needs label → wait")
+            arm_status.set('arm2', activity="Holding a label, waiting for an item")
             rospy.sleep(0.5)
             return 'wait'
 
+        arm_status.set('arm2', target=target_zone, activity="Finding where the label goes (ZED)")
         try:
             zone_number = 1 if target_zone == 'A' else 2
             log.info("[ApplyLabel] Applying label to zone %s (zone_number=%d)",
@@ -1685,13 +1908,16 @@ class ApplyLabel(smach.State):
             call_trigger_service('/orio/lbl_cup/off')
             rospy.sleep(1.0)
 
-            hardware._move('arm2', arm2.goto_joints, pre_joints, duration=2, desc="retract from label")
+            hardware._move('arm2', arm2.goto_joints, pre_joints, duration=2, desc="retract from label",
+                           pausable=False)
 
             safe_joints = hardware.pose_to_joints("LABELLING_SAFE")
             hardware._move('arm2', arm2.goto_joints, safe_joints, duration=3, desc="goto labelling safe")
+            arm_status.set('arm2', target=None)
 
             hardware.assert_vacuum('lbl', False)
 
+            _labels_applied += 1
             with manager.lock:
                 manager.set_state(target_zone, 'READY_FOR_PICKUP')
                 manager.busy[target_zone] = False
@@ -1748,6 +1974,9 @@ def _parse_args():
     parser.add_argument('--no-rfid', action='store_true',
                         help="Do not register labels with the RFID inventory node "
                              "(skips the 5 s wait for /inventory/add_item on each label).")
+    parser.add_argument('--no-dashboard', action='store_true',
+                        help="Do not open the live dashboard window (status + Pause). "
+                             "The status topic and pause services stay up.")
     parser.add_argument('--check-only', action='store_true',
                         help="Only check that BOTH robots (franka-interface 1 and 2) are "
                              "ready, then exit 0 if ready / non-zero if not. No motion. "
@@ -1762,6 +1991,111 @@ def _resolve_disable_pneumatics(args):
     env = os.environ.get('ORIO_DISABLE_PNEUMATICS', '').strip().lower() in ('1', 'true', 'yes', 'on')
     param = bool(rospy.get_param('~disable_pneumatics', False))
     return args.no_vacuum or env or param
+
+
+STATUS_TOPIC = '/orio/dashboard/status'
+STATUS_HZ = 5
+DASHBOARD_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'orio_dashboard.py')
+
+
+def _active_state(sm):
+    try:
+        label = sm.get_active_states()[0] if sm is not None and sm.is_running() else None
+    except Exception:  # noqa: BLE001 — a status read must never break the run
+        label = None
+    return None if label in (None, 'None') else label
+
+
+def _status_snapshot():
+    """Everything the dashboard shows, as one JSON-able dict."""
+    with manager.lock:
+        zones = {z: {'state': manager.states[z], 'busy': manager.busy[z] or None,
+                     'depth': float(manager.depths[z])} for z in ('A', 'B')}
+    arms = arm_status.snapshot()
+    for arm, rec in (('arm1', recovery_event_arm1), ('arm2', recovery_event_arm2)):
+        arms[arm].update(state=_active_state(_machines.get(arm)),
+                         held=pause_ctl.held[arm], recovery=rec.is_set())
+    if hardware is not None:
+        arms['arm1'].update(has_item=bool(hardware.pnp_has_item), raw=hardware.pnp_raw)
+        arms['arm2'].update(has_item=bool(hardware.lbl_has_item), raw=hardware.lbl_raw)
+    return {
+        't': time.time(), 'started': _run_started,
+        'paused': pause_ctl.paused, 'shutdown': shutdown_event.is_set(),
+        'stopping': 'estop' if interrupted.is_set() else ('home' if stop_home.is_set() else None),
+        'prompt': console.prompt if console is not None else None,
+        'arms': arms, 'zones': zones,
+        'counts': {'scans': _pick_n, 'placed': _items_placed_output,
+                   'labels': _labels_applied, 'declines': _declines},
+        'item': {'name': _item_name, 'expiry': _item_expiry},
+        'vacuum': not disable_pneumatics,
+    }
+
+
+def _start_status_server():
+    """Publish _status_snapshot() on STATUS_TOPIC and serve /orio/pause, /orio/resume,
+    /orio/estop (as Ctrl-C) and /orio/shutdown (arms home, then exit)."""
+    pub = rospy.Publisher(STATUS_TOPIC, String, queue_size=1, latch=True)
+
+    def on_pause(_req):
+        changed = pause_ctl.pause()
+        return TriggerResponse(success=True, message="paused" if changed else "already paused")
+
+    def on_resume(_req):
+        changed = pause_ctl.resume()
+        return TriggerResponse(success=True, message="resumed" if changed else "not paused")
+
+    def on_estop(_req):
+        request_estop("E-STOP")   # a second call exits the process
+        return TriggerResponse(success=True, message="stopping both arms")
+
+    def on_shutdown(_req):
+        started = request_home_shutdown()
+        return TriggerResponse(success=started,
+                               message="arms going home, then exit" if started else "already stopping")
+
+    rospy.Service('/orio/pause', Trigger, on_pause)
+    rospy.Service('/orio/resume', Trigger, on_resume)
+    rospy.Service('/orio/estop', Trigger, on_estop)
+    rospy.Service('/orio/shutdown', Trigger, on_shutdown)
+
+    def loop():
+        rate = rospy.Rate(STATUS_HZ)
+        while not rospy.is_shutdown():
+            try:
+                pub.publish(String(data=json.dumps(_status_snapshot(), default=str)))
+            except Exception as exc:  # noqa: BLE001
+                log.debug("[Dashboard] status publish failed: %s", exc)
+            try:
+                rate.sleep()
+            except rospy.ROSInterruptException:
+                return
+    threading.Thread(target=loop, daemon=True, name='status').start()
+
+
+def _start_dashboard():
+    """Open the dashboard window as its own process (Tk here is used from several
+    threads already). It gets no stdin (the Console owns it), its own session (so the
+    terminal's Ctrl-C is ours to handle), and our pid, so it closes if we die."""
+    try:
+        return subprocess.Popen([sys.executable, '-u', DASHBOARD_SCRIPT,
+                                 '--parent-pid', str(os.getpid())],
+                                stdin=subprocess.DEVNULL, start_new_session=True)
+    except OSError as exc:
+        log.warning("[Dashboard] could not start %s: %s", DASHBOARD_SCRIPT, exc)
+        return None
+
+
+def _home_both_arms():
+    """SHUTDOWN: both state machines have ended at a pause point (no arm touching an
+    item), so send each arm home in turn, as at start-up. A held item stays held until
+    main() turns the cups off at home. An arm that cannot get home is logged and left."""
+    for arm_name, arm in (('arm1', hardware.pick_and_place_arm), ('arm2', hardware.label_arm)):
+        log.warning("[Stop] %s going home", arm_name.upper())
+        try:
+            hardware._move(arm_name, arm.reset_joints, duration=5,
+                           desc="go home (shutdown)", pausable=False)
+        except Exception as exc:  # noqa: BLE001 — still try the other arm
+            log.error("[Stop] %s could not go home: %s", arm_name.upper(), exc)
 
 
 def _check_only():
@@ -1780,6 +2114,7 @@ def _check_only():
 
 def main():
     global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test, opts, console
+    global _run_started
     opts = _parse_args()
     rospy.init_node('full_sequence_fsm')
 
@@ -1826,6 +2161,12 @@ def main():
 
     console = Console()
     print("\n[ORIO] Type 'q' + Enter to stop cleanly.")
+
+    _start_status_server()
+    dashboard = None if opts.no_dashboard else _start_dashboard()
+    if dashboard is not None:
+        log.info("[Main] Dashboard opened (Pause/Resume there, or "
+                 "rosservice call /orio/pause | /orio/resume)")
 
     # Initialize hardware once node is running
     hardware = RobotHardware(
@@ -1884,14 +2225,20 @@ def main():
     with top_sm:
         smach.Concurrence.add('ARM1', sm_logistics)
         smach.Concurrence.add('ARM2', sm_labeling)
+    _machines.update(arm1=sm_logistics, arm2=sm_labeling)
+    _run_started = time.time()
 
     try:
         sis = smach_ros.IntrospectionServer('orio_visualiser', top_sm, '/ORIO_ROOT')
         sis.start()
         log.info("[Main] Starting state machine execution")
         outcome = top_sm.execute()
-        if interrupted.is_set():
-            log.warning("[Main] Stopped by Ctrl-C: both arms stopped")
+        if stop_home.is_set() and not interrupted.is_set():
+            _home_both_arms()
+            log.warning("[Main] Shutdown from the dashboard: arms sent home")
+            events.emit('shutdown', 'operator_home', outcome=outcome)
+        elif interrupted.is_set():
+            log.warning("[Main] Stopped by E-STOP, Ctrl-C or 'q' while paused: both arms stopped")
             events.emit('shutdown', 'interrupt')
         else:
             log.info("[Main] State machine finished with outcome: %s", outcome)
@@ -1908,6 +2255,8 @@ def main():
         call_trigger_service('/orio/lbl_cup/off')
         if 'sis' in locals():
             sis.stop()
+        if dashboard is not None and dashboard.poll() is None:
+            dashboard.terminate()
 
 
 if __name__ == '__main__':
