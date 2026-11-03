@@ -5,10 +5,10 @@
 # Brings up only what that needs: the ROS1 master container, the robot-1 control PC, the orio
 # container, the Xtion driver, and a planner container of its own (orio_grasp_test_planner,
 # service /grasp_test_planner/plan_grasp) serving the network vendored in
-# src/devel_packages/orio_grasping. Anything already running (e.g. a run_dexnet_pnp_single.sh
+# src/devel_packages/orio_grasping. Anything already running (e.g. a run_pickup-only.sh
 # stack) is reused and left alone. On exit (Ctrl-C too) the planner and a control PC this
 # script started are stopped; the camera stays on, with the master and the orio container it
-# runs in, so the next run reuses it instead of restarting it. bash stop_dexnet_pnp.sh stops it.
+# runs in, so the next run reuses it instead of restarting it. bash stop_all.sh stops it.
 # Each round (grasp_test.py): reset the arm, plan, Enter to move there, Enter to reset.
 #
 #   bash grasp_test.sh                       # seg_v2_deformables, arm goes down to the grasp
@@ -120,7 +120,7 @@ cleanup() {
         stop_detached control_pc_ros
         control_pc_teardown
     fi
-    log "done. The camera stays on (bash stop_dexnet_pnp.sh stops it). Results: ${OUT#"$REPO"/}/"
+    log "done. The camera stays on (bash stop_all.sh stops it). Results: ${OUT#"$REPO"/}/"
     sync; sleep 0.2
 }
 install_cleanup_traps

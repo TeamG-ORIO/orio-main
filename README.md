@@ -14,8 +14,8 @@ Everything runs in Docker containers on the workstation and is started from one 
 
 ```bash
 bash run_full_demo.sh            # the full two-arm demo: pick, label, place
-bash run_dexnet_pnp_single.sh    # arm 1 only: suction pick-and-place from the bin
-bash stop_dexnet_pnp.sh          # stop everything the two launchers started
+bash run_pickup-only.sh    # arm 1 only: suction pick-and-place from the bin
+bash stop_all.sh          # stop everything the two launchers started
 ```
 
 Ctrl-C stops the current run only. The slow-to-start stack (roscore, containers, control
@@ -30,7 +30,7 @@ tears it all down.
 
 | Path | What |
 | --- | --- |
-| `run_full_demo.sh`, `run_dexnet_pnp_single.sh`, `stop_dexnet_pnp.sh` | The launchers and the stop script. |
+| `run_full_demo.sh`, `run_pickup-only.sh`, `stop_all.sh` | The launchers and the stop script. |
 | `src/devel_packages/orio_bringup/stack.sh` | The bring-up library the launchers share: roscore, control PCs, containers, cameras, planner, perception, teardown. |
 | `src/devel_packages/orio_bringup/docker/` | Dockerfiles and the `run_*.sh` scripts that start each container. |
 | `src/devel_packages/orio/` | The arm code: `full_sequence.py` (both arms), `dexnet_pnp.py` (arm 1 only), IK and collision checking. |

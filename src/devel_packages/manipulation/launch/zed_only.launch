@@ -3,7 +3,7 @@
          the ZED-M's HID interface shares USB Bus 001 with the Xtion, and launching both
          at once makes them contend for bus bandwidth (the openni2 driver even warns "only
          one camera per bus"). The Xtion's IR stream loses that race, errors, and the
-         device re-enumerates — the intermittent flap. run_dexnet_pnp_single.sh starts THIS
+         device re-enumerates — the intermittent flap. run_pickup-only.sh starts THIS
          first, waits for it to publish, then starts xtion_only.launch on a quiet bus.
          (See docs/TROUBLESHOOTING.md: "Xtion flaps at bring-up: USB bus contention".)
 

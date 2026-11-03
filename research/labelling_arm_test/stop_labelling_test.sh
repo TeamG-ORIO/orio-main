@@ -6,7 +6,7 @@
 #   bash research/labelling_arm_test/stop_labelling_test.sh
 #   bash research/labelling_arm_test/stop_labelling_test.sh --keep-shared
 #       # leave roscore, orio_docker_container and the ZED running (another launcher,
-#       # e.g. run_dexnet_pnp_single.sh, may be using them)
+#       # e.g. run_pickup-only.sh, may be using them)
 #
 # Ctrl-C on run_labelling_test.sh only stops that run; this is "everything off".
 set -uo pipefail

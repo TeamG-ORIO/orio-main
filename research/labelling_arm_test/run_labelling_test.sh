@@ -22,7 +22,7 @@
 #   bash research/labelling_arm_test/run_labelling_test.sh --unlock        # open robot 2's brakes first
 #   bash research/labelling_arm_test/run_labelling_test.sh --fresh         # stop the running stack first
 #
-# Like run_dexnet_pnp_single.sh: the services run in the background with their output
+# Like run_pickup-only.sh: the services run in the background with their output
 # merged here under [module] prefixes; the arm script runs in the FOREGROUND so its prompt
 # owns the keyboard. Ctrl-C stops THIS RUN (arm script, pneumatics). roscore, the main
 # container, the control PC, the ZED, Fast-FoundationStereo and perception stay up and the

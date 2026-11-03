@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Save one RGB snapshot (plus depth and intrinsics) of what the Xtion sees.
 #
-# Reuses a running camera stack if there is one (e.g. a run_dexnet_pnp_single.sh or
+# Reuses a running camera stack if there is one (e.g. a run_pickup-only.sh or
 # run_full_demo.sh session). Otherwise it brings up just what the picture needs - the ROS1
 # master container, orio_docker_container and the Xtion driver - takes the picture, and
 # tears down what THIS script started. Anything already running is left alone.

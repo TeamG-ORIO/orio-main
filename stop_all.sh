@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Tear down everything run_dexnet_pnp_single.sh OR run_full_demo.sh started (they share
+# Tear down everything run_pickup-only.sh OR run_full_demo.sh started (they share
 # the stack): the pick loop / sequence and pneumatics (if a run is still going), the
 # control PC processes on iam-doc, the label arm's stack on iam-luisa, the cameras,
 # Fast-FoundationStereo, the grasp planner, perception, the RFID node, the main container
 # and roscore.
 #
-#   bash stop_dexnet_pnp.sh
+#   bash stop_all.sh
 #
 # Ctrl-C on either launcher only stops that run and leaves this stack up so the
 # next run starts quickly; this is the clean "everything off" command.

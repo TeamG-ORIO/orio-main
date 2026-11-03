@@ -360,7 +360,7 @@ class SuctionGraspPlanner(object):
         }
 
         # Diagnostic panels, opt-in like the DexNet planner's affordance panels (same env
-        # var, so run_dexnet_pnp_single.sh --affordance drives both). Each call also keeps
+        # var, so run_pickup-only.sh --affordance drives both). Each call also keeps
         # its raw inputs beside the panel, so the models can be rerun on it offline.
         self._panel_dir = os.environ.get("ORIO_AFFORDANCE_DIR", "").strip()
         self._panel_n = 0

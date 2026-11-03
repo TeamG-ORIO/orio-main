@@ -20,7 +20,7 @@ a Docker container. Nothing here involves robot 2 or the labelling path.
 
 The grasp planner under test is Dex-Net 4.0's fully convolutional suction network
 (FC-GQCNN-4.0-SUCTION, Berkeley gqcnn, vendored as the submodule
-`src/devel_packages/gqcnn`). The pipeline, all started by `run_dexnet_pnp_single.sh`:
+`src/devel_packages/gqcnn`). The pipeline, all started by `run_pickup-only.sh`:
 
 ```
 Xtion (openni2, registered depth)
@@ -237,8 +237,8 @@ Normal pick loop, unchanged (new code is picked up through the bind mount and
 `perception.launch`, which loads `grasp.yaml`):
 
 ```bash
-bash run_dexnet_pnp_single.sh                    # dry run, Enter per pick
-bash run_dexnet_pnp_single.sh --vacuum --auto
+bash run_pickup-only.sh                    # dry run, Enter per pick
+bash run_pickup-only.sh --vacuum --auto
 ```
 
 Do not pass `--straight-down` when evaluating the plane fit; it discards the tilt.

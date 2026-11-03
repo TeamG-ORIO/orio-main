@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Shared bring-up library for the single-terminal launchers (run_full_demo.sh,
-# run_dexnet_pnp_single.sh, grasp_test.sh, reset_robot.sh, snap_xtion.sh,
+# run_pickup-only.sh, grasp_test.sh, reset_robot.sh, snap_xtion.sh,
 # research/labelling_arm_test/*) and the stop scripts. Source it after setting REPO:
 #
 #   REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

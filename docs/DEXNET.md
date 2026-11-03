@@ -67,7 +67,7 @@ pick loop  (orio/dexnet_pnp.py, container orio_docker_container, foreground)
    → FrankaArm.goto_joints: pre-pick, contact, vacuum on, retract, transit, drop, home
 ```
 
-Everything above is started by `run_dexnet_pnp_single.sh` (one terminal).
+Everything above is started by `run_pickup-only.sh` (one terminal).
 
 ### File map
 
@@ -79,7 +79,7 @@ Everything above is started by `run_dexnet_pnp_single.sh` (one terminal).
 | Perception node, Dex-Net branch | `perception_control_combined_pass_through.py`: `_plan_grasp_dexnet`, `_handle_pnp_dexnet`, `_build_bin_mask`, `_cropped_intrinsics`, `_resolve_pnp_intrinsics` |
 | Perception config | `src/devel_packages/orio_perception/config/grasp.yaml` (loaded by `launch/perception.launch`) |
 | Pick loop | `src/devel_packages/orio/dexnet_pnp.py` |
-| Launcher | `run_dexnet_pnp_single.sh` (repo root) |
+| Launcher | `run_pickup-only.sh` (repo root) |
 | Camera to robot transform | `src/devel_packages/manipulation/config/realsense_tf.yaml` (name is historical; it is the Xtion) |
 | Offline tests and viewers | `src/devel_packages/orio_perception/test/` (see its README) |
 | RViz grasp viewer, no arm | `docker/run_dexnet_viz.sh` + `test/visualize_dexnet_rviz.py` |
@@ -125,10 +125,10 @@ plugged in. The host is Ubuntu 22.04 with ROS 2 only; **every ROS 1 process runs
 container**, there is no host `rospy`.
 
 ```bash
-bash run_dexnet_pnp_single.sh                       # dry run, no vacuum, Enter per pick
-bash run_dexnet_pnp_single.sh --vacuum              # real suction
-bash run_dexnet_pnp_single.sh --vacuum --auto       # no per-pick prompt
-bash run_dexnet_pnp_single.sh --vacuum --offset-y -0.015 --min-q 0.2
+bash run_pickup-only.sh                       # dry run, no vacuum, Enter per pick
+bash run_pickup-only.sh --vacuum              # real suction
+bash run_pickup-only.sh --vacuum --auto       # no per-pick prompt
+bash run_pickup-only.sh --vacuum --offset-y -0.015 --min-q 0.2
 ```
 
 At the confirm prompt: Enter executes, `r` re-plans on a fresh frame, Ctrl-C aborts. After
@@ -155,7 +155,7 @@ module), `<stamp>.affordance/afford_NNNN_hhmmss.png`, and when the recorder is a
 Ctrl-C stops only the run: the pick loop, pneumatics and recorder. roscore, the main
 container, the control PC, the planner, both cameras and perception stay up, and the next
 run reuses whatever is still healthy (the planner and perception are restarted when
-`--planner`, `--min-q` or the panel setting changes). `bash stop_dexnet_pnp.sh` stops
+`--planner`, `--min-q` or the panel setting changes). `bash stop_all.sh` stops
 everything; `--fresh` does the same before starting.
 
 ### Offline checks that need no robot
@@ -239,7 +239,7 @@ Ordered by how much they block Dex-Net work.
    but it has not been run.
 4. **Uncommitted working-tree changes** as of this writing, all from 2026-09-22 to
    2026-10-05 and all small, need review and a commit:
-   `run_dexnet_pnp_single.sh` (`--offset-x/-y`, `--min-q`), `dexnet_pnp.py` (offset
+   `run_pickup-only.sh` (`--offset-x/-y`, `--min-q`), `dexnet_pnp.py` (offset
    application), `grasp.yaml` (comments), `COMMANDS.md`, and the depth topic swap in
    `perception_control_combined_pass_through.py`. The GroundingDINO submodule also shows
    as modified (untracked content inside it); not Dex-Net related.

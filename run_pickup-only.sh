@@ -9,29 +9,29 @@
 # Ctrl-C stops THIS RUN only (pick loop, pneumatics, recorder). The slow-to-start stack —
 # roscore, the main container, the control PC, the grasp planner, both cameras and
 # perception — stays up, and the next run reuses whatever of it is still healthy and
-# starts the rest. To tear the whole stack down:  bash stop_dexnet_pnp.sh
+# starts the rest. To tear the whole stack down:  bash stop_all.sh
 #
-#   bash run_dexnet_pnp_single.sh --fresh         # stop the running stack first, start clean
-#   bash run_dexnet_pnp_single.sh                 # dry-run (no vacuum), confirm each pick
+#   bash run_pickup-only.sh --fresh         # stop the running stack first, start clean
+#   bash run_pickup-only.sh                 # dry-run (no vacuum), confirm each pick
 #                                                 #   (Enter = execute, r = regenerate grasp, Ctrl-C = abort)
-#   bash run_dexnet_pnp_single.sh --vacuum        # start pneumatics (real suction)
-#   bash run_dexnet_pnp_single.sh --auto          # no per-pick Enter (auto-pick)
+#   bash run_pickup-only.sh --vacuum        # start pneumatics (real suction)
+#   bash run_pickup-only.sh --auto          # no per-pick Enter (auto-pick)
 #                                                 #   (an empty bin still waits for a refill)
-#   bash run_dexnet_pnp_single.sh --straight-down # ignore grasp tilt, approach vertically
-#   bash run_dexnet_pnp_single.sh --no-logging    # skip the rerun recorder for this run
-#   bash run_dexnet_pnp_single.sh --live          # also stream to a running `rerun` viewer
-#   bash run_dexnet_pnp_single.sh --no-affordance # skip the per-grasp affordance panels
-#   bash run_dexnet_pnp_single.sh --offset-x 0.00 --offset-y -0.015
+#   bash run_pickup-only.sh --straight-down # ignore grasp tilt, approach vertically
+#   bash run_pickup-only.sh --no-logging    # skip the rerun recorder for this run
+#   bash run_pickup-only.sh --live          # also stream to a running `rerun` viewer
+#   bash run_pickup-only.sh --no-affordance # skip the per-grasp affordance panels
+#   bash run_pickup-only.sh --offset-x 0.00 --offset-y -0.015
 #                                                 # world-frame XY correction (metres) added to
 #                                                 #   each grasp AFTER the planner, in the pick loop
 #                                                 #   (defaults: $ORIO_PNP_OFFSET_X/Y, else 0)
-#   bash run_dexnet_pnp_single.sh --min-q 0.2     # lowest planner score to accept a grasp (default:
+#   bash run_pickup-only.sh --min-q 0.2     # lowest planner score to accept a grasp (default:
 #                                                 #   $SUCTION_MIN_SCORE / $DEXNET_MIN_Q_VALUE, else 0.30)
-#   bash run_dexnet_pnp_single.sh --planner dexnet
+#   bash run_pickup-only.sh --planner dexnet
 #                                                 # grasp planner: suction (default: the orio-grasping
 #                                                 #   network) or dexnet
 #                                                 #   (default: $ORIO_PLANNER, else suction)
-#   bash run_dexnet_pnp_single.sh --checkpoint depth_v1
+#   bash run_pickup-only.sh --checkpoint depth_v1
 #                                                 # suction network: a run tag (the newest
 #                                                 #   $ORIO_GRASPING/runs/*_<tag>/best.pt) or a path
 #                                                 #   (default: $SUCTION_CHECKPOINT, else the
@@ -139,7 +139,7 @@ PNP_EXTRA+=(--zero-item-depth)
 run_log_paths dexnet_pnp
 log_filter_start '\[Pick\]|\[Place\]'
 
-# The stack shared with run_full_demo.sh (same stack dir); stop_dexnet_pnp.sh stops it.
+# The stack shared with run_full_demo.sh (same stack dir); stop_all.sh stops it.
 STACK_SERVICES=(roscore control_pc_fi control_pc_ros planner zed xtion perception)
 STACK_CONTAINERS=("$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$PERCEPTION_CONTAINER" orio_cameras)
 
@@ -162,7 +162,7 @@ cleanup() {
     fi
     [ -s "${VACUUM_LOG:-}" ] && log "raw vacuum readings: $VACUUM_LOG"
     log "the stack (cameras, planner, perception, control PC) is still running; the next run"
-    log "reuses it. To stop everything: bash stop_dexnet_pnp.sh"
+    log "reuses it. To stop everything: bash stop_all.sh"
     # Give the output filter a moment to flush the final lines to the file.
     sync; sleep 0.2
 }
@@ -178,7 +178,7 @@ follow perception perception
 
 if [ "$FRESH" -eq 1 ]; then
     log "--fresh: stopping the running stack first…"
-    bash "$REPO/stop_dexnet_pnp.sh"
+    bash "$REPO/stop_all.sh"
 fi
 
 # ── Bring-up ─────────────────────────────────────────────────────────────────

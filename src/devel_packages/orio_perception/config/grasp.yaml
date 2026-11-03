@@ -17,7 +17,7 @@ dexnet:
 
   min_q_value: 0.30            # reject grasps below this confidence
   # NOTE: the threshold is enforced by the planner container, which takes it from
-  # DEXNET_MIN_Q_VALUE (run_dexnet.sh) or run_dexnet_pnp_single.sh --min-q. This
+  # DEXNET_MIN_Q_VALUE (run_dexnet.sh) or run_pickup-only.sh --min-q. This
   # entry is not read by the perception node.
 
   # Reject grasps whose approach axis deviates further than this from vertical.
@@ -57,7 +57,7 @@ dexnet:
   # the cup midpoint). Since the residual belongs to the camera calibration and gripper
   # rather than the algorithm, DexNet probably needs the same values - 0.0 is only a
   # safe dry-run default. Resolve on hardware before trusting any A/B result.
-  # For run_dexnet_pnp_single.sh the correction is applied in the pick loop instead
+  # For run_pickup-only.sh the correction is applied in the pick loop instead
   # (--offset-x/--offset-y, or ORIO_PNP_OFFSET_X/Y), after the raw pose is published.
   # Leave these at 0 when using that, or the offset is applied twice.
   offset_x: 0.0
@@ -67,7 +67,7 @@ dexnet:
 # above (the shared code reads whichever section is active), minus the bin depth band
 # and item mask: it plans from the full depth frame, which it turns into the top-down
 # height map it was trained on, and needs no segmask. Its score threshold is set on the
-# planner (SUCTION_MIN_SCORE, run_dexnet_pnp_single.sh --min-q).
+# planner (SUCTION_MIN_SCORE, run_pickup-only.sh --min-q).
 suction:
   service: /suction_grasp_planner/plan_grasp
   service_timeout: 30.0        # s to wait for the planner at startup

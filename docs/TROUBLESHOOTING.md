@@ -88,7 +88,7 @@ sshd exhausted after many rapid ssh sessions.
 returns an empty banner ⇒ sshd wedged, not a network problem.
 
 **Fix.** Recover ssh on iam-doc: reboot it, or at its console `sudo systemctl restart ssh`.
-`run_dexnet_pnp_single.sh` now probes ssh first and **aborts fast** with this guidance
+`run_pickup-only.sh` now probes ssh first and **aborts fast** with this guidance
 instead of hanging at pre-flight.
 
 ---
@@ -161,7 +161,7 @@ ZED is already up and idle, so the bandwidth burst is gone. Verified: the Xtion'
 **not** being autosuspended, so this is contention, not autosuspend (see next entry).
 
 **Fix.**
-- **Software (in place):** `run_dexnet_pnp_single.sh` now **staggers** startup — brings the
+- **Software (in place):** `run_pickup-only.sh` now **staggers** startup — brings the
   ZED up first (`zed_only.launch`), lets the bus settle, then starts the Xtion
   (`xtion_only.launch`) on a quiet bus, with a retry (`ORIO_CAM_ATTEMPTS`) as fallback.
 - **Hardware (permanent root fix):** plug the ZED-M into a port on a **different USB
@@ -237,5 +237,5 @@ enough — the **FCI must be active** and franka-interface running.)
 image runs Python 3.8. The import only happens when logging is enabled.
 
 **Fix (workaround).** Run with `ORIO_LOGGING=0` (default in the `orio_dexnet_pnp` layout
-and in `run_dexnet_pnp_single.sh`). Proper fix pending: pin/patch a py38-compatible rerun
+and in `run_pickup-only.sh`). Proper fix pending: pin/patch a py38-compatible rerun
 in the perception image, then logging can be turned back on.

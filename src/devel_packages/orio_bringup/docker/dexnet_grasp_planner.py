@@ -84,7 +84,7 @@ class DexnetGraspPlanner(object):
         # not in the perception node because the dense affordance tensor only exists
         # inside the policy object; the service response carries just the chosen grasp.
         #
-        # Off unless ORIO_AFFORDANCE_DIR is set (run_dexnet_pnp_single.sh --affordance
+        # Off unless ORIO_AFFORDANCE_DIR is set (run_pickup-only.sh --affordance
         # points it at the run's grasp dir). It costs a SECOND forward pass per call plus
         # a ~0.3 s matplotlib render, so it is opt-in rather than on by default.
         self._afford_dir = os.environ.get("ORIO_AFFORDANCE_DIR", "").strip()
