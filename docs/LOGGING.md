@@ -101,7 +101,7 @@ Two writers, one `recording_id` (the run id); the viewer merges the files.
 | Perception writer (worker thread) | `orio_perception/scripts/rerun_writer.py` |
 | Affordance panels | `orio_bringup/docker/dexnet_grasp_planner.py` (`_save_affordance_panel`) |
 | Event hooks | `state_machine.py`, `dexnet_pnp.py`, `pneumatic_control_recovery.py`, `dexnet_grasp_planner.py` |
-| Bring-up | `run_full_demo.sh`, `run_dexnet_pnp_single.sh`, `stop_dexnet_pnp.sh`, `orio_run_docker.sh`, `run_dexnet.sh` |
+| Bring-up | `run_full_demo.sh`, `run_dexnet_pnp_single.sh`, `stop_dexnet_pnp.sh`, `orio_bringup/stack.sh`, `orio_bringup/docker/run_orio.sh`, `run_dexnet.sh` |
 
 Why this shape: the state machine runs on Python 3.8 in the container, where rerun stops
 at 0.22.1 and `.rrd` files are not portable across versions. So nothing in a container

@@ -3,12 +3,11 @@
 # output items, with the grasp planned by the orio-grasping suction network by default
 # (or DexNet with --planner dexnet).
 #
-# The full-demo successor to launch_demo.sh + the orio tmux layout, built like
-# run_dexnet_pnp_single.sh: every service starts in the background and merges its output
-# into THIS terminal, each line prefixed with a [module] label, and the sequence
-# (full_sequence.py) runs in the FOREGROUND so its prompts own the keyboard. Two Tkinter
-# windows will open from the sequence: the item name/expiry setup at start, and the
-# per-arm recovery dialog when a state fails.
+# Built like run_dexnet_pnp_single.sh: every service starts in the background and merges
+# its output into THIS terminal, each line prefixed with a [module] label, and the
+# sequence (full_sequence.py) runs in the FOREGROUND so its prompts own the keyboard. Two
+# Tkinter windows will open from the sequence: the item name/expiry setup at start, and
+# the per-arm recovery dialog when a state fails.
 #
 # Ctrl-C stops THIS RUN only (sequence, pneumatics, recorder). The slow-to-start stack —
 # roscore, the main container, BOTH control PCs (iam-doc for arm 1, iam-luisa for arm 2),
@@ -52,29 +51,14 @@
 #      ORIO_LUISA_HOST/ROBOT_NUM/IP, ORIO_MASTER_IP, ORIO_CAM_ATTEMPTS,
 #      ORIO_PNP_OFFSET_X/Y, ORIO_GRASPING, SUCTION_CHECKPOINT,
 #      ORIO_FFS_DIR/CHECKPOINT/SCALE/ITERS (see run_ffs.sh).
+#
+# The bring-up steps live in src/devel_packages/orio_bringup/stack.sh.
 set -uo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-export ORIO_REPO="$REPO"
-CONTAINER="${ORIO_CONTAINER:-orio_docker_container}"
-# iam-doc control PC (robot 1): franka-interface + ROS action server over ssh, output
-# captured (see run_dexnet_pnp_single.sh for why not start_control_pc.sh).
-CTRL_PC_USER="${ORIO_CTRL_PC_USER:-student}"
-CTRL_PC_HOST="${ORIO_CTRL_PC_HOST:-iam-doc}"
-CTRL_PC_FI_PATH="${ORIO_CTRL_PC_FI_PATH:-Documents/franka-interface}"
-CTRL_PC_ROBOT_IP="${ORIO_CTRL_PC_ROBOT_IP:-172.16.0.2}"
-CTRL_PC_ROBOT_NUM="${ORIO_CTRL_PC_ROBOT_NUM:-1}"
-# iam-luisa control PC (robot 2, the label arm): its stack runs in tmux inside a
-# container THERE, brought up by start_control_pc_luisa.sh (idempotent).
-LUISA_PC="${ORIO_LUISA_HOST:-snaak@iam-luisa}"
-WORKSTATION_HOST="$(hostname)"   # ROS master lives here; the control PCs point ROS at it
-DEXNET_CONTAINER="${DEXNET_CONTAINER_NAME:-orio_dexnet}"
-SUCTION_CONTAINER="${SUCTION_CONTAINER_NAME:-orio_suction}"
-FFS_CONTAINER="${ORIO_FFS_CONTAINER:-orio_ffs}"
-DOCKER_DIR="$REPO/src/devel_packages/orio_bringup/docker"
-WF="$REPO/src/devel_packages/orio_bringup/tmux/wait_for.sh"
-# shellcheck disable=SC1090
-source "$WF"
+LOG_TAG=launcher
+# shellcheck disable=SC1091
+source "$REPO/src/devel_packages/orio_bringup/stack.sh"
 
 # Run logging (docs/LOGGING.md). ON by default; see run_dexnet_pnp_single.sh.
 export ORIO_LOGGING="${ORIO_LOGGING:-1}"
@@ -82,8 +66,6 @@ export ORIO_RUN_ID="${ORIO_RUN_ID:-$(date +%Y%m%d_%H%M%S)}"
 export ORIO_RUN_DIR="${ORIO_RUN_DIR:-$REPO/logging/rerun/$ORIO_RUN_ID}"
 export ORIO_RERUN_LIVE="${ORIO_RERUN_LIVE:-0}"
 LOGGING_REQUESTED="$ORIO_LOGGING"
-PERC_DIR="$REPO/src/devel_packages/orio_perception"
-PERC_VENV="${ORIO_PERCEPTION_VENV:-${ORIO_PERCEPTION_ASSETS:-$PERC_DIR}/venv}"
 
 # ── Args ────────────────────────────────────────────────────────────────────
 USE_VACUUM=1
@@ -95,7 +77,6 @@ PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.0}"
 PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:-0.0}"
 PLANNER="${ORIO_PLANNER:-suction}"
 SUCTION_CKPT="${SUCTION_CHECKPOINT:-}"
-ORIO_GRASPING="${ORIO_GRASPING:-$HOME/orio-grasping}"
 MIN_Q=""
 FRESH=0
 SKIP_ITEM_SETUP=0
@@ -143,169 +124,26 @@ for v in "$PNP_OFFSET_X" "$PNP_OFFSET_Y"; do
 done
 # Always passed, so the "[launcher] sm flags:" line records the correction in the run log.
 SM_EXTRA+=(--offset-x "$PNP_OFFSET_X" --offset-y "$PNP_OFFSET_Y")
-case "$PLANNER" in
-    suction)
-        PLANNER_CONTAINER="$SUCTION_CONTAINER"
-        PLANNER_SERVICE=/suction_grasp_planner/plan_grasp
-        PLANNER_SCRIPT=run_suction.sh
-        MIN_Q="${MIN_Q:-${SUCTION_MIN_SCORE:-0.30}}"
-        if [ -z "$SUCTION_CKPT" ]; then
-            SUCTION_CKPT="$(ls -t "$ORIO_GRASPING"/runs/*/best.pt 2>/dev/null | head -1)"
-            [ -n "$SUCTION_CKPT" ] || { echo "no checkpoint: train one into $ORIO_GRASPING/runs/ or set SUCTION_CHECKPOINT" >&2; exit 2; }
-        elif [ ! -f "$SUCTION_CKPT" ]; then
-            tag="$SUCTION_CKPT"
-            SUCTION_CKPT="$(ls -t "$ORIO_GRASPING"/runs/*_"$tag"/best.pt 2>/dev/null | head -1)"
-            [ -n "$SUCTION_CKPT" ] || { echo "--checkpoint: no $ORIO_GRASPING/runs/*_$tag/best.pt" >&2; exit 2; }
-        fi
-        SUCTION_CKPT="$(readlink -f "$SUCTION_CKPT")"
-        export SUCTION_CHECKPOINT="$SUCTION_CKPT" ;;
-    dexnet)
-        PLANNER_CONTAINER="$DEXNET_CONTAINER"
-        PLANNER_SERVICE=/dexnet_grasp_planner/plan_grasp
-        PLANNER_SCRIPT=run_dexnet.sh
-        MIN_Q="${MIN_Q:-${DEXNET_MIN_Q_VALUE:-0.30}}" ;;
-    *) echo "--planner must be suction or dexnet, got '$PLANNER'" >&2; exit 2 ;;
-esac
-if ! [[ "$MIN_Q" =~ ^(1(\.0+)?|0(\.[0-9]+)?|\.[0-9]+)$ ]]; then
-    echo "--min-q must be a number between 0 and 1, got '$MIN_Q'" >&2; exit 2
-fi
-export DEXNET_MIN_Q_VALUE="$MIN_Q" SUCTION_MIN_SCORE="$MIN_Q"
+planner_resolve || exit 2
 
-# ── Log filtering + saving ───────────────────────────────────────────────────
-# One classifier routes every line: DROP (noise), SAVE (file only), SHOW (terminal +
-# file). Same mechanism as run_dexnet_pnp_single.sh; the SHOW prefixes cover the
-# sequence's states. Run logs live in logging/demo/; the STACK is SHARED with
-# run_dexnet_pnp_single.sh (same stack dir), so either launcher reuses it and
-# stop_dexnet_pnp.sh stops it.
-LOG_DIR="$REPO/logging/demo"
-mkdir -p "$LOG_DIR"
-RUN_STAMP="$(date +%Y%m%d_%H%M%S)"
-LOG_FILE="$LOG_DIR/$RUN_STAMP.log"
-STACK_DIR="$REPO/logging/dexnet_pnp/stack"
-mkdir -p "$STACK_DIR"
-CONTROL_PC_LOG="$STACK_DIR/control_pc.log"
-AFFORDANCE_DIR="$LOG_DIR/$RUN_STAMP.affordance"
-# Raw vacuum sensor readings at 10 Hz, written by the pneumatics node (in the main
-# container, where $REPO/logging is /home/ros_ws/logging). Own file: they'd bury the log.
-VACUUM_LOG="$LOG_DIR/$RUN_STAMP.vacuum.csv"
-VACUUM_LOG_CONT="/home/ros_ws/logging/demo/$RUN_STAMP.vacuum.csv"
-AFFORDANCE_LINK="$LOG_DIR/current.affordance"
-AFFORDANCE_LINK_CONT="/home/ros_ws/logging/demo/current.affordance"
+# ── This run's files, and the output filter ──────────────────────────────────
+# Run logs live in logging/demo/; the STACK is SHARED with run_dexnet_pnp_single.sh (same
+# stack dir), so either launcher reuses it and stop_dexnet_pnp.sh stops it.
+run_log_paths demo
+log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]'
 
-exec > >(
-    LOG_FILE="$LOG_FILE" awk '
-    function strip(s){ gsub(/\033\[[0-9;]*m/, "", s); gsub(/\r/, "", s); return s }
-    {
-        line = strip($0)
-        show = 0; save = 0
-
-        # DROP FIRST: import-time noise a SHOW rule below would otherwise rescue.
-        if (line ~ /autolab_core not installed as catkin package/) { next }
-
-        # SHOW: signal + any error, regardless of source.
-        if (line ~ /\[launcher\]|\[check\]|\[doc\]|\[luisa\]|\[stop\]|\[Main\]|\[Hardware\]|\[Grasp\]|\[Loop\]|\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|Press Enter/) { show=1 }
-        if (line ~ /GAVE UP|ERROR|Error|error|Traceback|has died|disconnected|CAMERA NOT DETECTED|FAIL|Rejected|refus|not ready|NOT ready|Aborting/) { show=1 }
-        if (line ~ /Planned suction grasp|grasp q=/) { show=1 }
-        if (line ~ /Affordance panel|Grasp panel/) { show=1 }
-
-        # DROP: pure noise — never shown, never saved.
-        else if (line ~ /tensorflow|cuda_gpu|dso_loader|NUMA node|StreamExecutor|gpu_device|libcu[a-z]+\.so|XLA service|Building (convolutional|fully|Softmax)|Converting fc layer|Advertised on topic|ikpy|is of type .fixed.|Detection max range|warnings\.warn/) { next }
-
-        # Everything else: SAVE to file only (debug context, not live).
-        if (show) { save=1 }
-        else { save=1; show=0 }
-
-        if (save && length(line)) { print line >> ENVIRON["LOG_FILE"]; fflush(ENVIRON["LOG_FILE"]) }
-        if (show && length(line)) { printf "%s\r\n", line; fflush() }
-    }'
-) 2>&1
-echo "[launcher] logging this run to $LOG_FILE"
-
-# ── Log merging ──────────────────────────────────────────────────────────────
-PIDS=()
-
-prefix() {  # $1 = label; reads stdin, writes "[label] line"
-    local label="$1"
-    sed -u "s/^/[$label] /" 2>/dev/null || sed "s/^/[$label] /"
-}
-
-ts_prefix() {  # reads stdin, prepends an ISO timestamp; for the raw control-PC log
-    while IFS= read -r line; do printf '%s %s\n' "$(date +%H:%M:%S)" "$line"; done
-}
-
-run_bg() {  # $1 = label, rest = command; run in background, prefixed
-    local label="$1"; shift
-    ( "$@" 2>&1 | prefix "$label" ) &
-    PIDS+=($!)
-}
-
-log() { echo "[launcher] $*"; }
-
-# ── The stack: services that stay up between runs ───────────────────────────
-# Same mechanism and stack dir as run_dexnet_pnp_single.sh, extended with the second
-# control PC (luisa) and the RFID node. bash stop_dexnet_pnp.sh tears it all down.
-STACK_SERVICES=(roscore control_pc_fi control_pc_ros luisa planner zed ffs xtion perception rfid)
-
-start_detached() {  # $1 = name, rest = command (may be an exported function)
-    local name="$1"; shift
-    : >"$STACK_DIR/$name.log"
-    setsid bash -c '"$@"' _ "$@" >>"$STACK_DIR/$name.log" 2>&1 </dev/null &
-    echo $! >"$STACK_DIR/$name.pid"
-}
-
-stop_detached() {  # $1 = name
-    local f="$STACK_DIR/$1.pid"
-    [ -f "$f" ] && kill -- "-$(cat "$f")" 2>/dev/null
-    rm -f "$f"
-}
-
-follow() {  # $1 = label, $2 = service name; for this run only
-    ( tail -n0 -F --pid=$$ "$STACK_DIR/$2.log" 2>/dev/null | prefix "$1" ) &
-    PIDS+=($!)
-}
-
-# Quiet health checks.
-container_up() { docker ps -q -f "name=^$1\$" 2>/dev/null | grep -q .; }
-roscore_up()   { _ros_list rostopic >/dev/null 2>&1; }
-topic_live()   {
-    timeout 6 docker exec "$ROS1_CONTAINER" bash -c \
-        "$_ROS1_SETUP; timeout 4 rostopic echo -n 1 $1" >/dev/null 2>&1
-}
-conf_is() { [ "$(cat "$STACK_DIR/$1.conf" 2>/dev/null)" = "$2" ]; }
-zed_depth_mode() {  # the depth mode the running ZED driver was started with
-    timeout 6 docker exec "$ROS1_CONTAINER" bash -c \
-        "$_ROS1_SETUP; rosparam get /zedm/zed_node/depth/depth_mode" 2>/dev/null
-}
+STACK_SERVICES=(roscore control_pc_fi control_pc_ros planner zed ffs xtion perception rfid)
+STACK_CONTAINERS=("$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" "$PERCEPTION_CONTAINER" orio_cameras)
 
 # ── Teardown (this run only) ─────────────────────────────────────────────────
-_CLEANED=0
 cleanup() {
-    [ "$_CLEANED" -eq 1 ] && return
-    _CLEANED=1
-    trap '' INT TERM HUP
     echo
     log "stopping this run… (Ctrl-C again won't interrupt this)"
-    # Flush the rerun recorder FIRST (it writes recorder.rrd + run.json on SIGINT).
-    if [ -n "${RECORDER_PID:-}" ] && kill -0 "$RECORDER_PID" 2>/dev/null; then
-        log "flushing run recorder…"
-        kill -INT "$RECORDER_PID" 2>/dev/null || true
-        for _ in $(seq 1 25); do
-            kill -0 "$RECORDER_PID" 2>/dev/null || break
-            sleep 0.2
-        done
-        kill -0 "$RECORDER_PID" 2>/dev/null && log "recorder still running — killing it."
-    fi
-    # Both vacuums off first if they were running (best effort).
-    if [ "$USE_VACUUM" -eq 1 ]; then
-        docker exec "$CONTAINER" bash -lc \
-          "source /opt/ros/noetic/setup.bash 2>/dev/null; \
-           rosservice call /orio/pnp_cup/off 2>/dev/null; \
-           rosservice call /orio/lbl_cup/off 2>/dev/null" >/dev/null 2>&1 || true
-    fi
-    # The sequence and pneumatics run inside the main container, which stays up.
-    docker exec "$CONTAINER" pkill -f 'full_sequence\.py|pneumatic_control_recovery\.py' \
-        >/dev/null 2>&1 || true
-    for pid in "${PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done
+    recorder_flush
+    local cups=()
+    [ "$USE_VACUUM" -eq 1 ] && cups=(pnp_cup lbl_cup)
+    stop_run_in_container 'full_sequence\.py|pneumatic_control_recovery\.py' "${cups[@]}"
+    kill_bg
     log "done. Full log saved to: $LOG_FILE"
     [ "$ORIO_LOGGING" != "0" ] && [ -f "$ORIO_RUN_DIR/recorder.rrd" ] && \
         log "rerun recording: $ORIO_RUN_DIR (view: rerun $ORIO_RUN_DIR/recorder.rrd)"
@@ -319,10 +157,7 @@ cleanup() {
     log "is still running; the next run reuses it. To stop everything: bash stop_dexnet_pnp.sh"
     sync; sleep 0.2
 }
-trap 'cleanup; exit 130' INT
-trap 'cleanup; exit 143' TERM
-trap 'cleanup; exit 129' HUP
-trap cleanup EXIT
+install_cleanup_traps
 
 # Follow the stack's logs from the start.
 follow roscore roscore
@@ -331,7 +166,6 @@ follow "$PLANNER" planner
 [ "$USE_ZED" -eq 1 ] && follow ffs ffs
 follow cameras xtion
 follow perception perception
-follow luisa luisa
 [ "$USE_RFID" -eq 1 ] && follow rfid rfid
 
 if [ "$FRESH" -eq 1 ]; then
@@ -339,255 +173,22 @@ if [ "$FRESH" -eq 1 ]; then
     bash "$REPO/stop_dexnet_pnp.sh"
 fi
 
-# ── roscore ──────────────────────────────────────────────────────────────────
-STACK_FRESH=0
-if roscore_up; then
-    log "roscore already running — reusing the stack where it is healthy."
-else
-    STACK_FRESH=1
-    log "no roscore — starting the stack from scratch…"
-    for s in "${STACK_SERVICES[@]}"; do stop_detached "$s"; done
-    docker rm -f orio_roscore "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" \
-        orio_perception orio_cameras >/dev/null 2>&1 || true
-    rm -f "$STACK_DIR"/*.conf
-    log "starting roscore…"
-    start_detached roscore bash "$DOCKER_DIR/run_roscore.sh"
-    wait_for_roscore 30 || { log "roscore did not start in 30s — check the [roscore] logs. Aborting."; exit 1; }
-fi
+# ── Bring-up ─────────────────────────────────────────────────────────────────
+stack_bringup_roscore || exit 1
+recorder_start                      # both arms
+control_pc_bringup || exit 1        # robot 1, iam-doc
+luisa_bringup || exit 1             # robot 2, iam-luisa
+main_container_bringup 'full_sequence\.py|dexnet_pnp\.py|pneumatic_control_recovery\.py' || exit 1
 
-# ── Run recorder (docs/LOGGING.md) ───────────────────────────────────────────
-# Sidecar; both robots this time (the tmux demo's default). See
-# run_dexnet_pnp_single.sh for the venv requirements explained at length.
-RECORDER_PID=""
-if [ "$ORIO_LOGGING" != "0" ]; then
-    if [ ! -x "$PERC_VENV/bin/python3" ]; then
-        log "NOTE: no perception venv at $PERC_VENV — run logging is OFF for this run."
-        ORIO_LOGGING=0
-    elif ! "$PERC_VENV/bin/python3" -c "import rospy, rerun" >/dev/null 2>&1; then
-        log "NOTE: $PERC_VENV lacks rospy and/or rerun — run logging is OFF for this run."
-        log "      (see run_dexnet_pnp_single.sh for the pip command; --no-logging silences this)"
-        ORIO_LOGGING=0
-    else
-        log "starting run recorder (both arms) → $ORIO_RUN_DIR"
-        ( "$PERC_VENV/bin/python3" "$REPO/src/devel_packages/orio_logging/recorder.py" \
-              2>&1 | prefix recorder ) &
-        RECORDER_PID=$!
-        PIDS+=("$RECORDER_PID")
-    fi
-fi
-
-# ── Control PC 1 (iam-doc, the pick-and-place arm) ───────────────────────────
-log "checking ssh to control PC 1 ($CTRL_PC_HOST)…"
-if ! timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=10 \
-        "$CTRL_PC_USER@$CTRL_PC_HOST" 'true' >/dev/null 2>&1; then
-    echo
-    log "CANNOT SSH to $CTRL_PC_USER@$CTRL_PC_HOST — the control PC is unreachable."
-    log "Checks: ping $CTRL_PC_HOST; nc -vz $CTRL_PC_HOST 22; restart sshd at its console."
-    log "Aborting before bring-up (nothing can run without the control PC)."
-    exit 1
-fi
-log "ssh to control PC 1 OK."
-
-# Tripwire: forward only GENUINE control-PC failures into the merged [doc] stream.
-# (Same classifier as run_dexnet_pnp_single.sh — see there for why each line is benign.)
-( tail -n0 -F --pid=$$ "$CONTROL_PC_LOG" 2>/dev/null \
-    | awk '
-        /libprotobuf/                                        { next }
-        /RobotStateMessage/                                  { next }
-        /ParsingFromArray Exception/                          { next }
-        /done_skill_id error/                                { next }
-        /[Cc]aught Franka Exception/                         { next }
-        /automatic error recovery|Error recovery finished/   { next }
-        /Skill terminated|Will run the control loop/         { next }
-        /Failed to get static transforms/                    { next }
-        /Robot state save thread encountered Franka exception/ {
-            if (seen_statesave) next; seen_statesave=1
-            print "[note] control PC: robot-state save thread is throwing exceptions (repeating; suppressed after first — controller may be wedged)"
-            fflush(); next
-        }
-        /has died|process has died|control loop|libfranka|terminate called|core dumped|Aborted|segmentation|refused|Connection reset|cannot connect|not connected|e-stop|estop|FCI|reflex/ { print; fflush(); next }
-        /[Ee]rror|[Ee]xception|violation|[Ff]atal/           { print; fflush() }
-      ' \
-    | prefix doc ) &
-PIDS+=($!)
-
-control_pc_up() {
-    timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=8 "$CTRL_PC_USER@$CTRL_PC_HOST" \
-        'pgrep -f "[f]ranka_interface --robot_ip" >/dev/null && pgrep -f "[r]oslaunch franka_ros_interface" >/dev/null' \
-        >/dev/null 2>&1
-}
-
-control_pc_fi() {
-    ssh -tt -o BatchMode=yes -o ConnectTimeout=10 "$CTRL_PC_USER@$CTRL_PC_HOST" \
-        "mkdir -p ~/franka_logs && ls -t ~/franka_logs/*.log 2>/dev/null | tail -n +51 | xargs -r rm -f; \
-         cd '$CTRL_PC_FI_PATH/build' && \
-         stdbuf -oL -eL ./franka_interface --robot_ip '$CTRL_PC_ROBOT_IP' --with_gripper 0 --log 0 --stop_on_error 0 \
-           2>&1 | tee ~/franka_logs/franka_interface_\$(date +%Y%m%d_%H%M%S).log" \
-        2>&1 | ts_prefix >>"$CONTROL_PC_LOG"
-}
-control_pc_ros() {
-    ssh -tt -o BatchMode=yes -o ConnectTimeout=10 "$CTRL_PC_USER@$CTRL_PC_HOST" \
-        "cd '$CTRL_PC_FI_PATH' && source bash_scripts/set_rosmaster.sh '$CTRL_PC_HOST' '$WORKSTATION_HOST' && source catkin_ws/devel/setup.bash && roslaunch franka_ros_interface franka_ros_interface.launch robot_num:=$CTRL_PC_ROBOT_NUM" \
-        2>&1 | ts_prefix >>"$CONTROL_PC_LOG"
-}
-export -f control_pc_fi control_pc_ros ts_prefix
-export CTRL_PC_USER CTRL_PC_HOST CTRL_PC_FI_PATH CTRL_PC_ROBOT_IP CTRL_PC_ROBOT_NUM \
-       WORKSTATION_HOST CONTROL_PC_LOG
-
-control_pc_wedged() {
-    awk '/===== control PC bring-up/ { bad = 0 } /bad_cast/ { bad = 1 } END { exit !bad }' \
-        "$CONTROL_PC_LOG" 2>/dev/null
-}
-
-CTRL_PC_REUSE=0
-if [ "$STACK_FRESH" -eq 0 ] && control_pc_up; then
-    if control_pc_wedged; then
-        log "control PC 1 hit std::bad_cast since it started (franka-interface is wedged) — restarting it."
-    else
-        CTRL_PC_REUSE=1
-    fi
-fi
-if [ "$CTRL_PC_REUSE" -eq 1 ]; then
-    log "control PC 1 already running on $CTRL_PC_HOST."
-else
-stop_detached control_pc_fi
-stop_detached control_pc_ros
-control_pc_cleanup() {
-log "clearing stale control-PC state on $CTRL_PC_HOST…"
-timeout 30 ssh -o BatchMode=yes -o ConnectTimeout=8 "$CTRL_PC_USER@$CTRL_PC_HOST" \
-    'bash -s' <<'REMOTE_CLEANUP' >/dev/null 2>&1 || true
-fi_count() { pgrep -f '[f]ranka_interface --robot_ip' | wc -l; }
-pkill -TERM -f '[f]ranka_interface --robot_ip' 2>/dev/null
-pkill -TERM -f '[r]oslaunch franka_ros_interface' 2>/dev/null
-for _ in $(seq 1 20); do
-    [ "$(fi_count)" -eq 0 ] && break
-    sleep 0.5
-done
-if [ "$(fi_count)" -ne 0 ]; then
-    pkill -KILL -f '[f]ranka_interface --robot_ip' 2>/dev/null
-    sleep 1
-fi
-pkill -KILL -f '[r]oslaunch franka_ros_interface' 2>/dev/null
-pkill -KILL -f '[f]ranka_ros_interface' 2>/dev/null
-if [ "$(fi_count)" -eq 0 ]; then
-    rm -f /dev/shm/run_loop_* /dev/shm/current_robot_state* \
-          /dev/shm/franka_interface_state_info_mutex 2>/dev/null
-    echo "CLEANUP_OK"
-else
-    echo "CLEANUP_FAILED: franka_interface still running; left /dev/shm alone"
-fi
-REMOTE_CLEANUP
-}
-control_pc_cleanup
-
-log "starting robot-1 control PC ($CTRL_PC_HOST) over ssh — logging to $CONTROL_PC_LOG"
-{
-    echo "===== control PC bring-up @ $(date -Is) — $CTRL_PC_USER@$CTRL_PC_HOST ====="
-    echo "===== franka-interface | robot_ip=$CTRL_PC_ROBOT_IP ====="
-} >>"$CONTROL_PC_LOG"
-FI_ATTEMPTS="${ORIO_FI_ATTEMPTS:-2}"
-fi_mode_error=0
-for fi_attempt in $(seq 1 "$FI_ATTEMPTS"); do
-    fi_from=$(( $(wc -l <"$CONTROL_PC_LOG") + 1 ))
-    start_detached control_pc_fi control_pc_fi
-    sleep 5
-    timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=8 "$CTRL_PC_USER@$CTRL_PC_HOST" \
-        'pgrep -f "[f]ranka_interface --robot_ip" >/dev/null' >/dev/null 2>&1 && { fi_mode_error=0; break; }
-    tail -n +"$fi_from" "$CONTROL_PC_LOG" | grep -q "not possible in the current mode" || break
-    fi_mode_error=1
-    [ "$fi_attempt" -eq "$FI_ATTEMPTS" ] && break
-    log "arm is not accepting commands yet (franka-interface attempt $fi_attempt/$FI_ATTEMPTS) — retrying in 10 s…"
-    sleep 10
-    control_pc_cleanup
-done
-if [ "$fi_mode_error" -eq 1 ]; then
-    echo
-    log "ROBOT 1 NOT ACCEPTING COMMANDS: franka-interface keeps exiting with \"command not"
-    log "possible in the current mode\". The arm is locked, user-stopped or in an error state."
-    log "  - Unlock and activate it:  python3 src/devel_packages/orio_bringup/lock_arms.py --unlock 1"
-    log "  - In Desk, make sure FCI is activated."
-    log "Then re-run this script. Aborting."
-    exit 1
-fi
-start_detached control_pc_ros control_pc_ros
-log "control PC 1: franka-interface + action server launched over ssh (detail in ${CONTROL_PC_LOG##*/})"
-sleep 3
-fi
-
-# ── Control PC 2 (iam-luisa, the label arm) ──────────────────────────────────
-# Its whole stack runs in tmux INSIDE the franka-interface container on iam-luisa;
-# start_control_pc_luisa.sh is idempotent and leaves an already-running session alone.
-luisa_up() {
-    timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=8 "$LUISA_PC" \
-        "docker exec franka-interface bash -lc 'tmux has-session -t franka'" >/dev/null 2>&1
-}
-# Same wedge as control PC 1's: after a std::bad_cast its franka-interface still accepts
-# skills but never runs them, so every move times out. Its output lives only in the tmux
-# window, whose scrollback starts with the session, so this means "since it started".
-luisa_wedged() {
-    timeout 20 ssh -o BatchMode=yes -o ConnectTimeout=8 "$LUISA_PC" \
-        "docker exec franka-interface bash -lc 'tmux capture-pane -p -J -t franka:franka_interface -S -'" \
-        2>/dev/null | grep -q bad_cast
-}
-LUISA_REUSE=0
-if [ "$STACK_FRESH" -eq 0 ] && luisa_up; then
-    if luisa_wedged; then
-        log "control PC 2 hit std::bad_cast since it started (franka-interface is wedged) — restarting it."
-    else
-        LUISA_REUSE=1
-    fi
-fi
-if [ "$LUISA_REUSE" -eq 1 ]; then
-    log "control PC 2 (luisa) already running."
-else
-    if luisa_up; then
-        # --fresh: new master, the old session points at a roscore that no longer exists.
-        [ "$STACK_FRESH" -eq 1 ] && log "restarting control PC 2 (luisa) — its session points at the old master…"
-        timeout 30 ssh -o BatchMode=yes -o ConnectTimeout=8 "$LUISA_PC" \
-            "docker exec franka-interface bash -lc 'tmux kill-session -t franka'" >/dev/null 2>&1 || true
-    fi
-    log "starting robot-2 control PC ($LUISA_PC)…"
-    : >"$STACK_DIR/luisa.log"
-    if ! bash "$REPO/src/devel_packages/orio_bringup/start_control_pc_luisa.sh" \
-            >>"$STACK_DIR/luisa.log" 2>&1; then
-        echo
-        log "CONTROL PC 2 (luisa) DID NOT COME UP — see the [luisa] lines above."
-        log "Checks: ssh $LUISA_PC; is 'iam-luisa' in /etc/hosts (192.168.2.3)?"
-        log "Aborting: the label arm cannot run without it."
-        exit 1
-    fi
-fi
-
-# The main container: cameras + the sequence run in it.
-CAMS_FRESH="$STACK_FRESH"
-if container_up "$CONTAINER"; then
-    log "main container already running."
-    # A run that was killed hard can leave its sequence or pneumatics running in there.
-    docker exec "$CONTAINER" pkill -f 'full_sequence\.py|dexnet_pnp\.py|pneumatic_control_recovery\.py' \
-        >/dev/null 2>&1 || true
-else
-    CAMS_FRESH=1
-    stop_detached zed
-    stop_detached xtion
-    log "starting main docker container…"
-    run_bg docker bash -lc "cd '$REPO' && ORIO_NO_TTY=1 ORIO_LOGGING=$ORIO_LOGGING bash orio_run_docker.sh"
-    wait_for_container "$CONTAINER" 60 || { log "main container '$CONTAINER' did not start in 60s — check the [docker] logs. Aborting."; exit 1; }
-fi
-
-# ── Pre-flight: are BOTH robots ready? ───────────────────────────────────────
-# Before the heavy services, so a locked robot fails fast. No motion. Both robot-state
-# topics must be flowing first — a freshly started luisa roslaunch needs a moment, and
-# FrankaArm's own readiness wait gives up after ~10s.
+# Pre-flight: are BOTH robots ready? Before the heavy services, so a locked robot fails
+# fast. No motion. Both robot-state topics must be flowing first — a freshly started luisa
+# roslaunch needs a moment, and FrankaArm's own readiness wait gives up after ~10s.
 wait_for_topic "/robot_state_publisher_node_1/robot_state" 60 \
     || { log "robot 1 never published its state — see $CONTROL_PC_LOG. Aborting."; exit 1; }
 wait_for_topic "/robot_state_publisher_node_2/robot_state" 90 \
     || { log "robot 2 never published its state — check the [luisa] logs above. Aborting."; exit 1; }
 log "pre-flight: checking robots 1 and 2 are ready…"
-docker exec "$CONTAINER" bash -c \
-        "source /home/ros_ws/devel/setup.bash && \
-         cd /home/ros_ws/src/devel_packages/orio && \
-         python3 full_sequence.py --check-only" 2>&1 | prefix check
-if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+if ! preflight_check "python3 full_sequence.py --check-only"; then
     echo
     log "A ROBOT IS NOT READY — aborting before starting cameras/planner/perception."
     log "Unlock/activate the arm named above, e.g.:"
@@ -597,144 +198,37 @@ if [ "${PIPESTATUS[0]}" -ne 0 ]; then
 fi
 log "both robots are ready."
 
-# Affordance panels (rendered by the planner; see run_dexnet_pnp_single.sh).
-PANELS=0
-if [ "$AFFORDANCE" -eq 1 ] && [ "$LOGGING_REQUESTED" != "0" ]; then
-    PANELS=1
-    mkdir -p "$AFFORDANCE_DIR"
-    ln -sfn "${AFFORDANCE_DIR##*/}" "$AFFORDANCE_LINK"
-    export ORIO_AFFORDANCE_DIR="$AFFORDANCE_LINK_CONT"
-    log "grasp panels → $AFFORDANCE_DIR"
-else
-    export ORIO_AFFORDANCE_DIR=""
-fi
+affordance_panels_setup
+planner_bringup || exit 1
 
-# ── Grasp planner (reused only if its start-up settings match this run) ───────
-PLANNER_CONF="planner=$PLANNER min_q=$MIN_Q panels=$PANELS"
-[ "$PLANNER" = suction ] && PLANNER_CONF+=" checkpoint=$SUCTION_CKPT"
-if [ "$STACK_FRESH" -eq 0 ] && container_up "$PLANNER_CONTAINER" && conf_is planner "$PLANNER_CONF"; then
-    log "$PLANNER grasp planner already running (min score $MIN_Q)."
-else
-    log "starting $PLANNER grasp planner (min score $MIN_Q)…"
-    stop_detached planner
-    docker rm -f "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" >/dev/null 2>&1 || true
-    start_detached planner bash -lc "ORIO_LOGGING=$ORIO_LOGGING ORIO_AFFORDANCE_DIR='$ORIO_AFFORDANCE_DIR' DEXNET_MIN_Q_VALUE='$MIN_Q' SUCTION_MIN_SCORE='$MIN_Q' bash '$DOCKER_DIR/$PLANNER_SCRIPT' && docker logs -f $PLANNER_CONTAINER"
-    echo "$PLANNER_CONF" >"$STACK_DIR/planner.conf"
-fi
-if ! wait_for_service "$PLANNER_SERVICE" 60; then
-    log "$PLANNER planner did not come up in 60s — check the [$PLANNER] logs above. Aborting."
-    rm -f "$STACK_DIR/planner.conf"
-    exit 1
-fi
-
-# ── Cameras: ZED first (labelling), then the Xtion (picking), one at a time ──
+# Cameras: ZED first (labelling), then the Xtion (picking), one at a time. A ZED left
+# running with its own depth (another launcher, or before this change) is restarted, so
+# its neural depth model is not loaded alongside Fast-FoundationStereo.
 if [ "$USE_ZED" -ne 1 ]; then
     log "ZED DISABLED (--no-zed): labelling poses will time out and arm 2 will need its"
     log "recovery GUI. The pick pipeline is unaffected."
-    stop_detached zed
-    docker exec "$CONTAINER" bash -c "pkill -f 'zed_only.launch|cameras.launch'" >/dev/null 2>&1 || true
-elif [ "$CAMS_FRESH" -eq 0 ] && topic_live /zedm/zed_node/rgb/image_rect_color \
-        && [ "$(zed_depth_mode)" = NONE ]; then
-    log "ZED already publishing (no ZED depth)."
-else
-    # A ZED left running with its own depth (another launcher, or before this change)
-    # is restarted, so its neural depth model is not loaded alongside Fast-FoundationStereo.
-    log "starting ZED camera (no ZED depth: the label depth is Fast-FoundationStereo's)…"
-    stop_detached zed
-    docker exec "$CONTAINER" bash -c "pkill -f 'zed_only.launch|cameras.launch'" >/dev/null 2>&1 || true
-    start_detached zed docker exec "$CONTAINER" bash -c \
-        "source /home/ros_ws/devel/setup.bash && roslaunch manipulation zed_only.launch"
-    if ! wait_for_topic_publishing /zedm/zed_node/rgb/image_rect_color 40; then
-        echo
-        log "CAMERA NOT PUBLISHING: /zedm/zed_node/rgb/image_rect_color (ZED)."
-        log "Its USB3 link has a known hardware fault (EPROTO drops — docs/OPEN_ISSUES.md):"
-        log "replug it on USB3 and re-run, or run with --no-zed (labelling then times out)."
-        log "Aborting: the labelling half of the sequence needs the ZED."
-        exit 1
-    fi
-    log "ZED up. Letting the USB bus settle before starting the Xtion…"
-    sleep 2
-fi
-
-# Xtion with the fast-fail retry (see run_dexnet_pnp_single.sh for the timing note).
-XTION_WAIT="${ORIO_XTION_WAIT:-12}"
-xtion_failed() {  # $1 = log file for this attempt
-    grep -qE 'disconnected|Can.t initialize stream|Couldn.t create .* stream|No devices connected' \
-        "$1" 2>/dev/null
-}
-CAM_ATTEMPTS="${ORIO_CAM_ATTEMPTS:-5}"
-cam_ok=0
-if [ "$CAMS_FRESH" -eq 0 ] && topic_live /camera/rgb/image_raw; then
-    log "Xtion already publishing."
-    cam_ok=1
-fi
-attempt=0
-while [ "$cam_ok" -eq 0 ] && [ "$attempt" -lt "$CAM_ATTEMPTS" ]; do
-    attempt=$(( attempt + 1 ))
-    log "starting Xtion (attempt $attempt/$CAM_ATTEMPTS)…"
-    stop_detached xtion
-    docker exec "$CONTAINER" bash -c "pkill -f xtion_only.launch" >/dev/null 2>&1 || true
-    start_detached xtion docker exec "$CONTAINER" bash -c \
-        "source /home/ros_ws/devel/setup.bash && roslaunch manipulation xtion_only.launch"
-    xtion_deadline=$(( SECONDS + XTION_WAIT ))
-    while :; do
-        if topic_live /camera/rgb/image_raw; then
-            cam_ok=1; break
-        fi
-        if xtion_failed "$STACK_DIR/xtion.log"; then
-            log "Xtion reported a device error on attempt $attempt — retrying immediately…"
-            break
-        fi
-        if [ "$SECONDS" -ge "$xtion_deadline" ]; then
-            log "Xtion did not publish within ${XTION_WAIT}s on attempt $attempt — retrying…"
-            break
-        fi
-        sleep 0.5
-    done
-    [ "$cam_ok" -eq 1 ] && echo "[wait] topic '/camera/rgb/image_raw' is publishing."
-done
-if [ "$cam_ok" -ne 1 ]; then
-    echo
-    log "CAMERA NOT PUBLISHING: /camera/rgb/image_raw (Xtion) after $CAM_ATTEMPTS attempts."
-    log "Usually a marginal USB cable / power — try another cable or port."
-    log "Aborting before perception/sequence (they need camera frames)."
+    zed_stop
+elif ! zed_bringup NONE; then
+    log "Or run with --no-zed (labelling then times out). The labelling half of the sequence needs the ZED."
     exit 1
 fi
+xtion_bringup || exit 1
 
-# ── Fast-FoundationStereo (label depth from the ZED pair: /ffs/compute) ──────
-# Started here and waited for after perception, so the two load their models together.
-if [ "$USE_ZED" -eq 1 ]; then
-    FFS_CONF="scale=${ORIO_FFS_SCALE:-0.5} iters=${ORIO_FFS_ITERS:-8} ckpt=${ORIO_FFS_CHECKPOINT:-default}"
-    if [ "$STACK_FRESH" -eq 0 ] && container_up "$FFS_CONTAINER" && conf_is ffs "$FFS_CONF"; then
-        log "Fast-FoundationStereo already running ($FFS_CONF)."
-    else
-        log "starting Fast-FoundationStereo ($FFS_CONF)…"
-        stop_detached ffs
-        start_detached ffs bash -lc "bash '$DOCKER_DIR/run_ffs.sh' && docker logs -f $FFS_CONTAINER"
-        echo "$FFS_CONF" >"$STACK_DIR/ffs.conf"
-    fi
-fi
+# Fast-FoundationStereo (label depth from the ZED pair: /ffs/compute). Started here and
+# waited for after perception, so the two load their models together.
+[ "$USE_ZED" -eq 1 ] && ffs_bringup
 
-# ── Perception (serves /compute_grasps and /compute_grasps_labelling) ─────────
-# The labelling service needs SAM/GroundingDINO, which a planner backend skips by
-# default; ORIO_LOAD_LABELLING_MODELS=1 loads them alongside it. Part of the conf key,
-# so a stack started by run_dexnet_pnp_single.sh (no labelling models) is restarted
-# here rather than reused. lbl_depth=ffs restarts a perception from before the label
-# depth moved to Fast-FoundationStereo.
+# Perception (serves /compute_grasps and /compute_grasps_labelling). The labelling service
+# needs SAM/GroundingDINO, which a planner backend skips by default;
+# ORIO_LOAD_LABELLING_MODELS=1 loads them alongside it. Part of the conf key, so a stack
+# started by run_dexnet_pnp_single.sh (no labelling models) is restarted here rather than
+# reused. lbl_depth=ffs restarts a perception from before the label depth moved to
+# Fast-FoundationStereo.
 LBL_MODELS=$([ "$USE_ZED" -eq 1 ] && echo 1 || echo 0)
-PERCEPTION_CONF="backend=$PLANNER labelling=$LBL_MODELS lbl_depth=ffs"
-if [ "$STACK_FRESH" -eq 0 ] && container_up orio_perception && conf_is perception "$PERCEPTION_CONF"; then
-    log "perception already running ($PLANNER backend, labelling models=$LBL_MODELS)."
-else
-    log "starting perception ($PLANNER backend, labelling models=$LBL_MODELS)…"
-    stop_detached perception
-    docker rm -f orio_perception >/dev/null 2>&1 || true
-    start_detached perception bash -lc "ORIO_NO_TTY=1 ORIO_LOGGING=$ORIO_LOGGING ORIO_LOAD_LABELLING_MODELS=$LBL_MODELS bash '$DOCKER_DIR/run_perception.sh' $PLANNER"
-    echo "$PERCEPTION_CONF" >"$STACK_DIR/perception.conf"
-fi
+perception_bringup "backend=$PLANNER labelling=$LBL_MODELS lbl_depth=ffs" "ORIO_LOAD_LABELLING_MODELS=$LBL_MODELS"
 
-# ── RFID inventory node (/inventory/add_item) ─────────────────────────────────
-# Best effort: the sequence degrades to a warning per label when it is absent.
+# RFID inventory node (/inventory/add_item). Best effort: the sequence degrades to a
+# warning per label when it is absent.
 if [ "$USE_RFID" -eq 1 ]; then
     if docker exec "$CONTAINER" python3 -c "import mercury, sllurp" >/dev/null 2>&1; then
         log "starting RFID inventory node (db_manager)…"
@@ -752,52 +246,31 @@ else
     log "RFID node DISABLED (--no-rfid): label registration will log a warning per label."
 fi
 
-# ── Pneumatics (both cups), run-scoped like the pick launcher ────────────────
+# Pneumatics (both cups), run-scoped.
 if [ "$USE_VACUUM" -eq 1 ]; then
     log "starting pneumatics (pnp + lbl cups)…"
-    run_bg pneumatics docker exec -e ORIO_LOGGING="$ORIO_LOGGING" -e ORIO_VACUUM_LOG="$VACUUM_LOG_CONT" \
-        -e ORIO_VACUUM_PORT="${ORIO_VACUUM_PORT:-/dev/ttyACM0}" "$CONTAINER" bash -c \
-        "source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && \
-         python3 -u pneumatic_control_recovery.py"
+    pneumatics_start
 else
     log "pneumatics DISABLED (dry-run): move the cups by hand."
 fi
 
-if ! wait_for_service /compute_grasps 90; then
+if ! stack_wait_service perception /compute_grasps 90; then
     log "/compute_grasps did not come up in 90s — check the [perception] logs above. Aborting."
-    rm -f "$STACK_DIR/perception.conf"
     exit 1
 fi
 wait_for_service /compute_grasps_labelling 15 \
     || log "NOTE: /compute_grasps_labelling not up (yet) — labelling will fail until it is."
-if [ "$USE_ZED" -eq 1 ] && ! wait_for_service /ffs/compute 180; then
-    echo
-    log "/ffs/compute did not come up in 180s — check the [ffs] lines above (image built?"
-    log "checkpoint found? see src/devel_packages/orio_bringup/docker/run_ffs.sh)."
-    log "Aborting: without it no label pose has a depth."
-    rm -f "$STACK_DIR/ffs.conf"
-    exit 1
+if [ "$USE_ZED" -eq 1 ]; then
+    ffs_wait || exit 1
 fi
-
-# With the vacuum on, both suction services must exist BEFORE any arm moves (see
-# run_dexnet_pnp_single.sh for the failure this prevents).
 if [ "$USE_VACUUM" -eq 1 ]; then
-    if ! wait_for_service /orio/pnp_cup/on 30 || ! wait_for_service /orio/lbl_cup/on 10; then
-        echo
-        log "VACUUM NOT AVAILABLE: the cup services never appeared — the pneumatics node"
-        log "is not running. Check the [pneumatics] logs above (ClearCore port/firmware)."
-        log "Aborting before the sequence: running with no suction moves the arms for nothing."
-        log "Re-run with --no-vacuum for a dry run."
-        exit 1
-    fi
+    pneumatics_wait pnp_cup lbl_cup || exit 1
 fi
 
 # ── The sequence in the FOREGROUND so its prompts can read the keyboard ───────
 log "starting the full sequence (Ctrl-C or closing this terminal stops this run; the stack stays up)…"
 [ "$SKIP_ITEM_SETUP" -eq 0 ] && log "a Tkinter window will open for the item name/expiry before any motion."
 echo "[launcher] sm flags: ${SM_EXTRA[*]}"
-docker exec -e ORIO_LOGGING="$ORIO_LOGGING" -it "$CONTAINER" bash -c \
-    "source /home/ros_ws/devel/setup.bash && cd /home/ros_ws/src/devel_packages/orio && \
-     python3 -u full_sequence.py ${SM_EXTRA[*]}"
+run_in_container "python3 -u full_sequence.py ${SM_EXTRA[*]}"
 
 log "sequence exited."
