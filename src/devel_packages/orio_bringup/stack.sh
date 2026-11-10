@@ -69,6 +69,10 @@ LUISA_PC="${ORIO_LUISA_HOST:-snaak@iam-luisa}"
 
 # Camera topics the health checks look at.
 XTION_TOPIC="${XTION_TOPIC:-/camera/rgb/image_raw}"
+# 1 = Xtion colour at 1280x1024 (~8 fps) for the suction planner's segmentation, with the
+# usual 640x480 /camera/rgb rebuilt from it; 0 = plain 640x480@30 (xtion_only.launch).
+XTION_HIRES="${ORIO_XTION_HIRES:-1}"
+XTION_HIRES_TOPIC=/camera/rgb_hires/image_raw
 ZED_TOPIC="${ZED_TOPIC:-/zedm/zed_node/rgb/image_rect_color}"
 
 # The host perception venv (py3.10): the only interpreter with both rospy and rerun, which
@@ -329,8 +333,17 @@ control_pc_teardown() {
 # recovery is read back empty from shared memory, the control loop dies on std::bad_cast,
 # and every later motion is ignored until it restarts. A bad_cast since its last start
 # (the last bring-up banner in the log) means restart it.
+# Wedged since its last start: a std::bad_cast, or a virtual-wall/joint-limit fault ("Robot
+# is in collision with virtual walls!") — after either it keeps running but executes no
+# skill and stops publishing fresh robot state, so it must be restarted. The same goes for
+# "command not possible in the current mode", which follows locking the brakes (or hand-guiding
+# the arm) while franka-interface runs: unlocking again does not bring it back. And
+# "FrankaInterface is not ready yet!": it refuses every skill from then on (seen after a move
+# that never recovered from a "robot is still moving" fault; the RobotStateMessage parse
+# errors around it are also printed during normal runs, so they are no sign).
+WEDGE_RE='bad_cast|collision with virtual walls|not possible in the current mode|FrankaInterface is not ready yet'
 control_pc_wedged() {
-    awk '/===== control PC bring-up/ { bad = 0 } /bad_cast/ { bad = 1 } END { exit !bad }' \
+    awk -v re="$WEDGE_RE" '/===== control PC bring-up/ { bad = 0 } $0 ~ re { bad = 1 } END { exit !bad }' \
         "$CONTROL_PC_LOG" 2>/dev/null
 }
 
@@ -394,7 +407,7 @@ control_pc_bringup() {
     local reuse=0
     if [ "$STACK_FRESH" -eq 0 ] && control_pc_up; then
         if control_pc_wedged; then
-            log "control PC hit std::bad_cast since it started (franka-interface is wedged) — restarting it."
+            log "control PC's franka-interface is wedged (std::bad_cast or a virtual-wall fault since it started) — restarting it."
         else
             reuse=1
         fi
@@ -464,7 +477,7 @@ luisa_up() {  # the franka tmux session exists in the franka-interface container
 # starts with the session, so this means "since it started".
 luisa_wedged() {
     ssh_luisa 20 "docker exec franka-interface bash -lc 'tmux capture-pane -p -J -t franka:franka_interface -S -'" \
-        2>/dev/null | grep -q bad_cast
+        2>/dev/null | grep -Eq "$WEDGE_RE"
 }
 
 # The session outlives franka-interface itself: after a user stop or an unrecoverable
@@ -474,6 +487,12 @@ luisa_fi_dead() {
     local out
     out="$(ssh_luisa 20 "docker exec franka-interface bash -lc 'tmux has-session -t franka 2>/dev/null && echo SESSION; pgrep -f \"[f]ranka_interface --robot_ip\" >/dev/null && echo PROCESS'" 2>/dev/null)"
     [[ "$out" == *SESSION* && "$out" != *PROCESS* ]]
+}
+
+# franka-interface's window there shows it refusing the arm's current mode (it then exits).
+luisa_mode_error() {
+    ssh_luisa 20 "docker exec franka-interface bash -lc 'tmux capture-pane -p -J -t franka:franka_interface -S -'" \
+        2>/dev/null | grep -q "not possible in the current mode"
 }
 
 # End the stack's tmux session there; the franka-interface container itself stays (it is
@@ -505,7 +524,7 @@ luisa_bringup() {
     local reuse=0
     if [ "$STACK_FRESH" -eq 0 ] && luisa_up; then
         if luisa_wedged; then
-            log "control PC 2 hit std::bad_cast since it started (franka-interface is wedged) — restarting it."
+            log "control PC 2's franka-interface is wedged (std::bad_cast or a virtual-wall fault since it started) — restarting it."
         elif luisa_fi_dead; then
             log "franka-interface on $LUISA_PC has exited (user stop / fault) — restarting robot 2's stack…"
         else
@@ -522,20 +541,41 @@ luisa_bringup() {
         luisa_kill_stack
         sleep 2
     fi
-    log "starting robot-2 control PC ($LUISA_PC)…"
-    local out rc
-    out="$(bash "$BRINGUP_DIR/start_control_pc_luisa.sh" 2>&1)"; rc=$?
-    if [ -n "$out" ]; then
-        printf '%s\n' "$out" >>"$STACK_DIR/luisa.log"
-        printf '%s\n' "$out" | prefix luisa
-    fi
-    if [ "$rc" -ne 0 ]; then
-        echo
-        log "CONTROL PC 2 (luisa) DID NOT COME UP — see the [luisa] lines above."
-        log "Checks: ssh $LUISA_PC; is 'iam-luisa' in /etc/hosts (192.168.2.3)?"
-        return 1
-    fi
-    [[ "$out" == *ALREADY_RUNNING* ]] || LUISA_STARTED=1
+    # As for robot 1: franka-interface exits at once with "command not possible in the
+    # current mode" when the arm is not accepting commands yet — seconds after its brakes
+    # opened, or right after the previous franka-interface let go of it. That clears by
+    # itself, so retry once after a pause; if it persists only the operator can clear it.
+    local out rc attempt attempts="${ORIO_FI_ATTEMPTS:-2}"
+    for attempt in $(seq 1 "$attempts"); do
+        log "starting robot-2 control PC ($LUISA_PC)…"
+        out="$(bash "$BRINGUP_DIR/start_control_pc_luisa.sh" 2>&1)"; rc=$?
+        if [ -n "$out" ]; then
+            printf '%s\n' "$out" >>"$STACK_DIR/luisa.log"
+            printf '%s\n' "$out" | prefix luisa
+        fi
+        if [ "$rc" -ne 0 ]; then
+            echo
+            log "CONTROL PC 2 (luisa) DID NOT COME UP — see the [luisa] lines above."
+            log "Checks: ssh $LUISA_PC; is 'iam-luisa' in /etc/hosts (192.168.2.3)?"
+            return 1
+        fi
+        [[ "$out" == *ALREADY_RUNNING* ]] && return 0
+        LUISA_STARTED=1
+        sleep 5
+        { luisa_fi_dead && luisa_mode_error; } || return 0
+        [ "$attempt" -eq "$attempts" ] && break
+        log "robot 2 is not accepting commands yet (franka-interface attempt $attempt/$attempts) — retrying in 10 s…"
+        luisa_kill_stack
+        sleep 10
+    done
+    echo
+    log "ROBOT 2 NOT ACCEPTING COMMANDS: franka-interface keeps exiting with \"command not"
+    log "possible in the current mode\". The arm is locked, user-stopped or in an error state."
+    log "  - Check the arm's light: white = user stop pressed (release it); red = error"
+    log "    (acknowledge it in Desk); yellow = brakes locked."
+    log "  - Unlock and activate it:  python3 src/devel_packages/orio_bringup/lock_arms.py --unlock 2"
+    log "Then re-run this script. Aborting."
+    return 1
 }
 
 # ── Main container (frankapy, the cameras and the arm scripts run in it) ──────
@@ -606,9 +646,17 @@ _xtion_failed() {  # $1 = this attempt's log
 }
 xtion_bringup() {
     local wait="${ORIO_XTION_WAIT:-12}" attempts="${ORIO_CAM_ATTEMPTS:-5}" attempt=0 ok=0 deadline
+    local hires_arg=false
+    [ "$XTION_HIRES" = 1 ] && hires_arg=true
     if [ "$CAMS_FRESH" -eq 0 ] && topic_live "$XTION_TOPIC"; then
-        log "Xtion already publishing."
-        return 0
+        if [ "$XTION_HIRES" = 1 ] && ! topic_live "$XTION_HIRES_TOPIC"; then
+            log "Xtion is running at 640x480 — restarting it in high-res mode (ORIO_XTION_HIRES=0 keeps 640x480)."
+        elif [ "$XTION_HIRES" != 1 ] && topic_live "$XTION_HIRES_TOPIC"; then
+            log "Xtion is running in high-res mode — restarting it at 640x480 (ORIO_XTION_HIRES=0)."
+        else
+            log "Xtion already publishing."
+            return 0
+        fi
     fi
     XTION_STARTED=1
     while [ "$ok" -eq 0 ] && [ "$attempt" -lt "$attempts" ]; do
@@ -617,7 +665,7 @@ xtion_bringup() {
         stop_detached xtion
         docker exec "$CONTAINER" bash -c "pkill -f xtion_only.launch" >/dev/null 2>&1 || true
         start_detached xtion docker exec "$CONTAINER" bash -c \
-            "source /home/ros_ws/devel/setup.bash && roslaunch manipulation xtion_only.launch"
+            "source /home/ros_ws/devel/setup.bash && roslaunch manipulation xtion_only.launch hires:=$hires_arg"
         deadline=$(( SECONDS + wait ))
         while :; do
             if topic_live "$XTION_TOPIC"; then ok=1; break; fi
@@ -659,7 +707,7 @@ planner_resolve() {
             PLANNER_CONTAINER="$SUCTION_CONTAINER"
             PLANNER_SERVICE=/suction_grasp_planner/plan_grasp
             PLANNER_SCRIPT=run_suction.sh
-            MIN_Q="${MIN_Q:-${SUCTION_MIN_SCORE:-0.30}}"
+            MIN_Q="${MIN_Q:-${SUCTION_MIN_SCORE:-0.10}}"
             # Checkpoint: a path, a run tag (the newest $grasping/runs/*_<tag>/best.pt) or,
             # empty, the newest $grasping/runs/*/best.pt (run_suction.sh's own default).
             if [ -z "$SUCTION_CKPT" ]; then
@@ -690,7 +738,10 @@ planner_resolve() {
 # affordance_panels_setup first. Both planner containers are removed on a start so a
 # switch of planner does not leave the other one holding the GPU.
 planner_bringup() {
-    local conf="planner=$PLANNER min_q=$MIN_Q panels=$PANELS"
+    # view=camera / seg_max / seg=hires: restart a planner from before it wrote the
+    # dashboard's camera-only view, dropped table-sized masks (SUCTION_SEG_MAX_MASK_FRAC)
+    # or could segment the Xtion's high-res frames.
+    local conf="planner=$PLANNER min_q=$MIN_Q panels=$PANELS view=camera seg_max=${SUCTION_SEG_MAX_MASK_FRAC:-default} seg=hires"
     [ "$PLANNER" = suction ] && conf+=" checkpoint=$SUCTION_CKPT"
     if [ "$STACK_FRESH" -eq 0 ] && container_up "$PLANNER_CONTAINER" && conf_is planner "$conf"; then
         log "$PLANNER grasp planner already running (min score $MIN_Q)."
@@ -710,7 +761,10 @@ planner_bringup() {
 # run_perception.sh (e.g. ORIO_LOAD_LABELLING_MODELS=1). The caller waits for its
 # services with stack_wait_service perception …
 perception_bringup() {
-    stack_service perception "$PERCEPTION_CONTAINER" "$1" \
+    # colour_stamp: restart a perception from before it sent the colour's stamp to the
+    # planner (needed to find the Xtion's high-res frame). labels=: where it saves the
+    # label debug images, read once at start-up (affordance_panels_setup).
+    stack_service perception "$PERCEPTION_CONTAINER" "$1 colour_stamp labels=${ORIO_LABEL_DIR:-off}" \
         bash -lc "ORIO_NO_TTY=1 ORIO_LOGGING=${ORIO_LOGGING:-1} ${2:-} bash '$DOCKER_DIR/run_perception.sh' $PLANNER"
     if [ "$SERVICE_REUSED" -eq 1 ]; then
         log "perception already running ($1)."
@@ -831,11 +885,12 @@ vacuum_off() {  # best effort; arguments: cup names
 }
 
 # ── Per-run paths and setup ──────────────────────────────────────────────────
-# One run's files under logging/<name>/: the merged log, the grasp panels, the raw vacuum
-# readings. $REPO/logging is /home/ros_ws/logging in the containers, hence the *_CONT
-# paths. The panel directory is reached through the fixed link current.affordance: the
-# planner outlives a run and reads its directory once, at start-up, so each run points
-# the link at its own directory. The link is relative, so it resolves in the container too.
+# One run's files under logging/<name>/: the merged log, the grasp panels, the label
+# debug images, the raw vacuum readings. $REPO/logging is /home/ros_ws/logging in the
+# containers, hence the *_CONT paths. The panel and label directories are reached through
+# the fixed links current.affordance and current.labels: the planner and perception
+# outlive a run and read their directory once, at start-up, so each run points the links
+# at its own directories. The links are relative, so they resolve in the containers too.
 run_log_paths() {  # $1 = directory name under logging/
     LOG_DIR="$REPO/logging/$1"
     mkdir -p "$LOG_DIR"
@@ -844,6 +899,9 @@ run_log_paths() {  # $1 = directory name under logging/
     AFFORDANCE_DIR="$LOG_DIR/$RUN_STAMP.affordance"
     AFFORDANCE_LINK="$LOG_DIR/current.affordance"
     AFFORDANCE_LINK_CONT="/home/ros_ws/logging/$1/current.affordance"
+    LABELS_DIR="$LOG_DIR/$RUN_STAMP.labels"
+    LABELS_LINK="$LOG_DIR/current.labels"
+    LABELS_LINK_CONT="/home/ros_ws/logging/$1/current.labels"
     VACUUM_LOG="$LOG_DIR/$RUN_STAMP.vacuum.csv"
     VACUUM_LOG_CONT="/home/ros_ws/logging/$1/$RUN_STAMP.vacuum.csv"
 }
@@ -852,16 +910,21 @@ run_log_paths() {  # $1 = directory name under logging/
 # maps only exist there). ON when AFFORDANCE=1 and the operator asked for logging
 # (LOGGING_REQUESTED, captured before the recorder's venv check could zero ORIO_LOGGING:
 # the panels need nothing from the host venv). Sets PANELS and ORIO_AFFORDANCE_DIR.
+# Perception's label debug images (each with its raw inputs) go the same way, under
+# ORIO_LABEL_DIR.
 affordance_panels_setup() {
     PANELS=0
     if [ "${AFFORDANCE:-1}" -eq 1 ] && [ "${LOGGING_REQUESTED:-1}" != "0" ]; then
         PANELS=1
-        mkdir -p "$AFFORDANCE_DIR"
+        mkdir -p "$AFFORDANCE_DIR" "$LABELS_DIR"
         ln -sfn "${AFFORDANCE_DIR##*/}" "$AFFORDANCE_LINK"
+        ln -sfn "${LABELS_DIR##*/}" "$LABELS_LINK"
         export ORIO_AFFORDANCE_DIR="$AFFORDANCE_LINK_CONT"
+        export ORIO_LABEL_DIR="$LABELS_LINK_CONT"
         log "grasp panels → $AFFORDANCE_DIR"
+        log "label images → $LABELS_DIR"
     else
-        export ORIO_AFFORDANCE_DIR=""
+        export ORIO_AFFORDANCE_DIR="" ORIO_LABEL_DIR=""
     fi
 }
 
