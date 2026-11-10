@@ -77,7 +77,7 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
   `docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs`
 - If an arm fails mid-run, a recovery window opens for it; the other keeps going.
 - When the bin is empty, arm 1's card says so and arm 1 only takes labelled items to the
-  output. Refill the bin, then press **INTERVENE** on arm 1 and resume into `FETCH_INPUT`.
+  output. Refill the bin, then click **ITEMS ADDED** on the dashboard's input bin.
 - A dashboard window shows both arms and both label zones live, plus the latest grasp
   (with its score) and label placement pictures. A red bar says why a grasp was turned
   down. Click a picture to enlarge it.
@@ -109,6 +109,7 @@ bash run_full_demo.sh
 | `--confirm` | Ask before each bin pick: Enter to pick, `r` to try another grasp. |
 | `--no-label-vacuum-check` | Do not check the label cup; go on as if a label was picked up. |
 | `--no-pnp-vacuum-test` | Do not check the pick cup; go on as if the item was picked up. |
+| `--pick-retries N` | If a pick misses, try a new grasp up to N times before opening the recovery window (default 2; 0 = open it at once). |
 | `--pnp-vacuum-min N` | Raw vacuum reading that counts as holding an item (default 800). Open air reads about 600, a good seal over 1000. |
 | `--skip-item-setup` | Skip the item window; use `test_item`, expiring in 7 days. |
 | `--straight-down` | Always move straight down to the item. |

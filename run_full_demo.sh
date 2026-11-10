@@ -28,6 +28,8 @@
 #                                           #   cup's vacuum check, carry on as if one was picked
 #   bash run_full_demo.sh --no-pnp-vacuum-test # skip the pick cup's vacuum check, carry
 #                                           #   on as if the item was picked (broken sensor)
+#   bash run_full_demo.sh --pick-retries 2  # missed picks retried automatically (new grasp)
+#                                           #   before the recovery window opens (0 = never)
 #   bash run_full_demo.sh --pnp-vacuum-min 800 # raw reading that counts as a pick (default
 #                                           #   800; open air ~600, firmware has-item > 1000)
 #   bash run_full_demo.sh --skip-item-setup # skip the item name/expiry GUI, use defaults
@@ -106,6 +108,7 @@ while [ $# -gt 0 ]; do
         --straight-down) SM_EXTRA+=(--straight-down) ;;
         --max-tilt-deg)  SM_EXTRA+=(--max-tilt-deg "${1:?--max-tilt-deg needs degrees}"); shift ;;
         --max-declines)  SM_EXTRA+=(--max-declines "${1:?--max-declines needs a count}"); shift ;;
+        --pick-retries)  SM_EXTRA+=(--pick-retries "${1:?--pick-retries needs a count}"); shift ;;
         --zero-item-depth) SM_EXTRA+=(--zero-item-depth) ;;
         --no-label-vacuum-check) SM_EXTRA+=(--no-label-vacuum-check) ;;
         --no-pnp-vacuum-test) SM_EXTRA+=(--no-pnp-vacuum-test) ;;

@@ -11,7 +11,8 @@ Reads the JSON status full_sequence.py publishes on /orio/dashboard/status and c
 Also shows the newest grasp panel (from the grasp planner) and label placement image
 (from perception) of this run; click one to enlarge it. Each arm card has LOCK and
 UNLOCK & PRIME buttons, which run lock_arms.py through desk_helper.py on the host
-(run_full_demo.sh starts it).
+(run_full_demo.sh starts it). When the input bin counts as empty, its tile has an
+ITEMS ADDED button (/orio/bin_refilled): arm 1 picks again.
 """
 
 import argparse
@@ -334,6 +335,11 @@ class Dashboard:
 
         # Cell map
         self.map = tk.Canvas(r, bg=BASE, highlightthickness=0, height=300)
+        # ITEMS ADDED on the input bin, drawn while the bin counts as empty (_station_bin)
+        self.refill_sent = 0.0
+        self.map.tag_bind('bin_refilled', '<Button-1>', lambda e: self.bin_refilled())
+        self.map.tag_bind('bin_refilled', '<Enter>', lambda e: self.map.configure(cursor='hand2'))
+        self.map.tag_bind('bin_refilled', '<Leave>', lambda e: self.map.configure(cursor=''))
 
         # Bottom: arm cards (with their brake buttons), then the newest debug images
         bot = tk.Frame(r, bg=BASE, height=330)
@@ -440,6 +446,14 @@ class Dashboard:
     def _brake_pressed(self, arm):
         """The brake button does whatever its label says (see _draw_brakes)."""
         self.desk(arm, 'lock' if self.desk_btns[arm].cget('text') == "LOCK" else 'unlock')
+
+    def bin_refilled(self):
+        """ITEMS ADDED: the input bin has items again, so arm 1 starts picking."""
+        if not self.connected() or self.status.get('stopping') or time.time() - self.refill_sent < 5.0:
+            return
+        self.refill_sent = time.time()
+        self.map.configure(cursor='')
+        self._call('/orio/bin_refilled', track=False)
 
     def intervene(self, arm):
         """INTERVENE: both arms stop at their next pause point (as for Pause, never in the
@@ -777,12 +791,30 @@ class Dashboard:
         for i, (dx, col) in enumerate(((-0.25, CARDBOARD), (0.0, TEAL), (0.24, PEACH))):
             c.create_rectangle(cx + bw * dx - 10, top - 12 + (i % 2) * 6, cx + bw * dx + 10,
                                top + 8 + (i % 2) * 6, fill=col, outline='')
+        empty = s is not None and s.get('bin_empty')
+        if empty:   # the way out of "bin empty": a button, not a note
+            for note in ("EMPTY: ADD ITEMS", "EMPTY"):   # beside the title, if it fits
+                if self.f_smallb.measure("INPUT BIN" + note) + 44 <= w:
+                    c.create_text(x1 - 14, y0 + 16, text=note, anchor='e', fill=PEACH,
+                                  font=self.f_smallb)
+                    break
+            sent = time.time() - self.refill_sent < 5.0   # clicked; waiting for the status
+            choices = ((("Resuming…", self.f_bodyb),) if sent else
+                       (("ITEMS ADDED: RESUME PICKING", self.f_bodyb),
+                        ("ITEMS ADDED", self.f_bodyb), ("ITEMS ADDED", self.f_smallb)))
+            label, font = next(((txt, f) for txt, f in choices if f.measure(txt) + 32 <= w - 20),
+                               choices[-1])
+            bw2 = min(w - 20, font.measure(label) + 32)
+            tags = () if sent else ('bin_refilled',)
+            rrect(c, cx - bw2 / 2, y1 - 34, cx + bw2 / 2, y1 - 8, 13,
+                  fill=SURF1 if sent else PEACH, outline='', tags=tags)
+            c.create_text(cx, y1 - 21, text=label, fill=TEXT if sent else CRUST,
+                          font=font, tags=tags)
+            return
         if fully_paused:
             note, col = "Swap items now", YELLOW
         elif active and s['arms']['arm1'].get('activity', '').startswith(('Planning', 'No grasp')):
             note, col = "Scanning" + "." * (int(t * 3) % 4), BLUE
-        elif s is not None and 'bin empty' in (s['arms']['arm1'].get('activity') or '').lower():
-            note, col = "Empty: add items", PEACH
         else:
             note, col = "", SUBTEXT
         if note:

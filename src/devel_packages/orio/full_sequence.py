@@ -12,7 +12,10 @@ at start — with the pick path upgraded to everything dexnet_pnp.py learned:
                    --max-tilt-deg; --straight-down forces vertical
     correction   : --offset-x/--offset-y world-frame metres, applied here only
     declines     : --max-declines planner rejections in a row = empty bin →
-                   keep emptying the zones; INTERVENE → FETCH_INPUT picks again
+                   keep emptying the zones; the dashboard's ITEMS ADDED (or
+                   INTERVENE → FETCH_INPUT) picks again
+    missed picks : cup came out empty → cup off, home, new grasp; after
+                   --pick-retries in a row the recovery window opens
     confirmation : --confirm = per-pick Enter / 'r' regenerate / 'q' abort
     motions      : hard-timeout _move() wrapper — a dead control PC raises a
                    clear error instead of hanging frankapy forever
@@ -1538,10 +1541,12 @@ _items_placed_output = 0
 _pick_n = 0
 # Consecutive planner declines (module level: FetchInput is re-entered per attempt)
 _declines = 0
+# Consecutive missed picks (cup came out empty), retried up to --pick-retries times
+_pick_misses = 0
 # Set after --max-declines empty scans: arm 1 loads nothing until the operator resumes it
 # into FETCH_INPUT or DECIDE_HUB from its recovery window (INTERVENE on the dashboard)
 _bin_empty = threading.Event()
-BIN_EMPTY_ACTIVITY = "Input bin empty: refill it, then INTERVENE"
+BIN_EMPTY_ACTIVITY = "Input bin empty: add items, then click ITEMS ADDED"
 # Labels applied (dashboard)
 _labels_applied = 0
 # The two arm state machines and the run's start time (dashboard), set in main()
@@ -1614,19 +1619,40 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
 
         _BTN = dict(relief='flat', padx=10, pady=4, font=('Courier', 10))
 
+        # Button actions run in background threads, which must not touch Tk: the window
+        # may be closed (E-Stop, Ctrl-C) before they finish, and Tk objects freed from
+        # another thread abort the whole process ("Tcl_AsyncDelete"). They post their
+        # result here instead; show_results() shows it from this window's thread.
+        results = queue.Queue()
+        running = [0]   # actions still running; Resume stays disabled until 0
+
         def _run_in_thread_guarded(fn, label):
             """Run fn() in a background thread; buttons stay enabled so multiple
             actions can be queued while a previous one is executing."""
             status_var.set(f"Running: {label}…")
+            running[0] += 1
+            resume_btn.config(state='disabled', text="Wait: action running…")
 
-            def _task():
+            def _task():   # no Tk objects in here (see above)
                 try:
                     fn()
-                    root.after(0, lambda: status_var.set(f"Done: {label}"))
+                    results.put(f"Done: {label}")
                 except Exception as exc:
-                    root.after(0, lambda: status_var.set(f"Error: {label} — {exc}"))
                     log.error("[Recovery GUI] %s failed: %s", label, exc)
+                    results.put(f"Error: {label} — {exc}")
             threading.Thread(target=_task, daemon=True).start()
+
+        def show_results():
+            while True:
+                try:
+                    msg = results.get_nowait()
+                except queue.Empty:
+                    break
+                running[0] -= 1
+                status_var.set(msg)
+            if running[0] == 0:
+                resume_btn.config(state='normal', text="Resume →")
+            root.after(100, show_results)
 
         b_stop = tk.Button(btn_row1, text="Stop Skill", bg='#f38ba8', fg='#1e1e2e',
                            command=lambda: _run_in_thread_guarded(fa.stop_skill, "Stop Skill"),
@@ -1696,6 +1722,8 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
         btn_frame.pack(fill='x', padx=16)
 
         def on_resume():
+            if running[0]:   # an arm action is still running: arm 1 would get two commands
+                return
             apply_zone_changes()
             result['choice'] = choice_var.get()
             root.destroy()
@@ -1705,9 +1733,10 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
                 result['choice'] = 'shutdown'
                 root.destroy()
 
-        tk.Button(btn_frame, text="Resume →", command=on_resume,
-                  bg='#a6e3a1', fg='#1e1e2e', font=('Helvetica', 12, 'bold'),
-                  relief='flat', padx=16, pady=6).pack(side='left', padx=(0, 12))
+        resume_btn = tk.Button(btn_frame, text="Resume →", command=on_resume,
+                               bg='#a6e3a1', fg='#1e1e2e', font=('Helvetica', 12, 'bold'),
+                               relief='flat', padx=16, pady=6, disabledforeground='#585b70')
+        resume_btn.pack(side='left', padx=(0, 12))
         tk.Button(btn_frame, text="E-Stop / Shutdown", command=on_estop,
                   bg='#f38ba8', fg='#1e1e2e', font=('Helvetica', 12, 'bold'),
                   relief='flat', padx=16, pady=6).pack(side='left')
@@ -1721,6 +1750,7 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
                 return
             root.after(300, poll_stop)
         root.after(300, poll_stop)
+        root.after(100, show_results)
         root.lift()
         root.focus_force()
         root.mainloop()
@@ -1938,8 +1968,8 @@ class FetchInput(smach.State):
                        target=None)
         if _declines >= opts.max_declines:
             log.info("[FetchInput] %d declined grasps in a row (last: %s): input bin counts "
-                     "as empty. Arm 1 keeps emptying the zones; refill the bin (or move the "
-                     "item), then INTERVENE on arm 1 and resume into FETCH_INPUT.",
+                     "as empty. Arm 1 keeps emptying the zones; add items (or move the "
+                     "item), then click ITEMS ADDED on the dashboard's input bin.",
                      _declines, what)
             events.emit('operator', 'bin_empty', declines=_declines,
                         picks=_pick_n, placed=_items_placed_output)
@@ -1985,7 +2015,7 @@ class FetchInput(smach.State):
         return True
 
     def _run(self, userdata):
-        global _pick_n, _declines
+        global _pick_n, _declines, _pick_misses
         if shutdown_event.is_set():
             return 'no_grasp'   # DECIDE_HUB turns this into a clean shutdown
         pause_ctl.gate('arm1')
@@ -2066,9 +2096,34 @@ class FetchInput(smach.State):
                        retract_joints, duration=2, desc="retract",
                        pausable=False)
 
-        hardware.assert_vacuum('pnp', True)
+        try:
+            hardware.assert_vacuum('pnp', True)
+        except RuntimeError as exc:
+            return self._missed_pick(exc)
+        _pick_misses = 0
         log.info("[FetchInput] Exiting: succeeded (item_depth=%.4f)", hardware.current_fetch_depth)
         return 'succeeded'
+
+    def _missed_pick(self, exc):
+        """The cup came out of the bin without the item. Up to --pick-retries times in a
+        row: cup off (anything half-held falls back into the bin), go home out of the
+        camera's view, and plan a new grasp. One more miss opens the recovery window."""
+        global _pick_misses
+        _pick_misses += 1
+        if _pick_misses > opts.pick_retries:
+            log.error("[FetchInput] Missed %d picks in a row: opening the recovery window",
+                      _pick_misses)
+            _pick_misses = 0
+            raise exc
+        log.warning("[FetchInput] Missed the pick (%s). Retry %d/%d: cup off, going home, "
+                    "re-scanning", exc, _pick_misses, opts.pick_retries)
+        events.emit('pick', 'missed', n=_pick_n, retry=_pick_misses, msg=str(exc), ok=False)
+        arm_status.set('arm1', activity="Missed the pick, trying again (%d/%d)"
+                       % (_pick_misses, opts.pick_retries), target=None)
+        call_trigger_service('/orio/pnp_cup/off')
+        hardware._move('arm1', hardware.pick_and_place_arm.reset_joints, duration=5,
+                       desc="go home before re-scanning the bin")
+        return 'no_grasp'
 
     def execute(self, userdata):
         return _safe_execute('FETCH_INPUT', self._run, userdata)
@@ -2412,6 +2467,10 @@ def _parse_args():
                         help="Consecutive planner declines (low q / no grasp) before the "
                              "input bin counts as empty (picking resumes from the dashboard: "
                              "INTERVENE on arm 1 → FETCH_INPUT).")
+    parser.add_argument('--pick-retries', type=int, default=2, metavar='N',
+                        help="When the cup comes out of the bin without the item, turn it "
+                             "off, go home and try a new grasp, up to N times in a row "
+                             "before opening the recovery window (0 = open it at once).")
     parser.add_argument('--offset-x', type=float, default=0.0, metavar='M',
                         help="World-frame X correction (metres) added to every grasp "
                              "position after the planner returns it, before the arm moves.")
@@ -2501,6 +2560,7 @@ def _status_snapshot():
                    'labels': _labels_applied, 'declines': _declines},
         'item': {'name': _item_name, 'expiry': _item_expiry},
         'vacuum': not disable_pneumatics,
+        'bin_empty': _bin_empty.is_set(),
     }
 
 
@@ -2546,6 +2606,19 @@ def _start_status_server():
 
     rospy.Service('/orio/intervene/arm1', Trigger, on_intervene('arm1'))
     rospy.Service('/orio/intervene/arm2', Trigger, on_intervene('arm2'))
+
+    def on_bin_refilled(_req):
+        """The dashboard's ITEMS ADDED: the input bin has items again, arm 1 picks again."""
+        global _declines
+        if not _bin_empty.is_set():
+            return TriggerResponse(success=False, message="the input bin is not marked empty")
+        _bin_empty.clear()
+        _declines = 0
+        log.info("[Main] Operator: items added to the input bin, arm 1 picks again")
+        events.emit('operator', 'refilled', pick=_pick_n)
+        return TriggerResponse(success=True, message="arm 1 picks again")
+
+    rospy.Service('/orio/bin_refilled', Trigger, on_bin_refilled)
 
     def loop():
         rate = rospy.Rate(STATUS_HZ)
