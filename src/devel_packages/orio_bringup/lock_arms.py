@@ -5,6 +5,7 @@
     python3 lock_arms.py 2            # lock robot 2 only
     python3 lock_arms.py --unlock     # unlock both robots (sets the end effector to "Other" first)
     python3 lock_arms.py --end-effector-status   # only report which end effector Desk has selected
+    python3 lock_arms.py --status     # only report brakes, mode and active errors (one JSON line each)
 
 Before unlocking, the script makes sure Desk's Settings -> End-Effector is "Other" rather than
 "Franka Hand". If it is not, it does what the page's Apply button does: selects it, keeps the
@@ -28,7 +29,9 @@ import getpass
 import hashlib
 import json
 import os
+import socket
 import ssl
+import struct
 import subprocess
 import sys
 import time
@@ -211,6 +214,59 @@ class Desk:
             time.sleep(1)
         raise DeskError(f'robot did not come back within {RESTART_TIMEOUT}s of the restart')
 
+    # -- status (Desk's live websocket streams) ---------------------------------------------
+
+    def stream_once(self, path, timeout=10):
+        """The first message of one of Desk's websocket status streams."""
+        host = self.base[len('https://'):]
+        ctx = ssl._create_unverified_context()
+        sock = ctx.wrap_socket(socket.create_connection((host, 443), timeout=timeout),
+                               server_hostname=host)
+        try:
+            key = base64.b64encode(os.urandom(16)).decode()
+            sock.sendall(('GET %s HTTP/1.1\r\nHost: %s\r\nUpgrade: websocket\r\n'
+                          'Connection: Upgrade\r\nSec-WebSocket-Key: %s\r\n'
+                          'Sec-WebSocket-Version: 13\r\nCookie: %s\r\n\r\n'
+                          % (path, host, key, self.cookie)).encode())
+            buf = [b'']
+
+            def take(n):
+                while len(buf[0]) < n:
+                    chunk = sock.recv(65536)
+                    if not chunk:
+                        raise DeskError(f'{path}: stream closed')
+                    buf[0] += chunk
+                out, buf[0] = buf[0][:n], buf[0][n:]
+                return out
+
+            head = b''
+            while b'\r\n\r\n' not in head:
+                head += take(1)
+            first = head.split(b'\r\n')[0].decode(errors='replace')
+            if ' 101 ' not in first:
+                raise DeskError(f'{path} -> {first}')
+            for _ in range(20):   # skip control and empty frames
+                b1, b2 = take(2)
+                n = b2 & 127
+                if n == 126:
+                    n = struct.unpack('>H', take(2))[0]
+                elif n == 127:
+                    n = struct.unpack('>Q', take(8))[0]
+                data = take(n)
+                if b1 & 0x0F == 1 and data.strip():
+                    return json.loads(data.decode())
+            raise DeskError(f'{path}: no status message')
+        finally:
+            sock.close()
+
+    def status(self):
+        """Brakes, operational mode and active robot errors (e.g. a reflex), as Desk shows them."""
+        system = self.stream_once('/desk/api/system/status')
+        robot = self.stream_once('/desk/api/robot/status')
+        brakes = system.get('brakesOpen') or []
+        return {'brakes_open': bool(brakes) and all(brakes), 'mode': system.get('operationalMode'),
+                'errors': sorted(k for k, v in (robot.get('robotErrors') or {}).items() if v)}
+
     # -- brakes ------------------------------------------------------------------------------
 
     def set_brakes(self, unlock):
@@ -233,11 +289,14 @@ def _same_config(a, b, tol=1e-6):
         return False
 
 
-def remote_main(ip, user, password, unlock, ee_status_only):
+def remote_main(ip, user, password, unlock, ee_status_only, status_only=False):
     """Runs on the control pc: log in, then either report, or set the end effector + brakes."""
     desk = Desk(ip, user, password)
     try:
         desk.login()
+        if status_only:
+            print('status: ' + json.dumps(desk.status()))
+            return 0
         print('logged in')
         if ee_status_only:
             label, selection, config = desk.end_effector()
@@ -265,6 +324,8 @@ def main():
                         help='open the brakes instead (arm moves slightly); sets the end effector to "Other" first')
     parser.add_argument('--end-effector-status', action='store_true',
                         help='only print which end effector Desk has selected; touches nothing')
+    parser.add_argument('--status', action='store_true',
+                        help='only print brakes, mode and active errors as JSON; touches nothing')
     args = parser.parse_args()
     robots = args.robots or sorted(ROBOTS)
     if set(robots) - set(ROBOTS):
@@ -278,7 +339,7 @@ def main():
     for num in robots:
         host = ROBOTS[num]
         # Credentials travel on stdin, not the ssh command line.
-        payload = f'_REMOTE = {(ROBOT_IP, user, password, args.unlock, args.end_effector_status)!r}\n' + source
+        payload = f'_REMOTE = {(ROBOT_IP, user, password, args.unlock, args.end_effector_status, args.status)!r}\n' + source
         try:
             out = subprocess.run(['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', host, 'python3', '-'],
                                  input=payload, capture_output=True, text=True, timeout=90 + RESTART_TIMEOUT)
