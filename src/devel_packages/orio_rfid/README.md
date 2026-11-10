@@ -6,7 +6,10 @@ RFID inventory subsystem for ORIO (part of the SVD/Encore demo).
 - `db_manager.py` — `/inventory/add_item` service; owns the SQLite inventory DB.
 - `RFID/shelf_scanner_node.py` — Impinj shelf reader → `/inventory/shelf_scans`.
 - `RFID/labelling_zone_node.py` — Mercury labelling-station reader (`tmr:///dev/ttyUSB0`).
-- `inventory_dashboard.py` — Tkinter dashboard. `bulk_read_insert.py` — bulk import tool.
+- `inventory_dashboard.py` — live inventory window: each label as it is registered, and
+  stock per item. `run_full_demo.sh` opens it when RFID is on; by hand:
+  `python3 inventory_dashboard.py` (runs on the host, from any folder).
+- `bulk_read_insert.py` — bulk import tool.
 
 ## Database (seed vs runtime)
 - **`seed_medical_inventory.db`** — the canonical product catalog (tracked in git; 71 items).

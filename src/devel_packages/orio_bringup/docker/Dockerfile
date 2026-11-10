@@ -61,10 +61,11 @@ COPY src/devel_packages /home/ros_ws/src/devel_packages
 # the base image; without it `make` fails with "xsltproc: Command not found" (Error 127).
 RUN apt-get update && apt-get install -y xsltproc
 
-# Build and install python-mercuryapi inside the container
+# Build and install python-mercuryapi inside the container. Not editable (-e): run_orio.sh
+# mounts the host's src/devel_packages over this folder, which hides an editable install.
 RUN cd /home/ros_ws/src/devel_packages/orio_rfid/RFID/python-mercuryapi/ && \
     make && \
-    pip3 install -e .
+    pip3 install .
 
 # clone git packages
 RUN mkdir -p /home/ros_ws/src/git_packages 

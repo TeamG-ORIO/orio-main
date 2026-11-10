@@ -121,6 +121,8 @@ bash run_full_demo.sh
 | `--checkpoint TAG` | Which grasp network to use (a run tag or a file path). |
 | `--no-zed` | Run without the ZED. Labels cannot be placed. |
 | `--no-rfid` | Do not start the RFID inventory node or register labels. |
+| `--no-inventory` | Do not open the inventory window. |
+| `--no-shelf-reader` | Register labels but do not use the Impinj shelf reader. |
 | `--no-dashboard` | Do not open the dashboard window. |
 | `--no-unlock` | Do not unlock the arms at the start. |
 | `--no-affordance` | Do not save the grasp pictures (a bit faster). The dashboard then shows no grasp picture. |

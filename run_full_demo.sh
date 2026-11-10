@@ -9,6 +9,8 @@
 # Tkinter windows: the item name/expiry setup at start, the live dashboard (Pause/Resume,
 # the newest grasp and label images, LOCK / UNLOCK & PRIME per arm through desk_helper.py
 # on the host; --no-dashboard to skip it), and the per-arm recovery dialog when a state fails.
+# With RFID on, the inventory window (orio_rfid/inventory_dashboard.py) also opens on the
+# host and shows each label as it is registered; --no-inventory to skip it.
 #
 # Ctrl-C stops THIS RUN only (sequence, pneumatics, recorder). The slow-to-start stack —
 # roscore, the main container, BOTH control PCs (iam-doc for arm 1, iam-luisa for arm 2),
@@ -38,6 +40,9 @@
 #   bash run_full_demo.sh --no-zed        # skip the ZED: labelling poses will time out
 #                                           #   (arm 2 will sit in its recovery GUI)
 #   bash run_full_demo.sh --no-rfid       # skip the RFID node and label registration
+#   bash run_full_demo.sh --no-inventory  # RFID on, but no inventory window
+#   bash run_full_demo.sh --no-shelf-reader  # RFID labels only: skip the Impinj shelf
+#                                           #   reader (use when it is not connected)
 #   bash run_full_demo.sh --no-unlock     # do not unlock + prime both arms at start
 #   bash run_full_demo.sh --no-logging    # skip the rerun recorder for this run
 #   bash run_full_demo.sh --live          # also stream to a running `rerun` viewer
@@ -82,6 +87,8 @@ CONFIRM=0
 AFFORDANCE=1
 USE_ZED=1
 USE_RFID=1
+INVENTORY_WINDOW=1
+RFID_ARGS=
 UNLOCK=1
 PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.0}"
 PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:-0.0}"
@@ -109,6 +116,8 @@ while [ $# -gt 0 ]; do
         --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
         --no-zed)        USE_ZED=0 ;;
         --no-rfid)       USE_RFID=0; SM_EXTRA+=(--no-rfid) ;;
+        --no-inventory)  INVENTORY_WINDOW=0 ;;
+        --no-shelf-reader) RFID_ARGS=--no-shelf ;;
         --no-unlock)     UNLOCK=0 ;;
         --no-dashboard)  SM_EXTRA+=(--no-dashboard) ;;
         --no-logging)    export ORIO_LOGGING=0; LOGGING_REQUESTED=0 ;;
@@ -271,7 +280,15 @@ if [ "$USE_RFID" -eq 1 ]; then
         stop_detached rfid
         start_detached rfid docker exec "$CONTAINER" bash -c \
             "source /home/ros_ws/devel/setup.bash && \
-             cd /home/ros_ws/src/devel_packages/orio_rfid && python3 -u db_manager.py"
+             cd /home/ros_ws/src/devel_packages/orio_rfid && python3 -u db_manager.py $RFID_ARGS"
+        # The inventory window, on the host (it only reads the database file, which the
+        # repo mount shares), for this run only.
+        if [ "$INVENTORY_WINDOW" -eq 1 ]; then
+            log "opening the inventory window…"
+            python3 -u "$REPO/src/devel_packages/orio_rfid/inventory_dashboard.py" \
+                > >(prefix inventory) 2>&1 &
+            PIDS+=($!)
+        fi
     else
         log "NOTE: RFID node NOT started — the container lacks the 'mercury' and/or"
         log "      'sllurp' python modules (see src/devel_packages/orio_rfid/README.md:"

@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# RFID inventory node: registers labels through /inventory/add_item (Mercury reader) and,
+# between labels, polls the Impinj shelf reader to mark what is on the shelf.
+#   python3 db_manager.py               # both readers
+#   python3 db_manager.py --no-shelf    # labels only; the Impinj shelf reader is not used
+import argparse
 import os
 import shutil
 import rospy
@@ -73,7 +78,8 @@ def run_impinj_process(queue_out):
 # MAIN ROS MANAGER
 # ==========================================
 class SimpleRFIDManager:
-    def __init__(self):
+    def __init__(self, use_shelf=True):
+        self.use_shelf = use_shelf
         self.add_new_item = False
         self.pending_item_name = ""
         self.pending_expiration = ""
@@ -89,6 +95,8 @@ class SimpleRFIDManager:
 
         self.add_srv = rospy.Service('/inventory/add_item', AddLabeledItem, self.handle_add_item)
 
+        if not self.use_shelf:
+            rospy.loginfo("Shelf reader OFF (--no-shelf): only labels are registered.")
         rospy.loginfo("Simple RFID Manager fully initialized. Starting main loop...")
         self.run_main_loop()
 
@@ -206,7 +214,7 @@ class SimpleRFIDManager:
                         break
 
             # --- STATE: FALSE (Normal Shelf Scanning via Impinj) ---
-            else:
+            elif self.use_shelf:
                 # 1. Trigger the radar ping if the previous one finished
                 if self.impinj_process is None or not self.impinj_process.is_alive():
                     self.spawn_impinj_ping()
@@ -257,7 +265,11 @@ class SimpleRFIDManager:
         conn.close()
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="RFID inventory node.")
+    parser.add_argument('--no-shelf', action='store_true',
+                        help="Do not use the Impinj shelf reader (for when it is not connected).")
+    args = parser.parse_args(rospy.myargv()[1:])
     try:
-        SimpleRFIDManager()
+        SimpleRFIDManager(use_shelf=not args.no_shelf)
     except rospy.ROSInterruptException:
         pass
