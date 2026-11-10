@@ -22,10 +22,10 @@ Open3D). Large assets live under this package but are git-ignored:
 | `weights/groundingdino_swint_ogc.pth` | GroundingDINO weights | 0.7 GB |
 | `SAM_weights/sam_vit_b_01ec64.pth` | Segment-Anything ViT-B | 0.4 GB |
 | `GroundingDINO/` | fork submodule (editable-installed) | 40 MB |
-| `Xtion_imgs/ ZED_imgs/ Segmented_imgs/` | debug image dumps | — |
 
 The node finds them via env vars (default to this package dir):
-`ORIO_PERCEPTION_ASSETS` (weights + image dirs), `ORIO_GROUNDINGDINO_DIR`
+`ORIO_PERCEPTION_ASSETS` (weights), `ORIO_GROUNDINGDINO_DIR`. Debug images go to the
+run's folders under `logging/` (`ORIO_LABEL_DIR`, `ORIO_AFFORDANCE_DIR`, set by the launchers)
 (checkout), `ORIO_REPO` (manipulation TF yamls). `orio_bringup/docker/run_perception.sh` sets these.
 
 ## Recreate the venv (fresh machine)

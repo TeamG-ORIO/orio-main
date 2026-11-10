@@ -209,5 +209,3 @@ baseline, which has no recorder, time the picks from the state machine's termina
 - `rospy` on Python 3.11 is unsupported upstream; perception already depends on it and the
   recorder shares that path.
 - Control-PC clocks vs host clock: `sensor_time` may be offset; `ros_time` is authoritative.
-- Perception's debug PNG dumps (`Xtion_imgs/`, `ZED_imgs/`, `Segmented_imgs/`) still exist
-  alongside the recording.

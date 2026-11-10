@@ -44,6 +44,8 @@ exec docker run --rm $TTY_FLAGS --name "$NAME" \
     --env="ORIO_LOGGING=${ORIO_LOGGING:-1}" \
     --env="ORIO_RUN_DIR=${ORIO_RUN_DIR:-}" \
     --env="ORIO_RUN_ID=${ORIO_RUN_ID:-}" \
+    --env="ORIO_LABEL_DIR=${ORIO_LABEL_DIR:-}" \
+    --env="ORIO_AFFORDANCE_DIR=${ORIO_AFFORDANCE_DIR:-}" \
     --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
     ${XAUTH:+--volume="$XAUTH:$XAUTH"} \
     --volume="$REPO/src/devel_packages:/home/ros_ws/src/devel_packages" \

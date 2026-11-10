@@ -10,6 +10,8 @@ import open3d as o3d
 import torch
 import rospy
 import os
+import json
+import time
 import yaml
 import threading
 from PIL import Image
@@ -52,10 +54,12 @@ CONFIG_PATH  = os.path.join(GDINO_DIR, "groundingdino/config/GroundingDINO_SwinT
 WEIGHTS_PATH = os.path.join(HOME, "weights", WEIGHTS_NAME)
 SAM_CHECKPOINT = os.path.join(HOME, "SAM_weights", "sam_vit_b_01ec64.pth")
 
-# Scratch image-dump dirs (debug PNGs, git-ignored) — ensure they exist so the
-# node can write regardless of launch dir.
-for _d in ("Xtion_imgs", "ZED_imgs", "Segmented_imgs"):
-    os.makedirs(os.path.join(HOME, _d), exist_ok=True)
+# Debug images go to the run's folders under logging/, never into this package: label
+# debug images (with the raw inputs of each call) to ORIO_LABEL_DIR, the GroundingDINO grasp
+# path's mask image to the grasp panels' ORIO_AFFORDANCE_DIR. Unset = not saved. The
+# launchers point both at the run's directories through fixed links (stack.sh).
+LABEL_DIR = os.environ.get("ORIO_LABEL_DIR", "").strip()
+GRASP_DEBUG_DIR = os.environ.get("ORIO_AFFORDANCE_DIR", "").strip()
 
 # ==============================================================================
 # DEPTH SAMPLING PARAMETERS
@@ -505,9 +509,11 @@ class CombinedPerceptionNode:
         frame = "pnp_camera"
         colour = np.ascontiguousarray(color_crop[:, :, :3], dtype=np.uint8)
 
+        colour_msg = self._to_image_msg(colour, "rgb8", frame)
+        colour_msg.header.stamp = getattr(self, '_pnp_color_stamp', rospy.Time())
         try:
             resp = self._dexnet_srv(
-                self._to_image_msg(colour, "rgb8", frame),
+                colour_msg,
                 self._to_image_msg(np.ascontiguousarray(depth_m), "32FC1", frame),
                 self._camera_info_msg(intr, frame),
                 self._to_image_msg(np.ascontiguousarray(segmask), "mono8", frame))
@@ -734,18 +740,19 @@ class CombinedPerceptionNode:
             res.message = "No images received from PnP camera."
             return res
 
-        color_base, depth_base = self.decode_ros_images(self.pnp_rgb_msg, self.pnp_depth_msg)
+        rgb_msg = self.pnp_rgb_msg
+        color_base, depth_base = self.decode_ros_images(rgb_msg, self.pnp_depth_msg)
         if color_base is None:
             res.success = False
             res.message = "Failed to decode PnP camera images."
             return res
+        # Sent with the colour so the suction planner can find the Xtion's high-res frame
+        # it was made from (xtion_only.launch hires:=true).
+        self._pnp_color_stamp = rgb_msg.header.stamp
 
         color_full, depth_full = color_base, depth_base
         color_base = color_base[PNP_CROP_Y1:PNP_CROP_Y2, PNP_CROP_X1:PNP_CROP_X2]
         depth_base = depth_base[PNP_CROP_Y1:PNP_CROP_Y2, PNP_CROP_X1:PNP_CROP_X2]
-
-        Image.fromarray(color_base).save(
-            os.path.join(HOME, "Xtion_imgs", f"input_color_{rospy.Time.now().secs}.png"))
 
         # The planner backends plan straight from depth; they need no segmentation, so
         # they branch before GroundingDINO/SAM run. Those still serve the labelling path.
@@ -775,8 +782,12 @@ class CombinedPerceptionNode:
             label = f"{phrases[i]} {float(logits[i]):.2f}"
             cv2.putText(debug_img, label, (int(x1), max(int(y1) - 6, 10)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color_rgb, 1)
-        Image.fromarray(debug_img).save(
-            os.path.join(HOME, "Segmented_imgs", f"debug_masks_{rospy.Time.now().secs}.png"))
+        if GRASP_DEBUG_DIR:
+            try:
+                Image.fromarray(debug_img).save(os.path.join(
+                    GRASP_DEBUG_DIR, "gdino_masks_%s.png" % time.strftime("%H%M%S")))
+            except OSError as exc:
+                rospy.logwarn("Could not save the grasp mask image: %s", exc)
 
         # Build cropped intrinsics (from camera_info when available)
         cropped_intr = self._cropped_intrinsics()
@@ -1006,6 +1017,49 @@ class CombinedPerceptionNode:
 
     # ── Labelling service ─────────────────────────────────────────────────────
 
+    def _label_record_start(self, color, depth, info):
+        """Start this call's record in LABEL_DIR, laid out like the grasp planner's:
+        label_NNNN_hhmmss/ with the raw inputs (color.npy: ZED left RGB, depth.npy: the
+        Fast-FoundationStereo depth in metres, NaN invalid, K.npy, meta.json) and, once
+        drawn, label_NNNN_hhmmss.png. Returns the base path, or None (not saving)."""
+        if not LABEL_DIR:
+            return None
+        try:
+            os.makedirs(LABEL_DIR, exist_ok=True)
+            n = 1 + sum(1 for e in os.listdir(LABEL_DIR) if e.startswith("label_") and e.endswith(".png"))
+            base = os.path.join(LABEL_DIR, "label_%04d_%s" % (n, time.strftime("%H%M%S")))
+            os.makedirs(base)
+            np.save(os.path.join(base, "color.npy"), color)
+            np.save(os.path.join(base, "depth.npy"), depth)
+            np.save(os.path.join(base, "K.npy"), np.array(info.K, dtype=np.float64).reshape(3, 3))
+            meta = {"call": n, "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "frame_id": info.header.frame_id, "stamp": info.header.stamp.to_sec(),
+                    "crop_xyxy": [LBL_CROP_X1, LBL_CROP_Y1, LBL_CROP_X2, LBL_CROP_Y2],
+                    "depth_window_px": LBL_DEPTH_WINDOW}
+            with open(os.path.join(base, "meta.json"), "w") as fh:
+                json.dump(meta, fh, indent=1)
+            return base
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never fail labelling
+            rospy.logwarn("Could not save the label inputs: %s", exc)
+            return None
+
+    @staticmethod
+    def _label_record_finish(base, debug_img, result):
+        """Add the result to the record's meta.json and write its debug image."""
+        if not base:
+            return
+        try:
+            if debug_img is not None:
+                Image.fromarray(debug_img).save(base + ".png")
+            path = os.path.join(base, "meta.json")
+            with open(path) as fh:
+                meta = json.load(fh)
+            meta["result"] = result
+            with open(path, "w") as fh:
+                json.dump(meta, fh, indent=1)
+        except Exception as exc:  # noqa: BLE001
+            rospy.logwarn("Could not save the label result: %s", exc)
+
     def handle_labelling(self, req):
         res = TriggerResponse()
         rospy.loginfo("Labelling grasp computation triggered!")
@@ -1023,16 +1077,15 @@ class CombinedPerceptionNode:
             rospy.logerr("[Label] %s", res.message)
             return res
         fx, fy, cx, cy = info.K[0], info.K[4], info.K[2], info.K[5]
+        record = self._label_record_start(color_full, depth_full, info)
 
         color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
-
-        Image.fromarray(color_base).save(
-            os.path.join(HOME, "ZED_imgs", f"input_color_{rospy.Time.now().secs}.png"))
 
         best_masks, boxes_xyxy, phrases, logits = self._detect_and_segment(color_base)
         if best_masks is None:
             res.success = False
             res.message = "GroundingDINO found 0 objects."
+            self._label_record_finish(record, color_base, {"success": False, "message": res.message})
             return res
 
         # Build joint segmentation mask for opt_label_loc
@@ -1073,7 +1126,8 @@ class CombinedPerceptionNode:
             u, v = int(opt_x) + LBL_CROP_X1, int(opt_y) + LBL_CROP_Y1
             z_cam, n = self._sample_depth(depth_full, u, v)
             zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
-                               'depth': float(z_cam) if z_cam is not None else 0.0}
+                               'depth': float(z_cam) if z_cam is not None else 0.0,
+                               'px_full': [u, v], 'depth_px': n}
             cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 8, dot, -1)
             cv2.putText(debug_lbl, f"Z{zone} {ang_deg:.1f}deg "
                         + (f"{z_cam:.3f}m" if z_cam is not None else "NO DEPTH"),
@@ -1112,12 +1166,17 @@ class CombinedPerceptionNode:
                           zone, u, v, z_cam, n, cam[0], cam[1], cam[2],
                           world[0], world[1], world[2], ang_deg)
             parts.append(f"Zone{zone}=OK world ({world[0]:.3f}, {world[1]:.3f}, {world[2]:.3f})")
-
-        Image.fromarray(debug_lbl).save(
-            os.path.join(HOME, "Segmented_imgs", f"debug_label_{rospy.Time.now().secs}.png"))
+            zones_log[zone]['world'] = [float(w) for w in world[:3]]
 
         res.success = any(part.startswith(f"Zone{z}=OK") for part in parts for z in (1, 2))
         res.message = ", ".join(parts)
+        self._label_record_finish(record, debug_lbl, {
+            "success": res.success, "message": res.message,
+            "zones": {str(z): ({k: (float(v) if isinstance(v, (np.floating, np.integer)) else v)
+                                for k, v in zl.items()} if zl else None)
+                      for z, zl in zones_log.items()},
+            "detections": [{"phrase": str(ph), "logit": float(lg), "box_xyxy": [float(c) for c in bx]}
+                           for ph, lg, bx in zip(phrases, logits, boxes_xyxy)]})
         self.rlog.lbl(color_base, best_masks, boxes_xyxy, phrases, logits, ok=res.success,
                       reason=res.message, zones=zones_log)
         return res
