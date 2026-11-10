@@ -6,8 +6,9 @@
 # Built like run_pickup-only.sh: every service starts in the background and merges
 # its output into THIS terminal, each line prefixed with a [module] label, and the
 # sequence (full_sequence.py) runs in the FOREGROUND so its prompts own the keyboard. Its
-# Tkinter windows: the item name/expiry setup at start, the live dashboard (Pause/Resume;
-# --no-dashboard to skip it), and the per-arm recovery dialog when a state fails.
+# Tkinter windows: the item name/expiry setup at start, the live dashboard (Pause/Resume,
+# the newest grasp and label images, LOCK / UNLOCK & PRIME per arm through desk_helper.py
+# on the host; --no-dashboard to skip it), and the per-arm recovery dialog when a state fails.
 #
 # Ctrl-C stops THIS RUN only (sequence, pneumatics, recorder). The slow-to-start stack —
 # roscore, the main container, BOTH control PCs (iam-doc for arm 1, iam-luisa for arm 2),
@@ -25,18 +26,26 @@
 #                                           #   cup's vacuum check, carry on as if one was picked
 #   bash run_full_demo.sh --no-pnp-vacuum-test # skip the pick cup's vacuum check, carry
 #                                           #   on as if the item was picked (broken sensor)
+#   bash run_full_demo.sh --pnp-vacuum-min 800 # raw reading that counts as a pick (default
+#                                           #   800; open air ~600, firmware has-item > 1000)
 #   bash run_full_demo.sh --skip-item-setup # skip the item name/expiry GUI, use defaults
 #   bash run_full_demo.sh --straight-down # ignore grasp tilt, approach vertically
+#   bash run_full_demo.sh --speed 2       # every arm move 2x faster than its base time
+#                                           #   (default 1 = the base speeds)
+#   bash run_full_demo.sh --settle-s 0.3  # wait after each move before the next (default 0)
+#   bash run_full_demo.sh --no-flat-pick  # bin pick: ikpy's arm shape as before, not the
+#                                           #   one with joints 3 and 5 nearest 0
 #   bash run_full_demo.sh --no-zed        # skip the ZED: labelling poses will time out
 #                                           #   (arm 2 will sit in its recovery GUI)
 #   bash run_full_demo.sh --no-rfid       # skip the RFID node and label registration
+#   bash run_full_demo.sh --no-unlock     # do not unlock + prime both arms at start
 #   bash run_full_demo.sh --no-logging    # skip the rerun recorder for this run
 #   bash run_full_demo.sh --live          # also stream to a running `rerun` viewer
 #   bash run_full_demo.sh --no-affordance # skip the per-grasp affordance panels
 #   bash run_full_demo.sh --offset-x 0.00 --offset-y -0.015
 #                                           # world-frame XY correction (metres) added to
 #                                           #   every grasp before the arm moves
-#   bash run_full_demo.sh --min-q 0.2     # lowest planner score accepted (default 0.30)
+#   bash run_full_demo.sh --min-q 0.2     # lowest planner score accepted (default 0.10)
 #   bash run_full_demo.sh --max-tilt-deg 30
 #   bash run_full_demo.sh --planner dexnet
 #   bash run_full_demo.sh --checkpoint <tag|path>   # suction network checkpoint
@@ -73,6 +82,7 @@ CONFIRM=0
 AFFORDANCE=1
 USE_ZED=1
 USE_RFID=1
+UNLOCK=1
 PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.0}"
 PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:-0.0}"
 PLANNER="${ORIO_PLANNER:-suction}"
@@ -92,9 +102,14 @@ while [ $# -gt 0 ]; do
         --zero-item-depth) SM_EXTRA+=(--zero-item-depth) ;;
         --no-label-vacuum-check) SM_EXTRA+=(--no-label-vacuum-check) ;;
         --no-pnp-vacuum-test) SM_EXTRA+=(--no-pnp-vacuum-test) ;;
+        --pnp-vacuum-min) SM_EXTRA+=(--pnp-vacuum-min "${1:?--pnp-vacuum-min needs a raw value}"); shift ;;
+        --no-flat-pick)  SM_EXTRA+=(--no-flat-pick) ;;
+        --speed)         SM_EXTRA+=(--speed "${1:?--speed needs a factor}"); shift ;;
+        --settle-s)      SM_EXTRA+=(--settle-s "${1:?--settle-s needs seconds}"); shift ;;
         --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
         --no-zed)        USE_ZED=0 ;;
         --no-rfid)       USE_RFID=0; SM_EXTRA+=(--no-rfid) ;;
+        --no-unlock)     UNLOCK=0 ;;
         --no-dashboard)  SM_EXTRA+=(--no-dashboard) ;;
         --no-logging)    export ORIO_LOGGING=0; LOGGING_REQUESTED=0 ;;
         --logging)       export ORIO_LOGGING=1; LOGGING_REQUESTED=1 ;;
@@ -112,7 +127,7 @@ while [ $# -gt 0 ]; do
         --checkpoint)    SUCTION_CKPT="${1:?--checkpoint needs a run tag or a path}"; shift ;;
         --checkpoint=*)  SUCTION_CKPT="${arg#*=}" ;;
         --fresh)         FRESH=1 ;;
-        -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,64p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -131,7 +146,7 @@ planner_resolve || exit 2
 # Run logs live in logging/demo/; the STACK is SHARED with run_pickup-only.sh (same
 # stack dir), so either launcher reuses it and stop_all.sh stops it.
 run_log_paths demo
-log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|\[Pause\]|\[Stop\]|\[Dashboard\]'
+log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|\[Pause\]|\[Stop\]|\[Dashboard\]|\[desk\]'
 
 STACK_SERVICES=(roscore control_pc_fi control_pc_ros planner zed ffs xtion perception rfid)
 STACK_CONTAINERS=("$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" "$PERCEPTION_CONTAINER" orio_cameras)
@@ -177,6 +192,20 @@ fi
 # ── Bring-up ─────────────────────────────────────────────────────────────────
 stack_bringup_roscore || exit 1
 recorder_start                      # both arms
+
+# Unlock and prime both arms, as lock_arms.py --unlock 1 2 (the dashboard's UNLOCK & PRIME):
+# Desk's end effector to "Other" (a robot restart, only if it was not), then the brakes
+# open; the arms move slightly. Before the control PCs, whose franka-interface will not
+# start on a locked arm. A failure is only a warning: the pre-flight below still stops
+# the run if an arm is really not ready. No stdin, so a missing Desk login fails at once
+# instead of waiting on a prompt the output filter hides.
+if [ "$UNLOCK" -eq 1 ]; then
+    log "unlocking + priming both arms (they move slightly; --no-unlock skips this)…"
+    python3 "$BRINGUP_DIR/lock_arms.py" --unlock 1 2 </dev/null 2>&1 | prefix desk
+    [ "${PIPESTATUS[0]}" -eq 0 ] \
+        || log "unlock FAILED for a robot (see the [desk] lines above); carrying on, the pre-flight checks both."
+fi
+
 control_pc_bringup || exit 1        # robot 1, iam-doc
 luisa_bringup || exit 1             # robot 2, iam-luisa
 main_container_bringup 'full_sequence\.py|dexnet_pnp\.py|pneumatic_control_recovery\.py' || exit 1
@@ -192,9 +221,15 @@ log "pre-flight: checking robots 1 and 2 are ready…"
 if ! preflight_check "python3 full_sequence.py --check-only"; then
     echo
     log "A ROBOT IS NOT READY — aborting before starting cameras/planner/perception."
-    log "Unlock/activate the arm named above, e.g.:"
-    log "    python3 src/devel_packages/orio_bringup/lock_arms.py --unlock 1   (or 2)"
-    log "then re-run this script. If a control PC itself is stuck, add --fresh."
+    if [ "$UNLOCK" -eq 1 ]; then
+        log "This run already tried to unlock both arms (see the [desk] lines above). Check the"
+        log "arm named above: white light = user stop pressed (release it), red = error"
+        log "(acknowledge it in Desk). Then re-run this script."
+    else
+        log "--no-unlock: unlock the arm named above (or re-run without --no-unlock), e.g.:"
+        log "    python3 src/devel_packages/orio_bringup/lock_arms.py --unlock 1   (or 2)"
+    fi
+    log "If a control PC itself is stuck, add --fresh."
     exit 1
 fi
 log "both robots are ready."
@@ -267,6 +302,12 @@ fi
 if [ "$USE_VACUUM" -eq 1 ]; then
     pneumatics_wait pnp_cup lbl_cup || exit 1
 fi
+
+# The dashboard's LOCK / UNLOCK & PRIME buttons: it runs in the container, which cannot
+# reach Desk, so desk_helper.py runs lock_arms.py here on the host for it (127.0.0.1 only,
+# this run only; it also exits when this launcher dies).
+python3 -u "$BRINGUP_DIR/desk_helper.py" --parent-pid $$ > >(prefix desk) 2>&1 &
+PIDS+=($!)
 
 # ── The sequence in the FOREGROUND so its prompts can read the keyboard ───────
 log "starting the full sequence (Ctrl-C or closing this terminal stops this run; the stack stays up)…"

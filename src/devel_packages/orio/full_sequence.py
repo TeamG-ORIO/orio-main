@@ -12,7 +12,7 @@ at start — with the pick path upgraded to everything dexnet_pnp.py learned:
                    --max-tilt-deg; --straight-down forces vertical
     correction   : --offset-x/--offset-y world-frame metres, applied here only
     declines     : --max-declines planner rejections in a row = empty bin →
-                   park at home and wait for a refill (Enter) or 'q'
+                   keep emptying the zones; INTERVENE → FETCH_INPUT picks again
     confirmation : --confirm = per-pick Enter / 'r' regenerate / 'q' abort
     motions      : hard-timeout _move() wrapper — a dead control PC raises a
                    clear error instead of hanging frankapy forever
@@ -32,6 +32,7 @@ Type 'q' + Enter at any idle moment to stop cleanly.
 
 import argparse
 import datetime
+import gc
 import json
 import logging
 import os
@@ -43,6 +44,7 @@ import subprocess
 import sys
 import threading
 import time
+import zlib
 
 import ikpy.chain
 import numpy as np
@@ -72,6 +74,8 @@ except ImportError:  # orio_core not on path: run events disabled
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 APPROACH_DISTANCE = 0.1
+PICK_PUSH_DISTANCE = 0.01     # m the bin pick goes past the planner's grasp point, along the cup axis (a firmer seal)
+INPUT_RETRACT_DISTANCE = 0.15  # m arm 1 backs out of the input bin after a pick (along the cup axis)
 PICK_UP_ZONE_GROUND_Z = 0.09
 LABEL_ZONE_GROUND_Z = 0.055
 LABEL_PLACE_CORRECTION_Z = 0.00  # To prevent excessive interference with the object while placing the label
@@ -84,6 +88,27 @@ URDF_FILE         = "panda_arm_hand.urdf"
 # failure messages; the firmware decides. Keep in step with pneumatic_control.ino.
 VAC_THRESHOLD_HIGH = 1000
 VAC_THRESHOLD_LOW = 800
+# The pick cup's check that it holds an item also passes on a raw reading above this
+# (--pnp-vacuum-min), without the firmware's has-item. Raw readings on past runs: about 430
+# with the cup off, 585-615 sucking open air (a real miss), 640-880 an item held by an
+# imperfect seal, 1000-1500 a good seal.
+PNP_PICK_RAW_MIN = 800
+
+# ── MOTION SPEED ─────────────────────────────────────────────────────────────────
+# Every move's duration in the code is its 1x time; _move divides it by --speed. A move is
+# never made shorter than its largest joint travel needs at MAX_PEAK_JOINT_SPEED (frankapy's
+# goto_joints is a min-jerk move, whose peak speed is 1.875x its average), nor shorter than
+# MIN_MOVE_S. Franka's own joint speed limits are 2.2-2.6 rad/s.
+DEFAULT_SPEED = 1.0
+MAX_PEAK_JOINT_SPEED = 1.2   # rad/s
+MIN_MOVE_S = 1.0
+MIN_JERK_PEAK = 1.875
+HOME_JOINTS = [0.0, -np.pi / 4, 0.0, -3 * np.pi / 4, 0.0, np.pi / 2, np.pi / 4]  # reset_joints
+# Wait after each move reports done before the next command (--settle-s). frankapy reports a
+# skill done while the arm can still be settling; a new move started then trips
+# "Motion finished commanded, but the robot is still moving!" (velocity / acceleration
+# discontinuity), which got much more frequent with shorter moves (--speed).
+DEFAULT_SETTLE_S = 0.0
 
 # Same safe workspace box FetchInput has always enforced on the incoming grasp pose (world).
 PICK_BOUNDS = {'x_min': -0.2, 'x_max': 0.55, 'y_min': -0.8, 'y_max': -0.1,
@@ -91,8 +116,33 @@ PICK_BOUNDS = {'x_min': -0.2, 'x_max': 0.55, 'y_min': -0.8, 'y_max': -0.1,
 
 # Straight-down tool orientation, the IK default.
 VERTICAL_ORI = np.array([[1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, -1.0]])
+IK_LIMIT_MARGIN = 0.05  # rad an IK solution keeps from every joint limit (pose_to_joints)
+IK_RESEEDS = 24         # extra IK seeds tried when the first solution is unusable
+# Start of the flat-arm IK (pose_to_joints flat=True): joints 3 and 5 at 0, the arm
+# reaching forward with the cup down (close to the drop solutions at OUTPUT2).
+FLAT_ARM_SEED = [1.2, 0.9, 0.0, -0.6, 0.0, 1.5, 0.8]
+# How far short of its target a flat-arm solution may land. OUTPUT2 (and OUTPUT1 for tall
+# items) is past the arm's reach: every arm shape falls 1.5-6 cm short, the flat one within
+# 5 mm of the best, landing a little nearer the robot and lower.
+FLAT_ARM_MAX_SHORT = 0.08
+# Input pick IK (compute_flat_pick_joints): the arm shape with joints 3 and 5 nearest 0
+# among solutions that keep this far (rad) from every joint limit at pick and pre-pick.
+# ikpy's own solutions twist J3/J5 past 1 rad on about a third of logged picks, and a
+# folded, twisted arm near the base set off Franka's self-collision reflex.
+FLAT_PICK_MIN_LIMIT_GAP = 0.15
+# 180 deg about the cup axis: the two cups swap places, the same grasp.
+CUP_FLIP = np.diag([-1.0, -1.0, 1.0])
+# Of the two cup orders, the pick IK prefers the one with joint 7 nearer its home value
+# (frankapy's reset pose), so the wrist does not spin up to ~180 deg more than needed.
+PICK_J7_HOME = np.pi / 4
+PICK_J7_WEIGHT = 0.1   # cost per rad^2 of J7 away from PICK_J7_HOME, against J3^2 + J5^2
 
 # ── LABEL PLACEMENT ──────────────────────────────────────────────────────────────
+# compute_label_joints asks perception for the label pose this many times, this far apart,
+# when it gets none (service failure, "ZoneN=FAIL", or no pose within 5 s) before arm 2's
+# recovery window takes over.
+LABEL_POSE_ATTEMPTS = 3
+LABEL_POSE_RETRY_S = 1.0
 # The label pose arrives from perception in panda_link0 with its z measured
 # (Fast-FoundationStereo on the ZED), so nothing is carried over from arm 1's pick.
 
@@ -241,6 +291,43 @@ _gui_lock = Lock()
 # PAUSE (dashboard) & LIVE STATUS
 # ==============================================================================
 
+class InterventionRequested(Exception):
+    """Raised at an arm's next pause point after the dashboard's INTERVENE: the state
+    ends there and the arm's recovery window opens, as after an error."""
+
+
+# Set by /orio/intervene/<arm> (the dashboard's INTERVENE), cleared when that arm acts on it
+intervene = {'arm1': threading.Event(), 'arm2': threading.Event()}
+
+
+# Set while an INTERVENE paused both arms; the recovery window's answer resumes them
+_intervention_pause = threading.Event()
+
+
+def _request_intervention(arm):
+    """INTERVENE on `arm`: pause BOTH arms at their next pause point, and have `arm`
+    leave its pause wait for its recovery window. A run that was already paused stays
+    paused afterwards; otherwise _end_intervention_pause resumes it."""
+    if pause_ctl.pause():
+        _intervention_pause.set()
+    intervene[arm].set()
+
+
+def _end_intervention_pause():
+    """After a recovery window: undo the pause an INTERVENE made, if any."""
+    if _intervention_pause.is_set():
+        _intervention_pause.clear()
+        pause_ctl.resume()
+
+
+def _take_intervention(arm):
+    """True (once) if the operator asked to intervene on `arm`."""
+    if intervene[arm].is_set():
+        intervene[arm].clear()
+        return True
+    return False
+
+
 class PauseControl:
     """Operator pause, from the dashboard (/orio/pause, /orio/resume).
 
@@ -299,6 +386,8 @@ class PauseControl:
             if raise_on_stop:
                 raise KeyboardInterrupt
             return False
+        if raise_on_stop and _take_intervention(arm):
+            raise InterventionRequested("Operator asked to intervene (dashboard)")
         if self._running.is_set():
             return False
         self.held[arm] = True
@@ -313,6 +402,10 @@ class PauseControl:
                     interrupted.set()
                     if raise_on_stop:
                         raise KeyboardInterrupt
+                    return True
+                if intervene[arm].is_set():   # INTERVENE while paused: go to it now
+                    if raise_on_stop and _take_intervention(arm):
+                        raise InterventionRequested("Operator asked to intervene (dashboard)")
                     return True
         finally:
             self.held[arm] = False
@@ -348,6 +441,9 @@ arm_status = ArmStatus()
 
 no_label_vacuum_check = False  # Set from --no-label-vacuum-check: skip the label cup's sensor checks
 no_pnp_vacuum_test = False     # Set from --no-pnp-vacuum-test: skip the pick cup's sensor checks
+pnp_pick_raw_min = PNP_PICK_RAW_MIN   # Set from --pnp-vacuum-min (see PNP_PICK_RAW_MIN)
+motion_speed = DEFAULT_SPEED          # Set from --speed (see DEFAULT_SPEED)
+settle_s = DEFAULT_SETTLE_S           # Set from --settle-s (see DEFAULT_SETTLE_S)
 
 # When True, vacuum service calls and sensor asserts are skipped (dry-run
 # without pneumatics). Set in main() from --no-vacuum / ORIO_DISABLE_PNEUMATICS.
@@ -356,6 +452,8 @@ disable_pneumatics = False
 # Valid re-entry states for each arm (used by recovery GUI radio buttons)
 ARM1_STATES = ['DECIDE_HUB', 'FETCH_INPUT', 'DROP_TO_ZONE', 'RETRIEVE', 'PLACE_OUTPUT']
 ARM2_STATES = ['GET_LABEL', 'APPLY']
+# Resuming ARM1 into one of these leads straight to a bin scan, so it goes home first
+RESCAN_STATES = ('FETCH_INPUT', 'DECIDE_HUB')
 
 
 # ==============================================================================
@@ -451,9 +549,14 @@ def _is_vacuum_service(service_name):
     return '_cup/' in service_name
 
 
+_service_messages = {}   # service name -> the message of its last response (call_trigger_service)
+
+
 def call_trigger_service(service_name):
     """Call a ROS Trigger service. With disable_pneumatics, vacuum cup services
-    are skipped (no-op, returns True); vision services are unaffected."""
+    are skipped (no-op, returns True); vision services are unaffected. The response's
+    message is kept in _service_messages[service_name]."""
+    _service_messages.pop(service_name, None)
     for prefix, arm in (('/orio/pnp_cup/', 'arm1'), ('/orio/lbl_cup/', 'arm2')):
         if service_name.startswith(prefix):   # commanded cup state, for the dashboard
             arm_status.set(arm, cup=service_name.endswith('/on'))
@@ -469,15 +572,31 @@ def call_trigger_service(service_name):
         log.info("[Service] %s → success=%s msg='%s'",
                  service_name, response.success,
                  getattr(response, 'message', ''))
+        _service_messages[service_name] = str(getattr(response, 'message', ''))
+        if service_name == '/compute_grasps':
+            _grasp_verdict(response.success, getattr(response, 'message', ''))
         return response.success
     except Exception as e:
         log.error("[Service] Call failed for %s: %s", service_name, e)
+        if service_name == '/compute_grasps':
+            _grasp_verdict(False, "grasp service call failed: %s" % e)
     return False
+
+
+def _grasp_verdict(ok, msg):
+    """The latest bin grasp's outcome, for the dashboard's grasp picture."""
+    arm_status.set('arm1', grasp={'t': time.time(), 'ok': bool(ok), 'msg': str(msg)})
 
 
 # ==============================================================================
 # SECTION 1: SYSTEM SETUP & DATA MANAGEMENT
 # ==============================================================================
+
+def _rot_err(R, Rd):
+    """Small rotation (axis * angle, world frame) taking R to Rd."""
+    E = Rd @ R.T
+    return 0.5 * np.array([E[2, 1] - E[1, 2], E[0, 2] - E[2, 0], E[1, 0] - E[0, 1]])
+
 
 class RobotHardware:
     """Wrapper holding Franka interfaces, IK, Vision, and poses."""
@@ -543,6 +662,7 @@ class RobotHardware:
 
         # Stored dynamically per cycle
         self.current_fetch_depth = 0.0
+        self.label_measured_z = {}   # zone number -> item top z the label arm last measured
         self.pick_up_pre_joints = None
         self.pick_up_final_joints = None
 
@@ -595,11 +715,36 @@ class RobotHardware:
         """
         if pausable:
             pause_ctl.gate(arm_name)
+        if "duration" in kwargs:
+            kwargs["duration"] = self._scaled_duration(arm_name, motion_fn, args,
+                                                       kwargs["duration"])
         arm_status.set(arm_name, activity=desc, moving=True)
         try:
             self._move_timed(arm_name, motion_fn, args, kwargs, timeout, desc)
         finally:
             arm_status.set(arm_name, moving=False)
+
+    def _scaled_duration(self, arm_name, motion_fn, args, duration):
+        """duration / --speed, but no shorter than the joint travel allows (see
+        MAX_PEAK_JOINT_SPEED) or MIN_MOVE_S. Unscaled if the arm's joints can't be read."""
+        if motion_speed <= 1.0:
+            return duration / motion_speed   # slower than base: no floor needed
+        arm = self._arm(arm_name)
+        if getattr(motion_fn, '__name__', '') == 'reset_joints':
+            target = HOME_JOINTS
+        elif args and np.ndim(args[0]) == 1 and len(args[0]) == 7:
+            target = args[0]
+        else:
+            return duration
+        try:
+            travel = float(np.max(np.abs(np.asarray(target, dtype=float)
+                                         - np.asarray(arm.get_joints(), dtype=float))))
+        except Exception as exc:
+            log.warning("[Move] %s: could not read joints (%s); not speeding this move up",
+                        arm_name, exc)
+            return duration
+        floor = max(MIN_MOVE_S, MIN_JERK_PEAK * travel / MAX_PEAK_JOINT_SPEED)
+        return float(min(duration, max(duration / motion_speed, floor)))
 
     def _move_timed(self, arm_name, motion_fn, args, kwargs, timeout, desc):
         duration = kwargs.get("duration", 5)
@@ -635,6 +780,8 @@ class RobotHardware:
             try:
                 if arm.is_skill_done(ignore_errors=False):
                     _raise_if_interrupted()   # done because Ctrl-C cancelled it
+                    if settle_s > 0:
+                        rospy.sleep(settle_s)   # let the arm settle (see DEFAULT_SETTLE_S)
                     return faults
             except Exception as exc:   # FrankaArmException / ...NotReadyException
                 faults += 1
@@ -689,7 +836,7 @@ class RobotHardware:
     def assert_vacuum(self, cup, expected_state, timeout=1.0):
         """Poll the vacuum sensor for `cup` ('pnp'|'lbl') until it matches
         `expected_state`; raise RuntimeError if it doesn't within `timeout` s."""
-        global disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test
+        global disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test, pnp_pick_raw_min
         if disable_pneumatics:
             return
         if cup == 'lbl' and no_label_vacuum_check:
@@ -700,18 +847,27 @@ class RobotHardware:
         raw_attr = 'pnp_raw' if cup == 'pnp' else 'lbl_raw'
         readings = []
         deadline = rospy.Time.now() + rospy.Duration(timeout)
+        # The pick cup counts as holding an item on a weaker seal than the firmware's
+        # has-item asks for (see PNP_PICK_RAW_MIN).
+        weak_ok = cup == 'pnp' and expected_state
         while rospy.Time.now() < deadline:
             if getattr(self, attr) == expected_state:
                 return
-            if getattr(self, raw_attr) is not None:
-                readings.append(getattr(self, raw_attr))
+            raw_now = getattr(self, raw_attr)
+            if raw_now is not None:
+                readings.append(raw_now)
+                if weak_ok and raw_now > pnp_pick_raw_min:
+                    log.info("[Vacuum] PNP holds the item on a weak seal (raw %d; firmware "
+                             "has-item needs > %d)", raw_now, VAC_THRESHOLD_HIGH)
+                    return
             rospy.sleep(0.05)
         actual = getattr(self, attr)
         action = "pick up" if expected_state else "release"
         if not readings:
             raw = "no raw readings received"
         elif expected_state:
-            raw = f"peak raw {max(readings)}, needs > {VAC_THRESHOLD_HIGH}"
+            need = pnp_pick_raw_min if cup == 'pnp' else VAC_THRESHOLD_HIGH
+            raw = f"peak raw {max(readings)}, needs > {need}"
         else:
             raw = f"lowest raw {min(readings)}, needs < {VAC_THRESHOLD_LOW}"
         raise RuntimeError(
@@ -869,6 +1025,7 @@ class RobotHardware:
 
         if self.latest_pose_msg is None or not self.latest_pose_msg.poses:
             log.info("[Grasp] No grasp pose returned (bin empty?)")
+            _grasp_verdict(False, "no grasp pose returned")
             events.emit('grasp', 'declined',
                         reason='timeout' if self.latest_pose_msg is None else 'no_poses',
                         wait_s=float(wait_s), ok=False)
@@ -878,6 +1035,7 @@ class RobotHardware:
         raw_pos = [p.position.x, p.position.y, p.position.z]
         if any(np.isnan(v) for v in raw_pos):
             log.warning("[Grasp] NaN in grasp pose %s", raw_pos)
+            _grasp_verdict(False, "NaN in the grasp pose")
             events.emit('grasp', 'declined', reason='nan_pose', ok=False)
             return None
         # Calibration residual, applied AFTER the planner: the published pose
@@ -894,6 +1052,7 @@ class RobotHardware:
                 PICK_BOUNDS['z_min'] <= z <= PICK_BOUNDS['z_max']):
             log.warning("[Grasp] pose (%.3f, %.3f, %.3f) outside safe bounds %s",
                         x, y, z, PICK_BOUNDS)
+            _grasp_verdict(False, "outside the safe pick area")
             events.emit('grasp', 'declined', reason='out_of_bounds',
                         pos=[x, y, z], ok=False)
             return None
@@ -911,6 +1070,7 @@ class RobotHardware:
                 if tilt > self.max_tilt_deg:
                     log.warning("[Grasp] tilt %.1f deg > max_tilt_deg %.1f; "
                                 "refusing pick", tilt, self.max_tilt_deg)
+                    _grasp_verdict(False, "tilt %.1f deg > max %.1f" % (tilt, self.max_tilt_deg))
                     events.emit('grasp', 'declined', reason='tilt_exceeded',
                                 pos=[x, y, z], tilt_deg=float(tilt),
                                 max_tilt_deg=self.max_tilt_deg, ok=False)
@@ -934,23 +1094,39 @@ class RobotHardware:
         to it for comparison."""
         log.info("[compute_label_joints] Requesting label pose for zone %d", zone_number)
 
+        misses = 0   # service failures / no pose for this zone, up to LABEL_POSE_ATTEMPTS
         for attempt in range(1, max_attempts + 1):
             if zone_number == 1:
                 self.latest_label_pose_z1 = None
             else:
                 self.latest_label_pose_z2 = None
 
+            miss = None
             if not call_trigger_service('/compute_grasps_labelling'):
-                raise RuntimeError("Service /compute_grasps_labelling failed")
-
-            deadline = rospy.Time.now() + rospy.Duration(5.0)
-            while rospy.Time.now() < deadline:
-                msg = self.latest_label_pose_z1 if zone_number == 1 else self.latest_label_pose_z2
-                if msg is not None and msg.poses:
-                    break
-                rospy.sleep(0.1)
+                miss = "service /compute_grasps_labelling failed"
+            elif "Zone%d=FAIL" % zone_number in _service_messages.get('/compute_grasps_labelling', ''):
+                # perception found no placement in this zone: no pose is coming, don't wait for it
+                miss = "perception found no label placement in zone %d" % zone_number
             else:
-                raise RuntimeError(f"No labelling pose received for zone {zone_number} within timeout")
+                deadline = rospy.Time.now() + rospy.Duration(5.0)
+                while rospy.Time.now() < deadline:
+                    msg = self.latest_label_pose_z1 if zone_number == 1 else self.latest_label_pose_z2
+                    if msg is not None and msg.poses:
+                        break
+                    rospy.sleep(0.1)
+                else:
+                    miss = "no labelling pose received for zone %d within 5 s" % zone_number
+            if miss:
+                # Often the zone was looked at too soon (arm 1 still above it right after the
+                # drop, or the item settling): look again a moment later.
+                misses += 1
+                if misses >= LABEL_POSE_ATTEMPTS:
+                    raise RuntimeError("%s (%d attempts, %.0f s apart)"
+                                       % (miss[0].upper() + miss[1:], misses, LABEL_POSE_RETRY_S))
+                log.warning("[compute_label_joints] %s (attempt %d/%d); looking again in %.0f s",
+                            miss, misses, LABEL_POSE_ATTEMPTS, LABEL_POSE_RETRY_S)
+                rospy.sleep(LABEL_POSE_RETRY_S)
+                continue
 
             p = msg.poses[0]
             task_pos = [p.position.x, p.position.y, p.position.z + LABEL_PLACE_CORRECTION_Z]
@@ -981,6 +1157,7 @@ class RobotHardware:
                 log.error(err_msg)
                 raise RuntimeError(err_msg)
 
+            self.label_measured_z[zone_number] = float(p.position.z)   # item top, for arm 1's retrieve
             task_ori_Mat = R.from_quat(task_ori).as_matrix()
             rpy = R.from_quat(task_ori).as_euler('xyz', degrees=True)
             log.info("[compute_label_joints] Zone %d received pose: x=%.4f y=%.4f z=%.4f  RPY r=%.2f p=%.2f y=%.2f deg",
@@ -1073,12 +1250,14 @@ class RobotHardware:
         raise RuntimeError(f"[IK] no collision-free configuration for target={np.round(task_pos, 4)} "
                            f"after {max_attempts} attempts")
 
-    def pose_to_joints(self, location_tag, depth_offset=0.0):
+    def pose_to_joints(self, location_tag, depth_offset=0.0, flat=False):
         """Resolve a location tag to joint angles via IK.
 
         Args:
             location_tag (str): Key in Target_Task_Poses.json, e.g. 'LABEL_ZONE_1'.
             depth_offset (float): Offset added to the z-translation before IK (default 0.0).
+            flat (bool): prefer the solution with joints 3 and 5 at 0 (see _flat_ik), so
+                the same pose always gets the same untwisted arm; falls back to ikpy.
 
         Returns:
             np.ndarray: 7-element joint angle array compatible with goto_joints().
@@ -1096,6 +1275,16 @@ class RobotHardware:
         target_pos = [tx, ty, tz]
         target_rot = np.array(entry["rotation"])
 
+        if flat:
+            q, err = self._flat_ik(target_pos, target_rot, max_err=FLAT_ARM_MAX_SHORT)
+            if q is not None:
+                log.info("[IK] pose_to_joints '%s' depth_offset=%.4f (flat arm%s) → joints=%s",
+                         location_tag, depth_offset,
+                         "" if err < 0.002 else ", %.0f mm short: out of reach" % (1000 * err),
+                         np.round(q, 4))
+                return q
+            log.warning("[IK] pose_to_joints '%s': no flat-arm solution, using ikpy's", location_tag)
+
         initial_guess = [0.0] * self.chain_length
         if 4 < self.chain_length:
             initial_guess[4] = -1.5
@@ -1106,9 +1295,198 @@ class RobotHardware:
             orientation_mode="all",
             initial_position=initial_guess,
         )
+        problem, first_err = self._ik_check(angles, target_pos, target_rot)
+        if problem:
+            # e.g. OUTPUT1 from a tall item: this seed gives a twisted arm with joint 3
+            # past franka-interface's limit, which then refuses every motion. Other seeds,
+            # keeping the valid solution nearest to this one (similar arm shape) that is
+            # no less accurate.
+            log.warning("[IK] pose_to_joints '%s': first solution rejected (%s); trying "
+                        "other seeds", location_tag, problem)
+            rng = np.random.default_rng(zlib.crc32(location_tag.encode()))   # repeatable
+            best = None
+            for _ in range(IK_RESEEDS):
+                guess = [0.0] * self.chain_length
+                for i in range(1, 8):
+                    lo, hi = self.ik_chain.links[i].bounds
+                    guess[i] = rng.uniform(lo + IK_LIMIT_MARGIN, hi - IK_LIMIT_MARGIN)
+                cand = self.ik_chain.inverse_kinematics(
+                    target_position=target_pos, target_orientation=target_rot,
+                    orientation_mode="all", initial_position=guess)
+                bad, err = self._ik_check(cand, target_pos, target_rot)
+                if bad or err > max(first_err, 0.005) + 0.002:
+                    continue
+                dist = np.abs(np.asarray(cand[1:8]) - np.asarray(angles[1:8])).sum()
+                if best is None or dist < best[0]:
+                    best = (dist, cand)
+            if best is None:
+                raise RuntimeError(
+                    "[IK] no joint solution for '%s' (depth offset %.3f m) at least %.2f rad "
+                    "inside the joint limits: %s" % (location_tag, depth_offset,
+                                                     IK_LIMIT_MARGIN, problem))
+            angles = best[1]
         log.info("[IK] pose_to_joints '%s' depth_offset=%.4f → joints=%s",
                  location_tag, depth_offset, np.round(angles[1:8], 4))
         return angles[1:8]
+
+    def _ik_check(self, angles, target_pos, target_rot):
+        """(problem, position error in m) for an IK result. problem is None, or why it is
+        unusable: a joint within IK_LIMIT_MARGIN of its limit (franka-interface stops
+        ~0.017 rad short of the hardware limit and then refuses every motion)."""
+        fk = self.ik_chain.forward_kinematics(list(angles))
+        pos_err = float(np.linalg.norm(fk[:3, 3] - np.asarray(target_pos)))
+        for i in range(1, 8):
+            lo, hi = self.ik_chain.links[i].bounds
+            if not (lo + IK_LIMIT_MARGIN <= angles[i] <= hi - IK_LIMIT_MARGIN):
+                return "joint %d at %.3f rad, limits %.3f..%.3f" % (i, angles[i], lo, hi), pos_err
+        return None, pos_err
+
+    def compute_retract_joints(self, start_joints, distance, step=0.005, quiet=False):
+        """Joints `distance` m further back along the tool axis from the pose at
+        start_joints, keeping the orientation; None if there is no usable solution.
+
+        Solved by small steps along that line with the Jacobian pseudo-inverse (the
+        least joint motion each step) rather than ikpy, whose solution can change the
+        arm's shape: one goto_joints move then curves well off the line (up to 70 mm on
+        logged picks for 20 cm, vs 39 mm max / 5 mm median this way)."""
+        fk, rot_err = self._fk7, _rot_err
+        q = np.array(start_joints, dtype=float)
+        T0 = fk(q)
+        ori, start = T0[:3, :3], T0[:3, 3]
+        n = max(1, int(np.ceil(distance / step)))
+        for k in range(1, n + 1):
+            target = start - ori[:, 2] * distance * k / n
+            for _ in range(5):
+                T, J = self._fk_jacobian7(q)
+                e = np.r_[target - T[:3, 3], rot_err(T[:3, :3], ori)]
+                if np.linalg.norm(e) < 1e-6:
+                    break
+                q = q + np.linalg.pinv(J) @ e
+        full = [0.0] * self.chain_length
+        full[1:8] = q
+        problem, err = self._ik_check(full, target, ori)
+        if problem or err > 0.005:
+            if not quiet:
+                log.warning("[IK] no %.2f m retract solution (%s, FK err %.4f m)", distance,
+                            problem or "inaccurate", err)
+            return None
+        return q
+
+    def _fk7(self, q):
+        """Flange pose (4x4) for the 7 arm joints q."""
+        full = [0.0] * self.chain_length
+        full[1:8] = q
+        return self.ik_chain.forward_kinematics(full)
+
+    def _fk_jacobian7(self, q, h=1e-6):
+        """(pose, 6x7 Jacobian: position rows, then rotation rows) at q, numerically."""
+        T = self._fk7(q)
+        J = np.zeros((6, 7))
+        for j in range(7):
+            dq = np.zeros(7)
+            dq[j] = h
+            T2 = self._fk7(q + dq)
+            J[:3, j] = (T2[:3, 3] - T[:3, 3]) / h
+            J[3:, j] = _rot_err(T[:3, :3], T2[:3, :3]) / h
+        return T, J
+
+    def _flat_ik(self, target_pos, target_rot, max_err=0.002, iters=300, seed=None,
+                 quiet=False):
+        """Joints reaching the pose with the arm as flat as it allows: joints 3 and 5
+        pulled to 0 (the arm in one vertical plane, upper arm not twisted), which for a
+        cup pointing down is an exact solution wherever it can reach. Gauss-Newton on the
+        pose, with that pull in the Jacobian's null space so it never costs accuracy, kept
+        IK_LIMIT_MARGIN inside the joint limits. Where the pose is out of reach it ends
+        at the nearest it can get. Returns (joints, position error in m), or (None, err)
+        if that error is over max_err or a joint ends near its limit. seed: the start
+        (default FLAT_ARM_SEED turned to face the target); quiet: no warning on failure."""
+        target_pos = np.asarray(target_pos, dtype=float)
+        lims = np.array([self.ik_chain.links[i].bounds for i in range(1, 8)], dtype=float)
+        lo, hi = lims[:, 0] + IK_LIMIT_MARGIN, lims[:, 1] - IK_LIMIT_MARGIN
+        if seed is None:
+            q = np.array(FLAT_ARM_SEED, dtype=float)
+            q[0] = np.arctan2(target_pos[1], target_pos[0])   # face the target
+        else:
+            q = np.clip(np.array(seed, dtype=float), lo, hi)
+        pull = np.diag([0, 0, 1, 0, 1, 0, 0]).astype(float)
+        for _ in range(iters):
+            T, J = self._fk_jacobian7(q)
+            e = np.r_[target_pos - T[:3, 3], _rot_err(T[:3, :3], target_rot)]
+            Jp = np.linalg.pinv(J)
+            dq = Jp @ e + (np.eye(7) - Jp @ J) @ (pull @ -q)
+            n = np.linalg.norm(dq)
+            if n < 1e-9:
+                break
+            q = np.clip(q + (dq * (0.3 / n) if n > 0.3 else dq), lo, hi)
+        full = [0.0] * self.chain_length
+        full[1:8] = q
+        problem, err = self._ik_check(full, target_pos, target_rot)
+        if problem or err > max_err:
+            if not quiet:
+                log.warning("[IK] no flat-arm solution (%s, FK err %.4f m)",
+                            problem or "inaccurate", err)
+            return None, err
+        return q, err
+
+    def compute_flat_pick_joints(self, task_pos, target_ori=None):
+        """(pre_joints, final_joints) for the input pick with joints 3 and 5 as near 0 as
+        the grasp allows, or None if no such solution keeps FLAT_PICK_MIN_LIMIT_GAP from
+        every joint limit (the caller then uses compute_pick_joints).
+
+        The grasp is kept exactly: position, cup axis and cup line, or the cup line turned
+        180 deg (CUP_FLIP), which only swaps the two identical cups. The final joints come
+        from _flat_ik from a few starts; the pre joints from backing straight up the cup
+        axis by APPROACH_DISTANCE (compute_retract_joints), so pre-pick and pick have the
+        same arm shape and the descent is a straight line. Of the valid solutions the one
+        with the smallest J3^2 + J5^2 (+ PICK_J7_WEIGHT x J7's distance from PICK_J7_HOME
+        squared, which picks the cup order with less wrist turn) wins, preferring one that
+        also allows the INPUT_RETRACT_DISTANCE retract."""
+        target_ori = VERTICAL_ORI if target_ori is None else np.asarray(target_ori)
+        task_pos = np.asarray(task_pos, dtype=float)
+        lims = np.array([self.ik_chain.links[i].bounds for i in range(1, 8)], dtype=float)
+
+        def limit_gap(q):
+            return float(np.min(np.minimum(q - lims[:, 0], lims[:, 1] - q)))
+
+        yaw = np.arctan2(task_pos[1], task_pos[0])
+        starts = [[yaw, 0.3, 0.0, -2.2, 0.0, 2.5, j7] for j7 in (-2.0, -0.8, 0.4, 1.6, 2.6)]
+        starts += [[yaw, -0.3, 0.0, -2.6, 0.0, 2.3, j7] for j7 in (-0.8, 0.4, 1.6)]
+        best = None
+        tried = 0
+        for ori in (target_ori, target_ori @ CUP_FLIP):
+            for seed in starts:
+                tried += 1
+                final, _ = self._flat_ik(task_pos, ori, seed=seed, quiet=True)
+                if final is None:
+                    continue
+                pre = self.compute_retract_joints(final, APPROACH_DISTANCE, quiet=True)
+                if pre is None:
+                    continue
+                gap = min(limit_gap(pre), limit_gap(final))
+                if gap < FLAT_PICK_MIN_LIMIT_GAP:
+                    continue
+                retract_ok = self.compute_retract_joints(
+                    final, INPUT_RETRACT_DISTANCE, quiet=True) is not None
+                flat_cost = final[2] ** 2 + final[4] ** 2
+                cost = (flat_cost + PICK_J7_WEIGHT * (final[6] - PICK_J7_HOME) ** 2
+                        + (0.0 if retract_ok else 10.0))
+                if best is None or cost < best[0]:
+                    best = (cost, pre, final, ori is not target_ori, gap)
+                if flat_cost < 0.05 and retract_ok:
+                    break   # this cup order: J3/J5 within ~0.2 rad, more starts add nothing
+        if best is None:
+            log.warning("[IK] no flat-arm pick solution %.2f rad inside the joint limits "
+                        "(%d starts) for target %s", FLAT_PICK_MIN_LIMIT_GAP, tried,
+                        np.round(task_pos, 4))
+            return None
+        _, pre, final, flipped, gap = best
+        log.info("[IK] flat-arm pick: J3/J5 %+.2f/%+.2f, %.2f rad from the nearest joint "
+                 "limit%s — pre=%s final=%s", final[2], final[4], gap,
+                 ", cups swapped (180 deg)" if flipped else "",
+                 np.round(pre, 4), np.round(final, 4))
+        events.emit('ik', 'arm1', target=list(task_pos), pre=pre, final=final,
+                    flat=True, cups_swapped=bool(flipped), limit_gap=gap)
+        return pre, final
 
     def _contact_to_pre_joints(self, contact_joints):
         full = [0.0] * self.chain_length
@@ -1129,6 +1507,7 @@ class ZoneManager:
         self.states = {'A': 'EMPTY', 'B': 'EMPTY'}  # Initial states: EMPTY, NEEDS_LABEL, READY_FOR_PICKUP
         self.busy = {'A': False, 'B': False}        # False, or the arm using it ('arm1'/'arm2')
         self.depths = {'A': 0.0, 'B': 0.0}          # Tracks object depth per zone
+        self.measured_z = {'A': None, 'B': None}    # item top z measured by the ZED before labelling
 
     def set_state(self, zone, new_state):
         """Set zone state and log the transition."""
@@ -1159,6 +1538,10 @@ _items_placed_output = 0
 _pick_n = 0
 # Consecutive planner declines (module level: FetchInput is re-entered per attempt)
 _declines = 0
+# Set after --max-declines empty scans: arm 1 loads nothing until the operator resumes it
+# into FETCH_INPUT or DECIDE_HUB from its recovery window (INTERVENE on the dashboard)
+_bin_empty = threading.Event()
+BIN_EMPTY_ACTIVITY = "Input bin empty: refill it, then INTERVENE"
 # Labels applied (dashboard)
 _labels_applied = 0
 # The two arm state machines and the run's start time (dashboard), set in main()
@@ -1342,8 +1725,17 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
         root.focus_force()
         root.mainloop()
 
+    def _run_and_free():
+        _run()
+        # The window's Tk objects sit in reference cycles (poll_stop reschedules itself),
+        # so they are not freed when _run returns. Free them HERE, in the thread that made
+        # them: left to the garbage collector, they are freed later from whichever thread
+        # it runs in, and Tcl aborts the whole process ("Tcl_AsyncDelete: async handler
+        # deleted by the wrong thread").
+        gc.collect()
+
     with _gui_lock:  # only one Tkinter window at a time — Tk is not thread-safe
-        gui_thread = threading.Thread(target=_run, daemon=True)
+        gui_thread = threading.Thread(target=_run_and_free, daemon=True)
         gui_thread.start()
         gui_thread.join()  # block the smach thread until the operator responds
     return result['choice']
@@ -1365,8 +1757,12 @@ def _safe_execute(state_name, fn, userdata):
             return 'failed'
         if isinstance(exc, KeyboardInterrupt):
             raise
-        log.error("[%s] Unhandled exception: %s", state_name, exc)
-        events.emit('error', state_name, msg=str(exc), ok=False)
+        if isinstance(exc, InterventionRequested):
+            log.warning("[%s] operator intervention: opening the recovery window", state_name)
+            events.emit('operator', 'intervene', state=state_name)
+        else:
+            log.error("[%s] Unhandled exception: %s", state_name, exc)
+            events.emit('error', state_name, msg=str(exc), ok=False)
         userdata.recovery_failed_state = state_name
         userdata.recovery_error_msg = str(exc)
         return 'failed'
@@ -1382,6 +1778,7 @@ class HumanRecoveryArm1(smach.State):
                              input_keys=['recovery_failed_state', 'recovery_error_msg'])
 
     def execute(self, userdata):
+        global _declines
         if _stopping():
             return 'shutdown'
         log.warning("[ARM1 Recovery] Pausing ARM1 — showing GUI (ARM2 continues)")
@@ -1391,17 +1788,42 @@ class HumanRecoveryArm1(smach.State):
                 manager.busy[z] = False
         failed = getattr(userdata, 'recovery_failed_state', 'UNKNOWN')
         err_msg = getattr(userdata, 'recovery_error_msg', 'No details available.')
-        choice = _show_recovery_gui(
-            "ARM1 (Pick-and-Place)", failed, err_msg, ARM1_STATES,
-            fa=hardware.pick_and_place_arm,
-            vacuum_on_service='/orio/pnp_cup/on',
-            vacuum_off_service='/orio/pnp_cup/off')
-        log.info("[ARM1 Recovery] choice=%s", choice)
-        events.emit('recovery', 'arm1', failed_state=failed, error=err_msg, choice=choice)
-        recovery_event_arm1.clear()
+        while True:
+            choice = _show_recovery_gui(
+                "ARM1 (Pick-and-Place)", failed, err_msg, ARM1_STATES,
+                fa=hardware.pick_and_place_arm,
+                vacuum_on_service='/orio/pnp_cup/on',
+                vacuum_off_service='/orio/pnp_cup/off')
+            log.info("[ARM1 Recovery] choice=%s", choice)
+            events.emit('recovery', 'arm1', failed_state=failed, error=err_msg, choice=choice)
+            recovery_event_arm1.clear()
+            _end_intervention_pause()
+            if choice == 'shutdown':
+                shutdown_event.set()
+                return choice
+            if choice not in RESCAN_STATES:
+                break
+            if _bin_empty.is_set():   # the operator says the bin has items again
+                log.info("[ARM1 Recovery] resuming picking: the input bin no longer counts "
+                         "as empty")
+                events.emit('operator', 'refilled', pick=_pick_n)
+                _bin_empty.clear()
+                _declines = 0
+            # The next state photographs the bin: go home first, so the arm is not in
+            # the picture the grasp is planned from.
+            try:
+                log.info("[ARM1 Recovery] going home before re-scanning the bin")
+                hardware._move('arm1', hardware.pick_and_place_arm.reset_joints, duration=5,
+                               desc="go home before re-scanning the bin")
+                arm_status.set('arm1', target=None)
+                break
+            except Exception as exc:  # noqa: BLE001 — back to the operator, not a crash
+                if _stopping():
+                    return 'shutdown'
+                log.error("[ARM1 Recovery] could not go home: %s", exc)
+                recovery_event_arm1.set()
+                failed, err_msg = 'GO HOME', "Could not go home before re-scanning: %s" % exc
         log.info("[ARM1 Recovery] resuming")
-        if choice == 'shutdown':
-            shutdown_event.set()
         return choice
 
 
@@ -1430,6 +1852,7 @@ class HumanRecoveryArm2(smach.State):
             vacuum_on_service='/orio/lbl_cup/on',
             vacuum_off_service='/orio/lbl_cup/off')
         log.info("[ARM2 Recovery] choice=%s", choice)
+        _end_intervention_pause()
         events.emit('recovery', 'arm2', failed_state=failed, error=err_msg, choice=choice)
         recovery_event_arm2.clear()
         log.info("[ARM2 Recovery] resuming")
@@ -1445,7 +1868,9 @@ class HumanRecoveryArm2(smach.State):
 
 class TaskSelector(smach.State):
     def __init__(self):
-        smach.State.__init__(self, outcomes=['do_load', 'do_unload', 'wait', 'shutdown'])
+        smach.State.__init__(self, outcomes=['do_load', 'do_unload', 'wait', 'shutdown',
+                                             'intervene'],
+                             output_keys=['recovery_failed_state', 'recovery_error_msg'])
 
     def execute(self, userdata):
         if shutdown_event.is_set():
@@ -1455,10 +1880,18 @@ class TaskSelector(smach.State):
             if shutdown_event.is_set():
                 return 'shutdown'
             rospy.sleep(0.2)
-        arm_status.set('arm1', activity="Choosing the next task")
+        bin_empty = _bin_empty.is_set()
+        arm_status.set('arm1', activity=BIN_EMPTY_ACTIVITY if bin_empty
+                       else "Choosing the next task")
         pause_ctl.gate('arm1', raise_on_stop=False)
         if shutdown_event.is_set():
             return 'shutdown'
+        if _take_intervention('arm1'):
+            log.warning("[TaskSelector] operator intervention: opening the recovery window")
+            events.emit('operator', 'intervene', state='DECIDE_HUB')
+            userdata.recovery_failed_state = 'DECIDE_HUB'
+            userdata.recovery_error_msg = "Operator asked to intervene (dashboard)"
+            return 'intervene'
 
         log.debug("[TaskSelector] Evaluating zone states: %s  busy: %s",
                   manager.states, manager.busy)
@@ -1470,11 +1903,14 @@ class TaskSelector(smach.State):
 
             # Prioritise loading: fetch and drop into any empty zone unless both zones
             # are occupied (no EMPTY slot available), in which case unload a ready zone.
-            if has_empty:
+            # With the bin empty there is nothing to load: keep emptying the zones until
+            # the operator resumes picking (INTERVENE → FETCH_INPUT).
+            if has_empty and not bin_empty:
                 log.info("[TaskSelector] → do_load (empty zone available)")
                 return 'do_load'
             if has_ready:
-                log.info("[TaskSelector] → do_unload (both zones occupied, ready zone exists)")
+                log.info("[TaskSelector] → do_unload (%s, ready zone exists)",
+                         "bin empty" if bin_empty else "both zones occupied")
                 return 'do_unload'
         log.debug("[TaskSelector] → wait (no actionable zones)")
         rospy.sleep(0.5)
@@ -1485,30 +1921,35 @@ class FetchInput(smach.State):
     """Scan the bin, plan a grasp with the new planner, confirm (optionally),
     pick. Declines (low score / no pose / out of bounds / too tilted) loop back
     through DECIDE_HUB; after --max-declines in a row the bin counts as empty
-    and the state blocks on a refill prompt (ARM2 keeps running)."""
+    (_bin_empty): arm 1 keeps emptying the zones, and picks again once the operator
+    resumes it into FETCH_INPUT or DECIDE_HUB (dashboard INTERVENE)."""
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['succeeded', 'no_grasp', 'failed'],
                              output_keys=['item_depth',
                                           'recovery_failed_state', 'recovery_error_msg'])
 
-    def _await_refill(self):
-        """Bin looks empty: block until the operator refills it (Enter) or quits.
-        Returns True to rescan, False to end the run."""
+    def _decline(self, what):
+        """A scan that gave no pickable grasp: count it, and after --max-declines in a
+        row treat the bin as empty (see the class docstring). Returns 'no_grasp'."""
         global _declines
-        events.emit('operator', 'awaiting_refill', declines=_declines,
-                    picks=_pick_n, placed=_items_placed_output)
-        while True:
-            answer = console.ask(
-                "[Loop] Bin appears empty (%d scans with no valid grasp). "
-                "Total placed so far: %d.\n"
-                "[Loop] Add items to the bin, then press Enter to resume "
-                "('q' to finish)..." % (_declines, _items_placed_output))
-            if answer is None or answer in ('q', 'quit', 'abort', 'stop'):
-                return False
-            if answer == '':
-                return True
-            print("[Loop] Unrecognised input %r — Enter to resume, 'q' to finish." % answer)
+        _declines += 1
+        arm_status.set('arm1', activity="%s (%d in a row), scanning again" % (what, _declines),
+                       target=None)
+        if _declines >= opts.max_declines:
+            log.info("[FetchInput] %d declined grasps in a row (last: %s): input bin counts "
+                     "as empty. Arm 1 keeps emptying the zones; refill the bin (or move the "
+                     "item), then INTERVENE on arm 1 and resume into FETCH_INPUT.",
+                     _declines, what)
+            events.emit('operator', 'bin_empty', declines=_declines,
+                        picks=_pick_n, placed=_items_placed_output)
+            _bin_empty.set()
+            arm_status.set('arm1', activity=BIN_EMPTY_ACTIVITY)
+            return 'no_grasp'
+        log.warning("[FetchInput] Grasp declined: %s (%d/%d) — re-scanning…",
+                    what, _declines, opts.max_declines)
+        rospy.sleep(0.5)
+        return 'no_grasp'
 
     def _confirm_pick(self, task_pos):
         """Ask the operator what to do with the planned grasp.
@@ -1556,28 +1997,7 @@ class FetchInput(smach.State):
         epoch = pause_ctl.epoch   # a pause after this point invalidates the grasp
         grasp = hardware.request_grasp()
         if grasp is None:
-            arm_status.set('arm1', activity="No grasp found (%d in a row), scanning again"
-                           % (_declines + 1), target=None)
-            _declines += 1
-            if _declines >= opts.max_declines:
-                log.info("[FetchInput] Planner declined %d times in a row — bin empty "
-                         "or no reliable grasp. Waiting for a refill.", _declines)
-                arm_status.set('arm1', activity="Bin empty: refill it, then Enter in the terminal")
-                if not self._await_refill():
-                    log.info("[FetchInput] Operator ended the run.")
-                    events.emit('shutdown', 'bin_empty', declines=_declines,
-                                picks=_pick_n, placed=_items_placed_output)
-                    shutdown_event.set()
-                    return 'no_grasp'
-                log.info("[FetchInput] Resuming after refill.")
-                events.emit('operator', 'refilled', pick=_pick_n)
-                _declines = 0      # fresh bin: start the streak over
-                return 'no_grasp'
-            log.warning("[FetchInput] Grasp declined (%d/%d) — re-scanning…",
-                        _declines, opts.max_declines)
-            rospy.sleep(0.5)
-            return 'no_grasp'
-        _declines = 0  # got a valid grasp; reset the streak
+            return self._decline("No grasp found")
         task_pos, target_ori = grasp
 
         if opts.confirm:
@@ -1593,11 +2013,26 @@ class FetchInput(smach.State):
                 log.info("[FetchInput] Regenerating grasp — re-scanning…")
                 return 'no_grasp'
 
-        hardware.current_fetch_depth = float(task_pos[2])
+        hardware.current_fetch_depth = float(task_pos[2])   # the item's surface, not the push
         userdata.item_depth = hardware.current_fetch_depth
+        # Go PICK_PUSH_DISTANCE past the grasp point, along the cup axis (tool Z, into the item).
+        approach = (VERTICAL_ORI if target_ori is None else np.asarray(target_ori))[:, 2]
+        task_pos = list(np.asarray(task_pos, dtype=float) + PICK_PUSH_DISTANCE * approach)
 
-        hardware.pick_up_pre_joints, hardware.pick_up_final_joints = \
-            hardware.compute_pick_joints(task_pos, target_ori=target_ori)
+        if opts.flat_pick:
+            joints = hardware.compute_flat_pick_joints(task_pos, target_ori=target_ori)
+            if joints is None:
+                # No arm shape reaches this grasp safely (e.g. a steep tilt close to the
+                # base folds the arm onto a joint limit): reject it, as ikpy's twisted
+                # fallback set off the self-collision reflex.
+                _grasp_verdict(False, "no safe arm pose for this grasp")
+                events.emit('grasp', 'declined', reason='no_safe_ik', pos=list(task_pos),
+                            ok=False)
+                return self._decline("No safe arm pose for the grasp")
+        else:
+            joints = hardware.compute_pick_joints(task_pos, target_ori=target_ori)
+        _declines = 0  # a grasp the arm can reach; reset the streak
+        hardware.pick_up_pre_joints, hardware.pick_up_final_joints = joints
         log.info("[FetchInput] IK pre_joints:   %s", np.round(hardware.pick_up_pre_joints, 4))
         log.info("[FetchInput] IK final_joints: %s", np.round(hardware.pick_up_final_joints, 4))
 
@@ -1618,11 +2053,18 @@ class FetchInput(smach.State):
         call_trigger_service('/orio/pnp_cup/on')
         rospy.sleep(1.0)
 
-        log.info("[FetchInput] Retracting to pre-pick height")
+        # One move straight back out of the bin, INPUT_RETRACT_DISTANCE along the cup axis.
+        retract_joints = hardware.compute_retract_joints(hardware.pick_up_final_joints,
+                                                         INPUT_RETRACT_DISTANCE)
+        if retract_joints is None:
+            log.warning("[FetchInput] No IK for the %.2f m retract; retracting to pre-pick "
+                        "height (%.2f m) instead", INPUT_RETRACT_DISTANCE, APPROACH_DISTANCE)
+            retract_joints = hardware.pick_up_pre_joints
+        else:
+            log.info("[FetchInput] Retracting %.2f m out of the bin", INPUT_RETRACT_DISTANCE)
         hardware._move('arm1', hardware.pick_and_place_arm.goto_joints,
-                       hardware.pick_up_pre_joints, duration=2, desc="retract",
+                       retract_joints, duration=2, desc="retract",
                        pausable=False)
-        hardware.label_arm.wait_for_skill()
 
         hardware.assert_vacuum('pnp', True)
         log.info("[FetchInput] Exiting: succeeded (item_depth=%.4f)", hardware.current_fetch_depth)
@@ -1659,6 +2101,7 @@ class DropToZone(smach.State):
         log.info("[DropToZone] Targeting zone %s", target_zone)
         arm_status.set('arm1', target=target_zone)
         manager.depths[target_zone] = userdata.item_depth
+        manager.measured_z[target_zone] = None
 
         try:
             arm1 = hardware.pick_and_place_arm
@@ -1689,7 +2132,6 @@ class DropToZone(smach.State):
                                pausable=False)
             arm_status.set('arm1', target=None)
 
-            hardware.label_arm.wait_for_skill()
 
             hardware.assert_vacuum('pnp', False)
 
@@ -1728,10 +2170,22 @@ class RetrieveFromZone(smach.State):
             return 'no_items'
         arm_status.set('arm1', target=target_zone)
 
-        depth = manager.depths[target_zone]
-        userdata.retrieved_depth = depth
+        # The pick height is the item's top as the label arm's ZED measured it in the zone;
+        # the height arm 1 grasped it at in the bin is often wrong there (the item settles
+        # lower, or was resting on other items). Only without a measurement (e.g. the zone
+        # was set ready by hand) does it fall back to that.
+        carried = manager.depths[target_zone]
+        measured = manager.measured_z[target_zone]
+        if measured is None:
+            depth = carried
+            log.warning("[RetrieveFromZone] Zone %s: no ZED height measured; using arm 1's "
+                        "carried-over depth %.4f m", target_zone, carried)
+        else:
+            depth = measured
+        userdata.retrieved_depth = carried   # the output drop height stays as before
         userdata.retrieved_zone = target_zone
-        log.info("[RetrieveFromZone] Picking from zone %s (depth=%.4f)", target_zone, depth)
+        log.info("[RetrieveFromZone] Picking from zone %s (depth=%.4f, %s; carried over %.4f)",
+                 target_zone, depth, 'ZED' if measured is not None else 'carried over', carried)
 
         try:
             arm1 = hardware.pick_and_place_arm
@@ -1756,7 +2210,6 @@ class RetrieveFromZone(smach.State):
             hardware._move('arm1', arm1.goto_joints, pre_pick_joints, duration=2, desc="retract at zone",
                            pausable=False)
             hardware._move('arm1', arm1.goto_joints, int_joints, duration=2, desc="transit from zone")
-            hardware.label_arm.wait_for_skill()
 
             hardware.assert_vacuum('pnp', True)
 
@@ -1787,9 +2240,9 @@ class PlaceOutput(smach.State):
         # the output box by the fixed margin alone (ported from dexnet_pnp.py).
         item_depth = 0.0 if hardware.zero_item_depth else userdata.retrieved_depth
         if (_items_placed_output % 2) == 0:
-            drop_joints = hardware.pose_to_joints("OUTPUT1", depth_offset=item_depth + 0.15)
+            drop_joints = hardware.pose_to_joints("OUTPUT1", depth_offset=item_depth + 0.15, flat=True)
         else:
-            drop_joints = hardware.pose_to_joints("OUTPUT2", depth_offset=item_depth + 0.15)
+            drop_joints = hardware.pose_to_joints("OUTPUT2", depth_offset=item_depth + 0.15, flat=True)
         int_joints = hardware.pose_to_joints("L2_INTER", depth_offset=item_depth)
         log.info("[PlaceOutput] drop_joints: %s", np.round(drop_joints, 4))
 
@@ -1805,7 +2258,6 @@ class PlaceOutput(smach.State):
         hardware._move('arm1', arm1.reset_joints, duration=3, desc="reset after output",
                        pausable=False)
         arm_status.set('arm1', target=None)
-        hardware.label_arm.wait_for_skill()
 
         hardware.assert_vacuum('pnp', False)
 
@@ -1889,8 +2341,10 @@ class ApplyLabel(smach.State):
             zone_number = 1 if target_zone == 'A' else 2
             log.info("[ApplyLabel] Applying label to zone %s (zone_number=%d)",
                      target_zone, zone_number)
+            hardware.label_measured_z.pop(zone_number, None)
             pre_joints, final_joints = hardware.compute_label_joints(
                 zone_number, arm1_depth=manager.depths[target_zone])
+            manager.measured_z[target_zone] = hardware.label_measured_z.get(zone_number)
             log.info("[ApplyLabel] IK pre_joints=%s  final_joints=%s",
                      np.round(pre_joints, 4), np.round(final_joints, 4))
 
@@ -1956,7 +2410,8 @@ def _parse_args():
                              "reach into the output box by the fixed margin alone.")
     parser.add_argument('--max-declines', type=int, default=5,
                         help="Consecutive planner declines (low q / no grasp) before the "
-                             "sequence concludes the bin is empty and waits for a refill.")
+                             "input bin counts as empty (picking resumes from the dashboard: "
+                             "INTERVENE on arm 1 → FETCH_INPUT).")
     parser.add_argument('--offset-x', type=float, default=0.0, metavar='M',
                         help="World-frame X correction (metres) added to every grasp "
                              "position after the planner returns it, before the arm moves.")
@@ -1968,6 +2423,23 @@ def _parse_args():
     parser.add_argument('--no-pnp-vacuum-test', action='store_true',
                         help="Skip the pick cup's vacuum checks (e.g. while its sensor is "
                              "broken), so the run carries on as if the item had been picked up.")
+    parser.add_argument('--pnp-vacuum-min', type=int, default=PNP_PICK_RAW_MIN,
+                        help="Raw vacuum reading above which the pick cup counts as holding "
+                             "an item, even on a seal too weak for the firmware's has-item "
+                             "(> %d). Open air reads about 600. Default %d." % (VAC_THRESHOLD_HIGH, PNP_PICK_RAW_MIN))
+    parser.add_argument('--speed', type=float, default=DEFAULT_SPEED, metavar='X',
+                        help="Run every arm move X times faster than its base time (default "
+                             "%.1f; 1 = the old speeds). Long moves stay slow enough that no "
+                             "joint peaks above %.1f rad/s." % (DEFAULT_SPEED, MAX_PEAK_JOINT_SPEED))
+    parser.add_argument('--settle-s', type=float, default=DEFAULT_SETTLE_S, metavar='S',
+                        help="Seconds to wait after each arm move finishes before the next "
+                             "command, so the arm has stopped (default %.1f; 0 = no wait)."
+                             % DEFAULT_SETTLE_S)
+    parser.add_argument('--no-flat-pick', dest='flat_pick', action='store_false',
+                        help="Input pick: use ikpy's solution as before, not the arm shape "
+                             "with joints 3 and 5 nearest 0 and the least wrist turn "
+                             "(compute_flat_pick_joints), which skips grasps it cannot "
+                             "reach safely.")
     parser.add_argument('--skip-item-setup', action='store_true',
                         help="Skip the item setup GUI and use a default item name and "
                              "expiry (%s, today + %d days)." % (DEFAULT_ITEM_NAME, DEFAULT_EXPIRY_DAYS))
@@ -2014,7 +2486,8 @@ def _status_snapshot():
     arms = arm_status.snapshot()
     for arm, rec in (('arm1', recovery_event_arm1), ('arm2', recovery_event_arm2)):
         arms[arm].update(state=_active_state(_machines.get(arm)),
-                         held=pause_ctl.held[arm], recovery=rec.is_set())
+                         held=pause_ctl.held[arm], recovery=rec.is_set(),
+                         intervene=intervene[arm].is_set())
     if hardware is not None:
         arms['arm1'].update(has_item=bool(hardware.pnp_has_item), raw=hardware.pnp_raw)
         arms['arm2'].update(has_item=bool(hardware.lbl_has_item), raw=hardware.lbl_raw)
@@ -2057,6 +2530,22 @@ def _start_status_server():
     rospy.Service('/orio/resume', Trigger, on_resume)
     rospy.Service('/orio/estop', Trigger, on_estop)
     rospy.Service('/orio/shutdown', Trigger, on_shutdown)
+
+    def on_intervene(arm):
+        def handler(_req):
+            rec = recovery_event_arm1 if arm == 'arm1' else recovery_event_arm2
+            if rec.is_set():
+                return TriggerResponse(success=False, message="%s is already in recovery" % arm)
+            if _stopping():
+                return TriggerResponse(success=False, message="the run is stopping")
+            _request_intervention(arm)
+            log.warning("[Main] Operator intervention for %s: both arms stop at their next "
+                        "pause point, then %s's recovery window opens", arm.upper(), arm.upper())
+            return TriggerResponse(success=True, message="both arms stopping; %s recovery next" % arm)
+        return handler
+
+    rospy.Service('/orio/intervene/arm1', Trigger, on_intervene('arm1'))
+    rospy.Service('/orio/intervene/arm2', Trigger, on_intervene('arm2'))
 
     def loop():
         rate = rospy.Rate(STATUS_HZ)
@@ -2113,7 +2602,7 @@ def _check_only():
 
 
 def main():
-    global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test, opts, console
+    global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test, pnp_pick_raw_min, motion_speed, settle_s, opts, console
     global _run_started
     opts = _parse_args()
     rospy.init_node('full_sequence_fsm')
@@ -2135,6 +2624,11 @@ def main():
     no_pnp_vacuum_test = opts.no_pnp_vacuum_test
     if no_pnp_vacuum_test:
         log.warning("[Main] NO PNP VACUUM TEST — the pick cup's vacuum checks are skipped.")
+    pnp_pick_raw_min = opts.pnp_vacuum_min
+    motion_speed = max(0.25, min(float(opts.speed), 3.0))
+    settle_s = max(0.0, float(opts.settle_s))
+    log.info("[Main] Motion speed %.2fx (moves no shorter than %.1f s, joints peak <= %.1f rad/s), "
+             "%.2f s settle after each move", motion_speed, MIN_MOVE_S, MAX_PEAK_JOINT_SPEED, settle_s)
 
     random.seed(1)
 
@@ -2145,6 +2639,7 @@ def main():
                         + datetime.timedelta(days=DEFAULT_EXPIRY_DAYS)).isoformat()
     else:
         _item_name, _item_expiry = show_item_setup_gui()
+        gc.collect()   # free its Tk objects in this thread, before the arm threads start
     if _item_name is None:
         log.warning("[Main] Setup cancelled by operator — exiting cleanly.")
         events.emit('shutdown', 'operator_cancel')
@@ -2184,7 +2679,8 @@ def main():
     with sm_logistics:
         smach.StateMachine.add('DECIDE_HUB', TaskSelector(),
                                transitions={'do_load': 'FETCH_INPUT', 'do_unload': 'RETRIEVE',
-                                            'wait': 'DECIDE_HUB', 'shutdown': 'finished'})
+                                            'wait': 'DECIDE_HUB', 'shutdown': 'finished',
+                                            'intervene': 'HUMAN_RECOVERY_ARM1'})
         smach.StateMachine.add('FETCH_INPUT', FetchInput(),
                                transitions={'succeeded': 'DROP_TO_ZONE',
                                             'no_grasp':  'DECIDE_HUB',

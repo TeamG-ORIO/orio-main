@@ -7,24 +7,53 @@ To open it again by hand, inside the main container:
 
 Reads the JSON status full_sequence.py publishes on /orio/dashboard/status and calls
 /orio/pause and /orio/resume. The space bar also toggles pause.
+
+Also shows the newest grasp panel (from the grasp planner) and label placement image
+(from perception) of this run; click one to enlarge it. Each arm card has LOCK and
+UNLOCK & PRIME buttons, which run lock_arms.py through desk_helper.py on the host
+(run_full_demo.sh starts it).
 """
 
 import argparse
 import json
 import os
+import re
 import signal
 import threading
 import time
 import tkinter as tk
+import urllib.error
+import urllib.request
 from tkinter import font as tkfont, messagebox
 
 import rospy
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
+try:
+    from PIL import Image, ImageTk
+except ImportError:  # the debug images then show a note instead
+    Image = ImageTk = None
+
 STATUS_TOPIC = '/orio/dashboard/status'
 STALE_S = 2.0      # no status for this long = not connected
 TICK_MS = 100      # redraw period
+
+# Debug images: the newest PNG in each directory (the repo is mounted at /home/ros_ws).
+GRASP_DIR = '/home/ros_ws/logging/demo/current.affordance'
+LABEL_DIR = '/home/ros_ws/logging/demo/current.labels'
+is_grasp_image = lambda name: name.endswith('_camera.png') or name.startswith('afford_')  # suction / DexNet
+is_label_image = lambda name: name.startswith('label_') and name.endswith('.png')
+POLL_S = 1.0       # how often the image directories are checked
+SETTLE_S = 0.5     # an image this new may still be being written
+
+# Brakes, through desk_helper.py on the host (the container cannot reach Desk).
+DESK_HELPER = 'http://127.0.0.1:%d' % int(os.environ.get('ORIO_DESK_HELPER_PORT', '8766'))
+DESK_TIMEOUT_S = 330   # an unlock that restarts the robot takes a few minutes
+DESK_STATUS_S = 5.0   # how often the dashboard asks desk_helper.py for the brake state
+DESK_STALE_S = 60.0   # older than this = brake state unknown
+ARM_ROBOT = {'arm1': '1', 'arm2': '2'}   # lock_arms.py robot numbers
+ROBOT_PREFIX = re.compile(r'^\[robot \d+ [^\]]*\]\s*')
 
 # Catppuccin Mocha, as in the recovery and item setup windows
 CRUST, MANTLE, BASE = '#11111b', '#181825', '#1e1e2e'
@@ -105,20 +134,133 @@ def shorten(text, font, width):
     return text + '…'
 
 
+def ago(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return "%d s ago" % seconds
+    if seconds < 3600:
+        return "%d min ago" % (seconds // 60)
+    return "%d h ago" % (seconds // 3600)
+
+
+# ── Debug images ─────────────────────────────────────────────────────────────
+
+class ImageFeed:
+    """The newest image in a directory whose name passes `wanted`. poll() runs off the Tk
+    thread; images older than `since` (an earlier run's) are ignored."""
+
+    def __init__(self, directory, wanted):
+        self.dir, self.wanted = directory, wanted
+        self.since = time.time()
+        self._lock = threading.Lock()
+        self._current = (0, None, 0.0, None)   # version, path, mtime, PIL image
+
+    def get(self):
+        with self._lock:
+            return self._current
+
+    def poll(self):
+        if Image is None:
+            return
+        try:
+            files = [(e.stat().st_mtime, e.path) for e in os.scandir(self.dir)
+                     if self.wanted(e.name) and e.is_file()]
+        except OSError:
+            return   # directory missing (panels off) or file removed mid-scan
+        if not files:
+            return
+        mtime, path = max(files)
+        version, cur_path, cur_mtime, _ = self.get()
+        if mtime < self.since or time.time() - mtime < SETTLE_S or (path, mtime) == (cur_path, cur_mtime):
+            return
+        try:
+            with Image.open(path) as im:
+                im = im.convert('RGB')
+        except Exception:  # noqa: BLE001 — half-written: try again next poll
+            return
+        with self._lock:
+            self._current = (version + 1, path, mtime, im)
+
+
+class FeedView:
+    """Draws an ImageFeed's newest image, scaled to fit, on a canvas."""
+
+    def __init__(self, dash, canvas, feed, title, color, empty, hint, verdict=None):
+        self.dash, self.c, self.feed = dash, canvas, feed
+        self.title, self.color, self.empty, self.hint = title, color, empty, hint
+        self.verdict = verdict   # () -> {'t', 'ok', 'msg'} of the latest attempt, or None
+        self.photo, self.key = None, None
+
+    def draw(self, t):
+        c, d = self.c, self.dash
+        c.delete('all')
+        W, H = max(c.winfo_width(), 120), max(c.winfo_height(), 80)
+        version, path, mtime, im = self.feed.get()
+        fresh = im is not None and t - mtime < 3.0
+        rrect(c, 1, 1, W - 1, H - 1, 14, fill=MANTLE, outline=self.color if fresh else '',
+              width=2)
+        c.create_text(14, 16, text=self.title, anchor='w', fill=self.color, font=d.f_smallb)
+        if im is None:
+            c.create_text(W / 2, H / 2 + 8, text=self.empty, fill=OVERLAY, font=d.f_small,
+                          width=W - 40, justify='center')
+            return
+        left = 14 + d.f_smallb.measure(self.title) + 16
+        c.create_text(W - 14, 16, anchor='e', fill=SUBTEXT, font=d.f_small,
+                      text=shorten("%s · %s" % (ago(t - mtime), self.hint), d.f_small, W - left - 14))
+        # The sequence turned the latest attempt down after this picture was drawn (e.g.
+        # perception's tilt limit): say so in a bar under the picture.
+        v = self.verdict() if self.verdict else None
+        rejected = bool(v) and not v.get('ok') and v.get('t', 0) >= mtime - 1.0
+        bw, bh = W - 16, H - 38 - (30 if rejected else 0)
+        if bw < 10 or bh < 10:
+            return
+        if self.key != (version, bw, bh):
+            scale = min(bw / im.width, bh / im.height)
+            size = (max(1, int(im.width * scale)), max(1, int(im.height * scale)))
+            self.photo = ImageTk.PhotoImage(im.resize(size, Image.LANCZOS), master=c)
+            self.key = (version, bw, bh)
+        c.create_image(W / 2, 30 + bh / 2, image=self.photo)
+
+        if rejected:
+            why = re.sub(r'^rejected( grasp)?[:,]?\s*', '', v.get('msg', ''), flags=re.I)
+            rrect(c, 8, H - 34, W - 8, H - 8, 8, fill='#c62828', outline='')
+            c.create_text(W / 2, H - 21, fill='white', font=d.f_smallb,
+                          text=shorten("REJECTED · %s" % why, d.f_smallb, W - 32))
+            rrect(c, 1, 1, W - 1, H - 1, 14, fill='', outline=RED, width=2)
+
+
 # ── Dashboard ────────────────────────────────────────────────────────────────
 
 class Dashboard:
-    def __init__(self, root, parent_pid=None):
+    def __init__(self, root, parent_pid=None, grasp_dir=GRASP_DIR, label_dir=LABEL_DIR):
         self.root = root
         self.parent_pid = parent_pid
         self.status = None
         self.rx_time = 0.0
-        self.prev = None
         self.pending = False      # a pause/resume call in flight
         self.estop_seen = None    # when the status first showed an E-stop
-        self.events = []          # (time, text, colour), newest last
         self.item_name = None
         self.item_photo = None
+        self.t0 = time.time()
+
+        # Debug image feeds: (key, feed, title, colour, text when there is none yet)
+        grasp_none = ("No grasp plan yet this run.\nPanels are off with --no-affordance "
+                      "or --no-logging.")
+        label_none = "No label placement yet this run."
+        if Image is None:
+            grasp_none = label_none = "Pillow is not installed: no images."
+        self.feeds = [
+            ('grasp', ImageFeed(grasp_dir, is_grasp_image), "GRASP PLAN", BLUE, grasp_none),
+            ('label', ImageFeed(label_dir, is_label_image), "LABEL PLACEMENT", MAUVE, label_none),
+        ]
+        self.viewers = {}         # key -> (Toplevel, FeedView), the enlarged images
+
+        # Brakes: per arm, what the last lock/unlock did (written by worker threads)
+        self.desk_lock = threading.Lock()
+        self.desk_state = {arm: {'busy': None, 'ok': None, 'msg': '', 't': 0.0}
+                           for arm in ARM_ROBOT}
+        self.helper_up = None     # desk_helper.py answering? None = not checked yet
+        self.desk_robots = {}     # robot number -> Desk state from desk_helper.py /status
 
         fam = 'DejaVu Sans' if 'DejaVu Sans' in tkfont.families(root) else 'Helvetica'
         F = lambda size, weight='normal': tkfont.Font(root=root, family=fam, size=size, weight=weight)
@@ -129,6 +271,7 @@ class Dashboard:
         self._build()
         rospy.Subscriber(STATUS_TOPIC, String, self._on_status, queue_size=1)
         root.bind('<space>', lambda e: self.toggle())
+        threading.Thread(target=self._poll_loop, daemon=True, name='poll').start()
         self._tick()
 
     # ── layout ───────────────────────────────────────────────────────────────
@@ -136,8 +279,8 @@ class Dashboard:
         r = self.root
         r.title("ORIO Dashboard")
         r.configure(bg=BASE)
-        r.geometry("1280x860")
-        r.minsize(1000, 720)
+        r.geometry("1280x900")
+        r.minsize(1000, 760)
 
         # Header
         hdr = tk.Frame(r, bg=MANTLE, height=70)
@@ -190,37 +333,50 @@ class Dashboard:
         self.b_sub.pack(fill='x')
 
         # Cell map
-        self.map = tk.Canvas(r, bg=BASE, highlightthickness=0, height=360)
-        self.map.pack(fill='both', expand=True, padx=16)
+        self.map = tk.Canvas(r, bg=BASE, highlightthickness=0, height=300)
 
-        # Bottom: arm cards, stats, event log
-        bot = tk.Frame(r, bg=BASE, height=250)
-        bot.pack(fill='x', padx=16, pady=(8, 16))
-        bot.pack_propagate(False)
-        bot.columnconfigure(0, weight=3, uniform='c')
-        bot.columnconfigure(1, weight=3, uniform='c')
-        bot.columnconfigure(2, weight=4, uniform='c')
+        # Bottom: arm cards (with their brake buttons), then the newest debug images
+        bot = tk.Frame(r, bg=BASE, height=330)
+        bot.pack(side='bottom', fill='x', padx=16, pady=(8, 16))   # before the map, which then
+        self.map.pack(fill='both', expand=True, padx=16)               # takes what is left
+        bot.grid_propagate(False)   # keep its 330 px whatever its contents ask for
+        bot.columnconfigure(0, weight=1, uniform='c')
+        bot.columnconfigure(1, weight=1, uniform='c')
+        bot.columnconfigure(2, weight=2, uniform='c')
         bot.rowconfigure(0, weight=1)
-        self.cards = {}
+        self.cards, self.desk_btns, self.intervene_btns = {}, {}, {}
         for i, arm in enumerate(('arm1', 'arm2')):
             c = tk.Canvas(bot, bg=BASE, highlightthickness=0)
             c.grid(row=0, column=i, sticky='nsew', padx=(0, 10))
             self.cards[arm] = c
+            row = tk.Frame(c, bg=MANTLE)
+            row.place(x=20, rely=1.0, y=-14, anchor='sw')
+            # One brake button: UNLOCK & PRIME while the arm is locked, LOCK while it is
+            # not (set each tick from Desk's state, in _draw_brakes)
+            brake = tk.Button(row, text="UNLOCK & PRIME", font=self.f_smallb, relief='flat', bd=0,
+                              padx=12, pady=7, cursor='hand2', bg=SURF0, fg=CRUST,
+                              disabledforeground=SURF2, state='disabled',
+                              command=lambda a=arm: self._brake_pressed(a))
+            brake.pack(side='left')
+            help_btn = tk.Button(row, text="INTERVENE", font=self.f_smallb, relief='flat', bd=0,
+                                 padx=12, pady=7, cursor='hand2', bg=PEACH, fg=CRUST,
+                                 activebackground='#fdd0b0', activeforeground=CRUST,
+                                 disabledforeground=SURF2,
+                                 command=lambda a=arm: self.intervene(a))
+            help_btn.pack(side='left', padx=(8, 0))
+            self.desk_btns[arm] = brake
+            self.intervene_btns[arm] = help_btn
         side = tk.Frame(bot, bg=BASE)
         side.grid(row=0, column=2, sticky='nsew')
-        self.stats = tk.Canvas(side, bg=BASE, highlightthickness=0, height=86)
-        self.stats.pack(fill='x')
-        logf = tk.Frame(side, bg=MANTLE)
-        logf.pack(fill='both', expand=True, pady=(8, 0))
-        tk.Label(logf, text="EVENTS", font=self.f_smallb, fg=OVERLAY, bg=MANTLE,
-                 anchor='w').pack(fill='x', padx=12, pady=(8, 2))
-        self.log = tk.Text(logf, bg=MANTLE, fg=TEXT, font=self.f_small, relief='flat',
-                           bd=0, highlightthickness=0, wrap='none', padx=12, cursor='arrow')
-        self.log.pack(fill='both', expand=True, pady=(0, 8))
-        for name, col in (('t', OVERLAY), ('arm1', BLUE), ('arm2', MAUVE), ('ok', GREEN),
-                          ('warn', YELLOW), ('err', RED), ('info', TEXT)):
-            self.log.tag_configure(name, foreground=col)
-        self.log.configure(state='disabled')
+        side.rowconfigure(0, weight=1)
+        self.views = []
+        for i, (key, feed, title, col, empty) in enumerate(self.feeds):
+            side.columnconfigure(i, weight=1, uniform='img')
+            c = tk.Canvas(side, bg=BASE, highlightthickness=0, cursor='hand2')
+            c.grid(row=0, column=i, sticky='nsew', padx=(0, 8) if i == 0 else 0)
+            c.bind('<Button-1>', lambda e, k=key: self._open_viewer(k))
+            self.views.append(FeedView(self, c, feed, title, col, empty, "click to enlarge",
+                                       verdict=self._grasp_verdict if key == 'grasp' else None))
 
     # ── data ─────────────────────────────────────────────────────────────────
     def _on_status(self, msg):
@@ -246,7 +402,7 @@ class Dashboard:
         if self.status.get('stopping') == 'estop':
             if self.estop_seen is None or time.time() - self.estop_seen < FORCE_QUIT_AFTER_S:
                 return
-            self._event("Force quit requested", 'err')
+            print("[Dashboard] Force quit requested", flush=True)
         self._call('/orio/estop', track=False)
 
     def shutdown(self):
@@ -278,51 +434,133 @@ class Dashboard:
         if track:
             self.pending = False
         if not ok and service != '/orio/estop':   # a force quit never answers
-            self._event("%s failed: %s" % (service, note), 'err')
+            print("[Dashboard] %s failed: %s" % (service, note), flush=True)
 
-    def _event(self, text, tag='info'):
-        self.events.append((time.strftime('%H:%M:%S'), text, tag))
-        self.events = self.events[-200:]
-        self.log.configure(state='normal')
-        self.log.insert('1.0', text + '\n', tag)
-        self.log.insert('1.0', self.events[-1][0] + '  ', 't')
-        self.log.delete('201.0', 'end')
-        self.log.configure(state='disabled')
+    # ── brakes (lock_arms.py through desk_helper.py) ─────────────────────────
+    def _brake_pressed(self, arm):
+        """The brake button does whatever its label says (see _draw_brakes)."""
+        self.desk(arm, 'lock' if self.desk_btns[arm].cget('text') == "LOCK" else 'unlock')
 
-    def _diff_events(self, s):
-        """Turn status changes into event-log lines."""
-        p = self.prev
-        self.prev = s
-        if p is None:
-            self._event("Connected to the sequence", 'ok')
+    def intervene(self, arm):
+        """INTERVENE: both arms stop at their next pause point (as for Pause, never in the
+        middle of touching an item) and this arm's recovery window opens, where the
+        operator picks what it does next; resuming from it releases both."""
+        if not self.connected() or self.status.get('stopping'):
             return
-        if s.get('stopping') != p.get('stopping') and s.get('stopping'):
-            self._event("E-STOP: both arms stopped" if s['stopping'] == 'estop'
-                        else "Shutdown: arms finish their move, then go home", 'err')
-        if s['paused'] != p['paused']:
-            self._event("Pause requested" if s['paused'] else "Resumed",
-                        'warn' if s['paused'] else 'ok')
-        for arm in ('arm1', 'arm2'):
-            a, b = s['arms'][arm], p['arms'][arm]
-            if a.get('state') != b.get('state') and a.get('state'):
-                self._event("%s → %s" % (ARM_TITLE[arm], STATE_NAME.get(a['state'], a['state'])), arm)
-            if a.get('held') and not b.get('held'):
-                self._event("%s stopped (paused)" % ARM_TITLE[arm], 'warn')
-            if a.get('recovery') and not b.get('recovery'):
-                self._event("%s needs help: see its recovery window" % ARM_TITLE[arm], 'err')
-            if a.get('cup') != b.get('cup'):
-                what = 'item' if arm == 'arm1' else 'label'
-                self._event("%s suction %s" % (ARM_TITLE[arm], 'on: holding the %s' % what
-                                               if a.get('cup') else 'off'), arm)
-        for z in ('A', 'B'):
-            if s['zones'][z]['state'] != p['zones'][z]['state']:
-                look = ZONE_LOOK.get(s['zones'][z]['state'], (s['zones'][z]['state'],))
-                self._event("Zone %s: %s" % (z, look[0]),
-                            'ok' if s['zones'][z]['state'] == 'READY_FOR_PICKUP' else 'info')
-        if s.get('prompt') and not p.get('prompt'):
-            self._event("The terminal is waiting for you", 'warn')
-        if s['counts']['placed'] > p['counts']['placed']:
-            self._event("Item delivered to the output (%d total)" % s['counts']['placed'], 'ok')
+        if messagebox.askyesno(
+                "Intervene on %s" % ARM_TITLE[arm],
+                "Stop BOTH arms after their current moves and open %s's recovery "
+                "window?\n\nThere you choose which step %s continues from. Both arms "
+                "carry on when you resume from it." % (ARM_TITLE[arm], ARM_TITLE[arm]),
+                parent=self.root):
+            self._call('/orio/intervene/%s' % arm, track=False)
+
+    def desk(self, arm, action):
+        """LOCK or UNLOCK & PRIME button: confirm, then run lock_arms.py for this arm's
+        robot off the Tk thread."""
+        with self.desk_lock:
+            if self.desk_state[arm]['busy']:
+                return
+        s = self.status if self.connected() else None
+        if s is not None and s['arms'][arm].get('moving'):
+            return
+        robot = ARM_ROBOT[arm]
+        if action == 'unlock':
+            title = "Unlock & prime %s" % ARM_TITLE[arm]
+            question = ("Unlock %s (robot %s)?\n\nIf Desk's end effector is not \"Other\" it is "
+                        "set to Other first, which restarts the robot (up to ~3 min). Then the "
+                        "brakes open: the arm moves slightly." % (ARM_TITLE[arm], robot))
+        else:
+            title = "Lock %s" % ARM_TITLE[arm]
+            question = ("Lock %s (robot %s)?\n\nThe brakes close and the arm cannot move until "
+                        "it is unlocked again. A running sequence fails its next move on this "
+                        "arm." % (ARM_TITLE[arm], robot))
+        if not messagebox.askyesno(title, question, parent=self.root):
+            return
+        with self.desk_lock:
+            self.desk_state[arm] = {'busy': action, 'ok': None, 'msg': '', 't': time.time()}
+        print("[Dashboard] %s: %s requested" % (ARM_TITLE[arm], action), flush=True)
+        threading.Thread(target=self._desk_run, args=(arm, robot, action), daemon=True).start()
+
+    def _desk_run(self, arm, robot, action):
+        body = json.dumps({'robot': robot, 'action': action}).encode()
+        req = urllib.request.Request(DESK_HELPER + '/lock_arms', data=body, method='POST',
+                                     headers={'Content-Type': 'application/json'})
+        try:
+            with urllib.request.urlopen(req, timeout=DESK_TIMEOUT_S) as r:
+                res = json.loads(r.read().decode())
+        except urllib.error.HTTPError as exc:
+            try:
+                res = json.loads(exc.read().decode())
+            except ValueError:
+                res = {'ok': False, 'lines': ['FAILED: desk helper answered HTTP %d' % exc.code]}
+        except (OSError, ValueError) as exc:
+            reason = getattr(exc, 'reason', exc)
+            res = {'ok': False, 'lines': ['FAILED: desk helper not reachable (%s); it runs on '
+                                          'the host, started by run_full_demo.sh' % reason]}
+        ok = bool(res.get('ok'))
+        lines = [ROBOT_PREFIX.sub('', l).strip() for l in res.get('lines') or []]
+        lines = [l for l in lines if l]
+        failed = [l for l in lines if l.startswith('FAILED')]
+        msg = (failed or lines or ['done' if ok else 'FAILED: no output'])[-1]
+        print("[Dashboard] %s %s: %s" % (ARM_TITLE[arm], action, msg if not ok or msg.startswith('FAILED')
+                                         else 'done (%s)' % msg), flush=True)
+        with self.desk_lock:
+            self.desk_state[arm] = {'busy': None, 'ok': ok, 'msg': msg, 't': time.time(),
+                                    'action': action}
+        self.helper_up = 'desk helper not reachable' not in msg
+
+    def _fetch_desk_status(self):
+        """Each robot's brakes, mode and active errors, from desk_helper.py (which reads
+        Desk). False when the helper is not answering."""
+        try:
+            with urllib.request.urlopen(DESK_HELPER + '/status', timeout=2.0) as r:
+                self.desk_robots = json.loads(r.read().decode()).get('robots') or {}
+            return True
+        except (OSError, ValueError):
+            return False
+
+    def _grasp_verdict(self):
+        s = self.status if self.connected() else None
+        return (s or {}).get('arms', {}).get('arm1', {}).get('grasp')
+
+    # ── background polling: debug images, desk helper ───────────────────────
+    def _poll_loop(self):
+        last_desk = 0.0
+        while True:
+            for _key, feed, *_ in self.feeds:
+                feed.poll()
+            if time.time() - last_desk > DESK_STATUS_S:
+                last_desk = time.time()
+                self.helper_up = self._fetch_desk_status()
+            time.sleep(POLL_S)
+
+    def _open_viewer(self, key):
+        """An enlarged, live copy of one debug image. Click or Esc closes it."""
+        if key in self.viewers:
+            self.viewers[key][0].lift()
+            return
+        _key, feed, title, col, empty = next(f for f in self.feeds if f[0] == key)
+        top = tk.Toplevel(self.root, bg=BASE)
+        top.title("ORIO · %s" % title.title())
+        top.geometry("%dx%d" % (int(self.root.winfo_screenwidth() * 0.85),
+                                int(self.root.winfo_screenheight() * 0.8)))
+        c = tk.Canvas(top, bg=BASE, highlightthickness=0, cursor='hand2')
+        c.pack(fill='both', expand=True, padx=12, pady=12)
+        close = lambda e=None: self._close_viewer(key)
+        c.bind('<Button-1>', close)
+        top.bind('<Escape>', close)
+        top.protocol('WM_DELETE_WINDOW', close)
+        self.viewers[key] = (top, FeedView(self, c, feed, title, col, empty, "click or Esc to close",
+                                           verdict=self._grasp_verdict if key == 'grasp' else None))
+
+    def _close_viewer(self, key):
+        top, _view = self.viewers.pop(key, (None, None))
+        if top is not None:
+            try:
+                top.destroy()
+            except tk.TclError:
+                pass
 
     # ── main loop ────────────────────────────────────────────────────────────
     def _tick(self):
@@ -331,17 +569,24 @@ class Dashboard:
             self.root.destroy()
             return
         s = self.status if self.connected() else None
-        if s is not None and s is not self.prev:
-            self._diff_events(s)
+        if s is not None and s.get('started'):   # hand-opened mid-run: show this run's images
+            for _key, feed, *_ in self.feeds:
+                feed.since = min(self.t0, s['started'])
         try:
             self._draw_header(s, t)
             self._draw_banner(s)
             self._draw_map(s, t)
             for arm in ('arm1', 'arm2'):
                 self._draw_card(arm, s, t)
-            self._draw_stats(s)
+            for view in self.views:
+                view.draw(t)
         except tk.TclError:
             return  # window closed
+        for key, (_top, view) in list(self.viewers.items()):
+            try:
+                view.draw(t)
+            except tk.TclError:
+                self._close_viewer(key)
         self.root.after(TICK_MS, self._tick)
 
     def _parent_alive(self):
@@ -536,8 +781,8 @@ class Dashboard:
             note, col = "Swap items now", YELLOW
         elif active and s['arms']['arm1'].get('activity', '').startswith(('Planning', 'No grasp')):
             note, col = "Scanning" + "." * (int(t * 3) % 4), BLUE
-        elif s is not None and s['arms']['arm1'].get('activity', '').startswith('Bin empty'):
-            note, col = "Empty: refill", PEACH
+        elif s is not None and 'bin empty' in (s['arms']['arm1'].get('activity') or '').lower():
+            note, col = "Empty: add items", PEACH
         else:
             note, col = "", SUBTEXT
         if note:
@@ -613,6 +858,9 @@ class Dashboard:
             return YELLOW, "PAUSED"
         if arm == 'arm1' and s.get('prompt'):
             return PEACH, "WAITING FOR YOU"
+        if (arm == 'arm1' and not a.get('moving')
+                and 'bin empty' in (a.get('activity') or '').lower()):
+            return PEACH, "BIN EMPTY"
         if a.get('state') is None:
             return SURF1, "stopped" if s.get('started') else "starting"
         if a.get('moving'):
@@ -697,33 +945,90 @@ class Dashboard:
             sensor = "sensor: %s" % ("grip" if a.get('has_item') else "no grip")
         else:
             sensor = ""
-        c.create_text(20, 214, anchor='w', fill=SUBTEXT, font=self.f_small, text=sensor)
+        c.create_text(20, 208, anchor='w', fill=SUBTEXT, font=self.f_small, text=sensor)
 
-    def _draw_stats(self, s):
-        c = self.stats
-        c.delete('all')
-        W, H = max(c.winfo_width(), 300), 86
-        n = s['counts'] if s else {}
-        tiles = [("DELIVERED", n.get('placed', 0), GREEN), ("LABELLED", n.get('labels', 0), MAUVE),
-                 ("BIN SCANS", n.get('scans', 0), BLUE)]
-        gap = 8
-        w = (W - gap * (len(tiles) - 1)) / len(tiles)
-        for i, (name, val, col) in enumerate(tiles):
-            x = i * (w + gap)
-            rrect(c, x, 0, x + w, H, 14, fill=MANTLE, outline='')
-            c.create_text(x + 14, 18, text=name, anchor='w', fill=OVERLAY, font=self.f_smallb)
-            c.create_text(x + 14, 54, text=str(val), anchor='w', fill=col, font=self.f_num)
+        # brakes: what the last LOCK / UNLOCK & PRIME press did; the buttons sit below
+        self._draw_brakes(c, arm, a, W, t)
+
+    def _draw_brakes(self, c, arm, a, W, t):
+        """The arm's live brake state and errors (Desk, via desk_helper.py), and which
+        buttons make sense: UNLOCK & PRIME only while its brakes are locked, LOCK only
+        while they are open and the arm is not moving."""
+        with self.desk_lock:
+            st = dict(self.desk_state[arm])
+        rs = self.desk_robots.get(ARM_ROBOT[arm]) or {}
+        known = 'brakes_open' in rs and t - rs.get('t', 0) < DESK_STALE_S
+        locked = known and not rs['brakes_open']
+        errors = rs.get('errors') or [] if known else []
+        c.create_text(20, 236, text="BRAKES", anchor='w', fill=OVERLAY, font=self.f_smallb)
+        if st['busy']:
+            dot = YELLOW if int(t * 2) % 2 else SURF2
+            fg = YELLOW
+            text = ("Unlocking… up to ~3 min if the robot restarts" if st['busy'] == 'unlock'
+                    else "Locking…")
+        elif st['ok'] is False and t - st['t'] < 30:
+            dot, fg = RED, RED
+            text = "%s  %s" % (time.strftime('%H:%M', time.localtime(st['t'])), st['msg'])
+        elif self.helper_up is False:
+            dot, fg = SURF1, OVERLAY
+            text = "Unavailable: desk_helper.py is not running on the host"
+        elif errors:
+            dot, fg = RED, RED
+            text = "Error %s: clear it in Desk" % ", ".join(errors)
+        elif locked:
+            dot, fg = YELLOW, YELLOW
+            text = "Locked: press UNLOCK & PRIME"
+        elif known:
+            dot, fg = GREEN, TEXT
+            text = "Unlocked"
+        else:
+            dot, fg = SURF1, OVERLAY
+            text = "Checking Desk…" if not rs.get('error') else "Unknown: %s" % rs['error']
+        c.create_oval(20, 250, 34, 264, fill=dot, outline='')
+        c.create_text(42, 257, anchor='w', fill=fg, font=self.f_small,
+                      text=shorten(text, self.f_small, W - 56))
+
+        free = not st['busy'] and self.helper_up is not False
+        can_unlock = free and locked
+        can_lock = free and known and rs['brakes_open'] and not a.get('moving')
+        brake = self.desk_btns[arm]
+        if known and rs['brakes_open']:
+            brake.configure(text="LOCK", fg=TEXT, activebackground=SURF2, activeforeground=TEXT,
+                            state='normal' if can_lock else 'disabled',
+                            bg=SURF1 if can_lock else SURF0)
+        else:
+            brake.configure(text="UNLOCK & PRIME", fg=CRUST, activebackground='#c3f0bd',
+                            activeforeground=CRUST, state='normal' if can_unlock else 'disabled',
+                            bg=GREEN if can_unlock else SURF0)
+        self._draw_intervene(arm, a)
+
+    def _draw_intervene(self, arm, a):
+        """INTERVENE: usable while the run is live and this arm is not already in (or on
+        its way to) its recovery window."""
+        s = self.status if self.connected() else None
+        btn = self.intervene_btns[arm]
+        if a.get('intervene'):
+            btn.configure(text="STOPPING…", state='disabled', bg=SURF0)
+            return
+        usable = (s is not None and not s.get('stopping') and not s.get('shutdown')
+                  and not a.get('recovery') and a.get('state') is not None)
+        btn.configure(text="INTERVENE", state='normal' if usable else 'disabled',
+                      bg=PEACH if usable else SURF0)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--parent-pid', type=int, default=None,
                     help="Close when this process ends (full_sequence.py passes its pid).")
+    ap.add_argument('--grasp-dir', default=GRASP_DIR,
+                    help="Where the grasp planner writes its panels (default: %(default)s).")
+    ap.add_argument('--label-dir', default=LABEL_DIR,
+                    help="Where perception writes label_*.png (default: %(default)s).")
     args, _ = ap.parse_known_args(rospy.myargv()[1:])
 
     rospy.init_node('orio_dashboard', anonymous=True, disable_signals=True)
     root = tk.Tk()
-    Dashboard(root, parent_pid=args.parent_pid)
+    Dashboard(root, parent_pid=args.parent_pid, grasp_dir=args.grasp_dir, label_dir=args.label_dir)
     signal.signal(signal.SIGINT, lambda *_: root.destroy())
     signal.signal(signal.SIGTERM, lambda *_: root.destroy())
     root.mainloop()

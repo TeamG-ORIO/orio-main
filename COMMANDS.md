@@ -42,7 +42,7 @@ bash run_pickup-only.sh
 | `--confirm` | Ask before each pick: Enter to pick, `r` to try another grasp (default). |
 | `--straight-down` | Always move straight down to the item. |
 | `--offset-x M`, `--offset-y M` | Move every pick by this many metres. Use it if the cup always lands off by the same amount. |
-| `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.30. |
+| `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.10 (DexNet: 0.30). |
 | `--planner NAME` | `suction` (default) or `dexnet` (see `docs/DEXNET.md`). |
 | `--no-affordance` | Do not save the grasp pictures (a bit faster). |
 | `--no-logging` | Do not record this run. |
@@ -69,14 +69,26 @@ Press **Ctrl-C** to stop the run; the stack stays up for the next run (shared wi
 `run_pickup-only.sh`). To stop everything, run `bash stop_all.sh`.
 Each run saves a log to `logging/demo/<timestamp>.log`.
 
-- Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2).
+- Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2). It unlocks both arms
+  at the start (they move slightly); `--no-unlock` skips this.
 - Uses the ZED for label placement. If it won't start, replug it or use `--no-zed`.
 - Measures how high to put the label with Fast-FoundationStereo on the ZED's two images
   (the ZED's own depth is off). Build its image once:
   `docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs`
 - If an arm fails mid-run, a recovery window opens for it; the other keeps going.
-- When the bin is empty, it asks you to refill it. Enter to go on, `q` to finish.
-- A dashboard window shows both arms and both label zones live.
+- When the bin is empty, arm 1's card says so and arm 1 only takes labelled items to the
+  output. Refill the bin, then press **INTERVENE** on arm 1 and resume into `FETCH_INPUT`.
+- A dashboard window shows both arms and both label zones live, plus the latest grasp
+  (with its score) and label placement pictures. A red bar says why a grasp was turned
+  down. Click a picture to enlarge it.
+- Each run saves its grasp pictures to `logging/demo/<timestamp>.affordance/` and its label
+  pictures to `logging/demo/<timestamp>.labels/`, each with a folder of the camera images it
+  used. Nothing is saved under `orio_perception/` any more.
+- Each arm's card shows its brakes and any Desk error, with one brake button: **UNLOCK &
+  PRIME** while that arm is locked, **LOCK** while it is unlocked (and still).
+- **INTERVENE** on an arm's card stops both arms after their current move and opens that
+  arm's recovery window, where you choose what it does next. Both arms carry on when you
+  resume from it.
 - To swap items in the bin, press **Pause** on the dashboard (or Space). Both arms finish
   their move and stop. Anything an arm holds stays held. Press **Resume** when done. If
   arm 1 had already chosen an item in the bin, it chooses again.
@@ -97,16 +109,21 @@ bash run_full_demo.sh
 | `--confirm` | Ask before each bin pick: Enter to pick, `r` to try another grasp. |
 | `--no-label-vacuum-check` | Do not check the label cup; go on as if a label was picked up. |
 | `--no-pnp-vacuum-test` | Do not check the pick cup; go on as if the item was picked up. |
+| `--pnp-vacuum-min N` | Raw vacuum reading that counts as holding an item (default 800). Open air reads about 600, a good seal over 1000. |
 | `--skip-item-setup` | Skip the item window; use `test_item`, expiring in 7 days. |
 | `--straight-down` | Always move straight down to the item. |
+| `--speed X` | Run every arm move X times faster (default 1). Long moves are kept slow enough to stay safe. |
+| `--settle-s S` | Wait this long after each arm move before the next one (default 0 = no wait). |
+| `--no-flat-pick` | Pick from the bin with the old arm positions. By default arm 1 keeps joints 3 and 5 near 0 (less twisted) and turns the wrist as little as it can. A grasp it can't reach that way is skipped and the bin scanned again. |
 | `--offset-x M`, `--offset-y M` | Move every pick by this many metres. |
-| `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.30. |
+| `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.10 (DexNet: 0.30). |
 | `--planner NAME` | `suction` (default) or `dexnet` (see `docs/DEXNET.md`). |
 | `--checkpoint TAG` | Which grasp network to use (a run tag or a file path). |
 | `--no-zed` | Run without the ZED. Labels cannot be placed. |
 | `--no-rfid` | Do not start the RFID inventory node or register labels. |
 | `--no-dashboard` | Do not open the dashboard window. |
-| `--no-affordance` | Do not save the grasp pictures (a bit faster). |
+| `--no-unlock` | Do not unlock the arms at the start. |
+| `--no-affordance` | Do not save the grasp pictures (a bit faster). The dashboard then shows no grasp picture. |
 | `--no-logging` | Do not record this run. |
 | `--live` | Also show the recording in an open `rerun` viewer. |
 | `--fresh` | Stop everything first and start from scratch. |
@@ -118,6 +135,7 @@ bash run_full_demo.sh
 bash run_full_demo.sh                                              # the real demo
 bash run_full_demo.sh --no-zed                                     # picking only, no labelling
 bash run_full_demo.sh --no-label-vacuum-check --skip-item-setup   # test without labels
+bash run_full_demo.sh --offset-y -0.065 --offset-x 0.0 --no-rfid --no-label-vacuum-check
 ```
 
 ---
@@ -252,6 +270,9 @@ minute or two longer that one time. Already "Other": nothing changes.
 Desk credentials load automatically from `.env.local` (git-ignored) — see the script's
 docstring if it's missing on a fresh clone.
 
+During `run_full_demo.sh` you can also use the dashboard's **UNLOCK & PRIME** and
+**LOCK** buttons instead.
+
 **Base command:**
 
 ```bash
@@ -263,6 +284,7 @@ python3 src/devel_packages/orio_bringup/lock_arms.py
 | `[robots ...]` | Robot numbers to act on (`1`, `2`); default is all robots. |
 | `--unlock` | Open the brakes instead of closing them (arm moves slightly). Sets the end effector to "Other" first if needed. |
 | `--end-effector-status` | Only print which end effector Desk has selected. Touches nothing. |
+| `--status` | Only print whether the brakes are open and any active errors. Touches nothing. |
 | `-h`, `--help` | Show help and exit. |
 
 **Examples:**
