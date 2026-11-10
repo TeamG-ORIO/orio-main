@@ -18,10 +18,17 @@
          grab_fps: 15, not zedm.yaml's 30, to halve the USB3 traffic (the link drops out,
          docs/OPEN_ISSUES.md). 15 is the lowest the ZED-M captures at HD1080; the wrapper
          forces anything lower up to 15. pub_fps: 5, how often frames are published. It
-         saves compute, not USB bandwidth. -->
+         saves compute, not USB bandwidth.
+
+         exposure 10 / gain 0, not common.yaml's 50 / 30: at 50 / 30 most of a white item
+         in the label crop is pure white. From the 2026-11-06 sweep
+         (logging/camera_settings_sweep/zed_20261106_v4), 10 / 0 clips almost nothing with
+         the least noise. -->
     <arg name="depth_mode" default="NONE" />
     <arg name="grab_fps" default="15" />
     <arg name="pub_fps" default="5.0" />
+    <arg name="exposure" default="10" />
+    <arg name="gain" default="0" />
 
     <include file="$(find zed_wrapper)/launch/zedm.launch">
         <arg name="publish_urdf" value="false" />
@@ -32,4 +39,6 @@
     <param name="/zedm/zed_node/general/grab_frame_rate" value="$(arg grab_fps)" />
     <param name="/zedm/zed_node/general/pub_frame_rate" value="$(arg pub_fps)" />
     <param name="/zedm/zed_node/point_cloud_freq" value="$(arg pub_fps)" />
+    <param name="/zedm/zed_node/exposure" value="$(arg exposure)" />
+    <param name="/zedm/zed_node/gain" value="$(arg gain)" />
 </launch>
