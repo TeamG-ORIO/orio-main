@@ -26,7 +26,7 @@
 #                                                 #   each grasp AFTER the planner, in the pick loop
 #                                                 #   (defaults: $ORIO_PNP_OFFSET_X/Y, else 0)
 #   bash run_pickup-only.sh --min-q 0.2     # lowest planner score to accept a grasp (default:
-#                                                 #   $SUCTION_MIN_SCORE / $DEXNET_MIN_Q_VALUE, else 0.30)
+#                                                 #   $SUCTION_MIN_SCORE / $DEXNET_MIN_Q_VALUE, else 0.10, DexNet 0.30)
 #   bash run_pickup-only.sh --planner dexnet
 #                                                 # grasp planner: suction (default: the orio-grasping
 #                                                 #   network) or dexnet

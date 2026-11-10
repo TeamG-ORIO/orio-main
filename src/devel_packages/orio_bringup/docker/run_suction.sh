@@ -5,8 +5,11 @@
 #
 # Env:
 #   ORIO_GRASPING        orio-grasping repo (default ~/orio-grasping): code, config.toml, calibration
-#   SUCTION_CHECKPOINT   model checkpoint (default: the newest $ORIO_GRASPING/runs/*/best.pt)
-#   SUCTION_MIN_SCORE    lowest seal x hold x access the planner accepts (default 0.30)
+#   SUCTION_CHECKPOINT   model checkpoint (default: PINNED_CKPT below, else the newest
+#                        $ORIO_GRASPING/runs/*/best.pt)
+#   SUCTION_MIN_SCORE    lowest seal x hold x access the planner accepts (default 0.10)
+#   SUCTION_SEG_MAX_MASK_FRAC  drop segmentation masks bigger than this share of the table
+#                        window: the empty table comes back as one ~100% mask (default 0.5)
 #   SUCTION_ROT180       1 (default): driver frames are upside down relative to the calibration
 #   SUCTION_SEG_CHECKPOINT  RGB-D segmentation weights, for checkpoints with the "seg" input
 #                        channels such as seg_v1 (default: the newest
@@ -22,7 +25,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
 NAME="${SUCTION_CONTAINER_NAME:-orio_suction}"
 IMAGE="${SUCTION_IMAGE:-orio/suction:latest}"
 GRASPING="${ORIO_GRASPING:-$HOME/orio-grasping}"
-MIN_SCORE="${SUCTION_MIN_SCORE:-0.30}"
+MIN_SCORE="${SUCTION_MIN_SCORE:-0.10}"
 ROT180="${SUCTION_ROT180:-1}"
 
 if [ ! -d "$REPO/devel/lib/python3/dist-packages/custom_msgs" ]; then
@@ -33,7 +36,10 @@ if [ ! -f "$GRASPING/orio_grasping/model.py" ]; then
     echo "orio-grasping repo not found at $GRASPING (set ORIO_GRASPING)." >&2
     exit 1
 fi
-CKPT="${SUCTION_CHECKPOINT:-$(ls -t "$GRASPING"/runs/*/best.pt 2>/dev/null | head -1)}"
+# Pinned to seg_v2_deformables while the tilt-45 retrain (seg_v3_tilt45) is compared
+# against it; SUCTION_CHECKPOINT overrides. Remove the pin to go back to the newest run.
+PINNED_CKPT="$GRASPING/runs/2026-10-27_130723_seg_v2_deformables/best.pt"
+CKPT="${SUCTION_CHECKPOINT:-$([ -f "$PINNED_CKPT" ] && echo "$PINNED_CKPT" || ls -t "$GRASPING"/runs/*/best.pt 2>/dev/null | head -1)}"
 if [ -z "$CKPT" ] || [ ! -f "$CKPT" ]; then
     echo "No checkpoint: set SUCTION_CHECKPOINT or train one into $GRASPING/runs/." >&2
     exit 1
@@ -77,4 +83,5 @@ exec docker run -d --name "$NAME" --restart unless-stopped \
     python /opt/suction_grasp_planner.py _checkpoint:=/opt/checkpoint.pt \
         _min_score:="$MIN_SCORE" _rot180:="$ROT180_PARAM" \
         _seg_checkpoint:="$SEG_PARAM" _seg_model:="${SUCTION_SEG_MODEL:-RFDETRSegLarge}" \
-        _seg_threshold:="${SUCTION_SEG_THRESHOLD:-0.5}" __name:="${SUCTION_NODE_NAME:-suction_grasp_planner}"
+        _seg_threshold:="${SUCTION_SEG_THRESHOLD:-0.5}" \
+        _seg_max_mask_frac:="${SUCTION_SEG_MAX_MASK_FRAC:-0.5}" __name:="${SUCTION_NODE_NAME:-suction_grasp_planner}"
