@@ -2,7 +2,29 @@
     <!-- Xtion (ASUS PrimeSense) only. Split out of cameras.launch so bring-up can start it
          AFTER the ZED has settled — see zed_only.launch for why (USB Bus 001 contention).
          depth_registration aligns depth to the RGB frame (needed downstream). -->
+    <!-- hires:=true runs the colour camera at 1280x1024 (~8 fps over USB 2) on
+         /camera/rgb_hires; xtion_hires_relay rebuilds the usual 640x480 /camera/rgb from
+         it, so every consumer is unchanged, and the suction planner segments on the
+         high-res frame. Depth is 640x480 either way (the sensor's maximum). -->
+    <arg name="hires" default="false" />
+    <!-- Where the 640x480 grid starts in the 1280x1024 frame (it is 2x2 binned from
+         there); measured by matching frames of a still scene taken in both modes. -->
+    <arg name="hires_x0" default="5" />
+    <arg name="hires_y0" default="35" />
+
     <include file="$(find openni2_launch)/launch/openni2.launch">
         <arg name="depth_registration" value="true" />
+        <arg name="rgb" value="rgb_hires" if="$(arg hires)" />
+        <arg name="rgb_processing" value="false" if="$(arg hires)" />
     </include>
+
+    <group if="$(arg hires)">
+        <!-- openni2.launch does not pass the video modes through; this overrides the
+             driver's default (5 = 640x480@30) after it. 1 = 1280x1024@30. -->
+        <param name="/camera/driver/color_mode" value="1" />
+        <param name="/camera/hires_align/x0" value="$(arg hires_x0)" />
+        <param name="/camera/hires_align/y0" value="$(arg hires_y0)" />
+        <node pkg="manipulation" type="xtion_hires_relay.py" name="xtion_hires_relay"
+              ns="camera" output="screen" />
+    </group>
 </launch>
