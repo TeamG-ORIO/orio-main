@@ -2,8 +2,8 @@
 # Tear down everything run_pickup-only.sh OR run_full_demo.sh started (they share
 # the stack): the pick loop / sequence and pneumatics (if a run is still going), the
 # control PC processes on iam-doc, the label arm's stack on iam-luisa, the cameras,
-# Fast-FoundationStereo, the grasp planner, perception, the RFID node, the main container
-# and roscore.
+# Fast-FoundationStereo, the label-zone segmentation, the grasp planner, perception,
+# the RFID node, the main container and roscore.
 #
 #   bash stop_all.sh
 #
@@ -46,6 +46,7 @@ stack_kill_pids
 #    unless-stopped, so rm -f, not kill.
 log "removing containers…"
 docker rm -f "$ROS1_CONTAINER" "$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" \
+    "$LABEL_SEG_CONTAINER" \
     "$PERCEPTION_CONTAINER" orio_cameras >/dev/null 2>&1 || true
 rm -f "$STACK_DIR"/*.conf "$REPO/logging/dexnet_pnp/current.affordance" "$REPO/logging/demo/current.affordance"
 log "done - everything is stopped"

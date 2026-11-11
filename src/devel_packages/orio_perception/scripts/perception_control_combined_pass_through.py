@@ -21,7 +21,7 @@ from scipy.spatial.transform import Rotation as R_scipy
 # ROS Imports
 from sensor_msgs.msg import Image as RosImage, CameraInfo
 from geometry_msgs.msg import PoseArray, Pose
-from std_msgs.msg import Float32
+from std_msgs.msg import Float32, String
 from std_srvs.srv import Trigger, TriggerResponse
 from custom_msgs.srv import PlanDexnetGrasp
 
@@ -34,6 +34,7 @@ import groundingdino.datasets.transforms as T
 from grasp_solver import optimize_grasp_pose
 import dexnet_geometry
 from opt_label_location import opt_label_loc, is_safe_oriented_placement
+import label_zone_seg
 
 # The label footprint opt_label_loc tests a placement with (pixels in the crop): the
 # defaults of is_safe_oriented_placement, so the debug drawing matches the check.
@@ -132,6 +133,17 @@ FFS_INFO_TOPIC  = "/ffs/camera_info"
 # Half-width of the window whose median depth is used at the label pixel: one pixel can
 # be a hole or an outlier; 7x7 at 1080p is still well inside a label's footprint.
 LBL_DEPTH_WINDOW = 3
+# The items in the label zones come from label_seg_node.py (the grasp planner's RGB-D
+# segmentation model, in its own container). It is asked over topics (its image has no
+# std_srvs): a request names a Fast-FoundationStereo frame by its stamp, the answer comes
+# back with the request's id, and the instance image arrives with the frame's stamp.
+LBL_SEG_REQUEST_TOPIC = "/label_seg/request"
+LBL_SEG_RESULT_TOPIC = "/label_seg/result"
+LBL_SEG_INSTANCES_TOPIC = "/label_seg/instances"
+LBL_SEG_TIMEOUT_S = 15.0
+# What is in each zone after the last /compute_grasps_labelling or /scan_label_zones, as
+# JSON (see _zones_state): the item count and where the top item can be picked.
+LBL_ITEMS_TOPIC = "/label_zones/items"
 LBL_TF_YAML     = os.path.join(_REPO_ROOT, "src/devel_packages/manipulation/config/zed_to_label_tf.yaml")
 
 LBL_WIDTH, LBL_HEIGHT = 1920, 1080
@@ -139,8 +151,8 @@ LBL_FX, LBL_FY        = 1509.65, 1509.65
 LBL_CX, LBL_CY        = 964.33, 559.28
 DEPTH_UNIT_LBL        = 1000.0
 
-LBL_CROP_Y1, LBL_CROP_Y2 = 180, 1050
-LBL_CROP_X1, LBL_CROP_X2 = 160, 1860
+# The crop the label placement works in (zone 1 = its left half, zone 2 = its right half).
+LBL_CROP_X1, LBL_CROP_Y1, LBL_CROP_X2, LBL_CROP_Y2 = label_zone_seg.LBL_CROP_XYXY
 
 # LBL_CROP_Y1, LBL_CROP_Y2 = 0, 1080
 # LBL_CROP_X1, LBL_CROP_X2 = 0, 1920
@@ -211,14 +223,20 @@ class CombinedPerceptionNode:
         # time tells a fresh result from the one before the request.
         self.ffs_lefts = {}
         self.ffs_infos = {}
-        self.ffs_depth_msg = None
-        self.ffs_depth_rx = rospy.Time(0)
+        self.ffs_depths = {}
+        self.seg_instances = {}
+        self.seg_results = {}                  # request id -> label_seg_node.py's answer
+        self._seg_request_n = 0
+        self._label_lock = threading.Lock()   # one label-zone scan at a time
         rospy.Subscriber(FFS_LEFT_TOPIC, RosImage, self._keep_by_stamp(self.ffs_lefts),
                          queue_size=1, buff_size=2 ** 24)
         rospy.Subscriber(FFS_INFO_TOPIC, CameraInfo, self._keep_by_stamp(self.ffs_infos),
                          queue_size=1)
-        rospy.Subscriber(FFS_DEPTH_TOPIC, RosImage, self._on_ffs_depth, queue_size=1,
-                         buff_size=2 ** 24)
+        rospy.Subscriber(FFS_DEPTH_TOPIC, RosImage, self._keep_by_stamp(self.ffs_depths),
+                         queue_size=1, buff_size=2 ** 24)
+        rospy.Subscriber(LBL_SEG_INSTANCES_TOPIC, RosImage, self._keep_by_stamp(self.seg_instances),
+                         queue_size=1, buff_size=2 ** 24)
+        rospy.Subscriber(LBL_SEG_RESULT_TOPIC, String, self._on_seg_result, queue_size=5)
 
         # ── Publishers ────────────────────────────────────────────────────────
         self.target_frame = "panda_link0"
@@ -228,6 +246,8 @@ class CombinedPerceptionNode:
         self.lbl_world_pubs = {1: rospy.Publisher(LBL_WORLD_Z1_TOPIC, PoseArray, queue_size=1),
                                2: rospy.Publisher(LBL_WORLD_Z2_TOPIC, PoseArray, queue_size=1)}
         self.depth_query_pub = rospy.Publisher('/grasp_point_depth', Float32,   queue_size=1)
+        self.lbl_items_pub  = rospy.Publisher(LBL_ITEMS_TOPIC, String, queue_size=1)
+        self.lbl_seg_req_pub = rospy.Publisher(LBL_SEG_REQUEST_TOPIC, String, queue_size=5)
 
         # ── Grasp backend config ──────────────────────────────────────────────
         # grasp_backend was already read (and logged) above to decide model loading.
@@ -261,6 +281,7 @@ class CombinedPerceptionNode:
         # ── Services ──────────────────────────────────────────────────────────
         rospy.Service('/compute_grasps',           Trigger, self.handle_pnp)
         rospy.Service('/compute_grasps_labelling', Trigger, self.handle_labelling)
+        rospy.Service('/scan_label_zones',         Trigger, self.handle_scan)
         rospy.Service('/get_depth_at_grasp',       Trigger, self.handle_depth_at_grasp)
         rospy.loginfo("Both perception services ready.")
 
@@ -971,14 +992,25 @@ class CombinedPerceptionNode:
                 del store[min(store)]
         return cb
 
-    def _on_ffs_depth(self, msg):
-        self.ffs_depth_msg = msg
-        self.ffs_depth_rx = rospy.Time.now()
+    def _on_seg_result(self, msg):
+        try:
+            res = json.loads(msg.data)
+        except ValueError:
+            return
+        self.seg_results[res.get("id")] = res
+        while len(self.seg_results) > 10:
+            del self.seg_results[next(iter(self.seg_results))]
 
-    def _ffs_frames(self):
-        """(left RGB uint8, depth in metres with NaN where invalid, camera_info) of one
-        fresh Fast-FoundationStereo computation. Raises RuntimeError with the reason."""
-        t_req = rospy.Time.now()
+    def _label_scan(self):
+        """One fresh look at the label zones: (left RGB uint8, depth in metres with NaN
+        where invalid, camera_info, the segmentation's answer, instance image). Fast-
+        FoundationStereo computes a new frame; label_seg_node.py segments that frame (the
+        answer and the instance ids are its). Raises RuntimeError with the reason."""
+        t0 = time.time()
+        if self.lbl_seg_req_pub.get_num_connections() == 0:
+            raise RuntimeError(f"nothing is listening on {LBL_SEG_REQUEST_TOPIC}: is the label-zone "
+                               "segmentation running? (orio_bringup/docker/run_label_seg.sh)")
+        seen = set(self.ffs_depths)
         try:
             rospy.wait_for_service(FFS_COMPUTE_SRV, timeout=5.0)
             resp = rospy.ServiceProxy(FFS_COMPUTE_SRV, Trigger)()
@@ -987,21 +1019,107 @@ class CombinedPerceptionNode:
         if not resp.success:
             raise RuntimeError(f"{FFS_COMPUTE_SRV}: {resp.message}")
         rospy.loginfo("[FFS] %s", resp.message)
-        deadline = rospy.Time.now() + rospy.Duration(10.0)
-        while rospy.Time.now() < deadline:
-            depth_msg = self.ffs_depth_msg
-            if depth_msg is not None and self.ffs_depth_rx > t_req:
-                key = depth_msg.header.stamp.to_nsec()
-                if key in self.ffs_lefts and key in self.ffs_infos:
-                    color, depth = self.decode_ros_images(self.ffs_lefts[key], depth_msg)
-                    if color is None:
-                        raise RuntimeError("could not decode the FFS left/depth images")
-                    depth = depth.astype(np.float32)
-                    depth[~np.isfinite(depth) | (depth <= 0)] = np.nan
-                    return np.ascontiguousarray(color[:, :, :3]), depth, self.ffs_infos[key]
-            rospy.sleep(0.05)
-        raise RuntimeError(f"no {FFS_DEPTH_TOPIC} with its {FFS_LEFT_TOPIC} + "
-                           f"{FFS_INFO_TOPIC} within 10 s")
+        key, deadline = None, time.time() + 10.0
+        while key is None:
+            new = [k for k in self.ffs_depths if k not in seen and k in self.ffs_lefts and k in self.ffs_infos]
+            if new:
+                key = max(new)
+            elif time.time() > deadline:
+                raise RuntimeError(f"no {FFS_DEPTH_TOPIC} with its {FFS_LEFT_TOPIC} + "
+                                   f"{FFS_INFO_TOPIC} within 10 s")
+            else:
+                time.sleep(0.02)
+
+        self._seg_request_n += 1
+        req_id = "%d-%d" % (os.getpid(), self._seg_request_n)
+        self.lbl_seg_req_pub.publish(String(data=json.dumps({"id": req_id, "stamp_ns": key})))
+        deadline = time.time() + LBL_SEG_TIMEOUT_S
+        while req_id not in self.seg_results:
+            if time.time() > deadline:
+                raise RuntimeError(f"no answer on {LBL_SEG_RESULT_TOPIC} within {LBL_SEG_TIMEOUT_S:.0f} s")
+            time.sleep(0.01)
+        seg = self.seg_results.pop(req_id)
+        if not seg.get("ok"):
+            raise RuntimeError("label-zone segmentation: %s" % seg.get("error"))
+        deadline = time.time() + 5.0
+        while key not in self.seg_instances:   # published before the answer
+            if time.time() > deadline:
+                raise RuntimeError(f"the answer's masks never arrived on {LBL_SEG_INSTANCES_TOPIC}")
+            time.sleep(0.01)
+
+        color, depth = self.decode_ros_images(self.ffs_lefts[key], self.ffs_depths[key])
+        if color is None:
+            raise RuntimeError("could not decode the FFS left/depth images")
+        depth = depth.astype(np.float32)
+        depth[~np.isfinite(depth) | (depth <= 0)] = np.nan
+        inst = self.seg_instances[key]
+        instances = np.frombuffer(inst.data, dtype=np.uint16).reshape(inst.height, inst.width)
+        if depth.shape != color.shape[:2] or instances.shape != depth.shape:
+            raise RuntimeError(f"depth {depth.shape}, colour {color.shape[:2]} and instances "
+                               f"{instances.shape} differ in size")
+        seg["scan_seconds"] = round(time.time() - t0, 3)
+        rospy.loginfo("[Label] scan: zone 1 %d item(s), zone 2 %d item(s); %.2f s in all "
+                      "(segmentation %.2f s)", seg["zones"]["1"]["n_items"],
+                      seg["zones"]["2"]["n_items"], seg["scan_seconds"], seg["seconds"])
+        return np.ascontiguousarray(color[:, :, :3]), depth, self.ffs_infos[key], seg, instances
+
+    def _zones_state(self, seg, depth_full, info, source):
+        """What the arms need to know about the zones, JSON-able:
+        {"t", "stamp", "source", "zones": {"1": {"n_items", "top": {...} | None, "items":
+        [{"id", "score", "top", "px", "world", "height_mm"}]}, "2": ...}}. world is the
+        item's pick point (its centroid, at the height measured there) in the label arm's
+        base frame, None without a valid depth; top is the item to label and pick first."""
+        fx, fy, cx, cy = info.K[0], info.K[4], info.K[2], info.K[5]
+        zones = {}
+        for z, zone in seg["zones"].items():
+            items = []
+            for it in zone["items"]:
+                u, v = it["pick_px"]
+                z_cam, _n = self._sample_depth(depth_full, u, v)
+                world = None
+                if z_cam is not None:
+                    world = [float(w) for w in (self.tf_lbl @ np.array(
+                        [(u - cx) * z_cam / fx, (v - cy) * z_cam / fy, z_cam, 1.0]))[:3]]
+                items.append({"id": it["id"], "score": round(it["score"], 3), "top": it["top"],
+                              "px": [u, v], "world": world, "height_mm": it["height_mm"]})
+            top = next((it for it in items if it["top"]), None)
+            zones[z] = {"n_items": zone["n_items"], "top": top, "items": items,
+                        "votes": list(zone["votes"].values())}
+        return {"t": time.time(), "stamp": seg["stamp_ns"] / 1e9, "source": source, "zones": zones,
+                "scan_seconds": seg.get("scan_seconds")}
+
+    @staticmethod
+    def _draw_items(color_base, inst_crop, seg):
+        """The crop with every item shaded and outlined in its own colour, its number and
+        confidence beside it, and a cross on the top item's pick point. Returns (picture,
+        masks, boxes, phrases, scores) for the recorders."""
+        import cv2
+        palette = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
+        debug = color_base.copy()
+        masks, boxes, phrases, scores = [], [], [], []
+        for zone in seg["zones"].values():
+            for k, it in enumerate(zone["items"]):
+                mask = inst_crop == it["id"]
+                if not mask.any():
+                    continue
+                col = palette[len(masks) % len(palette)]
+                debug[mask] = (0.5 * debug[mask] + 0.5 * np.array(col)).astype(np.uint8)
+                cs, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                cv2.drawContours(debug, cs, -1, col, 2)
+                ys, xs = np.nonzero(mask)
+                top = it["top"] and zone["n_items"] > 1
+                phrase = "top item" if top else "item"
+                cv2.putText(debug, "%s %.2f" % (phrase, it["score"]), (int(xs.min()), max(int(ys.min()) - 6, 12)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
+                if it["top"]:
+                    u, v = it["pick_px"]
+                    cv2.drawMarker(debug, (int(u) - LBL_CROP_X1, int(v) - LBL_CROP_Y1), (255, 255, 255),
+                                   cv2.MARKER_CROSS, 24, 2)
+                masks.append(mask)
+                boxes.append([float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())])
+                phrases.append(phrase)
+                scores.append(float(it["score"]))
+        return debug, masks, boxes, phrases, scores
 
     @staticmethod
     def _sample_depth(depth, u, v, r=LBL_DEPTH_WINDOW):
@@ -1075,74 +1193,78 @@ class CombinedPerceptionNode:
         except Exception as exc:  # noqa: BLE001
             rospy.logwarn("Could not save the label result: %s", exc)
 
+    def handle_scan(self, req):
+        """/scan_label_zones: look at the zones without placing a label. Publishes the
+        zones' state on LBL_ITEMS_TOPIC and returns it as the message (JSON)."""
+        res = TriggerResponse()
+        with self._label_lock:
+            try:
+                color_full, depth_full, info, seg, instances = self._label_scan()
+            except RuntimeError as exc:
+                rospy.logerr("[Label] scan: %s", exc)
+                res.success, res.message = False, str(exc)
+                return res
+            record = self._label_record_start(color_full, depth_full, info)
+            state = self._zones_state(seg, depth_full, info, "scan")
+            color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
+            debug, _masks, _boxes, _phrases, _scores = self._draw_items(
+                color_base, instances[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2], seg)
+            self.lbl_items_pub.publish(String(data=json.dumps(state)))
+            self._label_record_finish(record, debug, {"success": True, "scan_only": True, "items": state["zones"]})
+            res.success, res.message = True, json.dumps(state)
+            return res
+
     def handle_labelling(self, req):
         res = TriggerResponse()
         rospy.loginfo("Labelling grasp computation triggered!")
+        with self._label_lock:
+            return self._handle_labelling(res)
 
+    def _handle_labelling(self, res):
+        import cv2
         try:
-            color_full, depth_full, info = self._ffs_frames()
+            color_full, depth_full, info, seg, instances = self._label_scan()
         except RuntimeError as exc:
             rospy.logerr("[Label] %s", exc)
             res.success = False
             res.message = str(exc)
             return res
-        if depth_full.shape != color_full.shape[:2]:
-            res.success = False
-            res.message = f"depth {depth_full.shape} and colour {color_full.shape[:2]} differ in size"
-            rospy.logerr("[Label] %s", res.message)
-            return res
         fx, fy, cx, cy = info.K[0], info.K[4], info.K[2], info.K[5]
         record = self._label_record_start(color_full, depth_full, info)
+        state = self._zones_state(seg, depth_full, info, "label")
 
         color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
+        inst_crop = instances[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
+        debug_lbl, best_masks, boxes_xyxy, phrases, logits = self._draw_items(color_base, inst_crop, seg)
 
-        best_masks, boxes_xyxy, phrases, logits = self._detect_and_segment(color_base)
-        if best_masks is None:
-            res.success = False
-            res.message = "GroundingDINO found 0 objects."
-            self._label_record_finish(record, color_base, {"success": False, "message": res.message})
-            return res
-
-        # Build joint segmentation mask for opt_label_loc
-        joint_mask = np.zeros_like(best_masks[0])
-        for mask in best_masks:
-            joint_mask = (joint_mask | mask).astype(np.uint8)
-
+        # The label goes on the top item of each zone, placed within that item's own mask
+        # (never across two items lying on each other).
         placements = {}
         for zone in (1, 2):
-            opt_x, opt_y, opt_ang = opt_label_loc(color_base, joint_mask, label_zone_num=zone, visualize=False)
+            top = state["zones"][str(zone)]["top"]
+            if top is None:
+                placements[zone] = None
+                continue
+            top_mask = (inst_crop == top["id"]).astype(np.uint8)
+            opt_x, opt_y, opt_ang = opt_label_loc(color_base, top_mask, label_zone_num=zone, visualize=False)
             placements[zone] = (None if opt_x is None
                                 else (opt_x, opt_y, self._normalise_label_angle(opt_ang)))
-
-        # Save debug image for labelling with SAM masks and GroundingDINO bounding boxes
-        import cv2
-        colors_list = [(255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 255, 255), (255, 255, 0, 255), (0, 255, 255, 255)]
-        n_ch = color_base.shape[2]
-        debug_lbl = color_base.copy()
-        overlay_lbl = debug_lbl.copy()
-        for i, mask in enumerate(best_masks):
-            overlay_lbl[mask] = colors_list[i % len(colors_list)][:n_ch]
-        debug_lbl = (debug_lbl * 0.5 + overlay_lbl * 0.5).astype(np.uint8)
-        for i, (x1, y1, x2, y2) in enumerate(boxes_xyxy):
-            color_rgb = tuple(int(v) for v in colors_list[i % len(colors_list)][:3])
-            cv2.rectangle(debug_lbl, (int(x1), int(y1)), (int(x2), int(y2)), color_rgb, 2)
-            label = f"{phrases[i]} {float(logits[i]):.2f}"
-            cv2.putText(debug_lbl, label, (int(x1), max(int(y1) - 6, 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color_rgb, 1)
 
         stamp = rospy.Time.now()
         zones_log, parts = {}, []
         for zone, dot in ((1, (255, 128, 0)), (2, (128, 0, 255))):
+            n_items = state["zones"][str(zone)]["n_items"]
             if placements[zone] is None:
                 zones_log[zone] = None
-                parts.append(f"Zone{zone}=FAIL (no placement)")
+                parts.append(f"Zone{zone}=FAIL (no item)" if n_items == 0
+                             else f"Zone{zone}=FAIL (no placement, {n_items} item(s))")
                 continue
             opt_x, opt_y, ang_deg = placements[zone]
             u, v = int(opt_x) + LBL_CROP_X1, int(opt_y) + LBL_CROP_Y1
             z_cam, n = self._sample_depth(depth_full, u, v)
             zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
                                'depth': float(z_cam) if z_cam is not None else 0.0,
-                               'px_full': [u, v], 'depth_px': n}
+                               'px_full': [u, v], 'depth_px': n, 'n_items': n_items}
             box = self._label_footprint(opt_x, opt_y, ang_deg)
             cv2.polylines(debug_lbl, [box], isClosed=True, color=dot, thickness=2)
             cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 4, dot, -1)
@@ -1179,13 +1301,14 @@ class CombinedPerceptionNode:
             msg.poses.append(p)
             self.lbl_world_pubs[zone].publish(msg)
 
-            rospy.loginfo("[Label] zone %d: px (%d, %d) depth %.3f m (%d px) -> camera "
+            rospy.loginfo("[Label] zone %d (%d item(s)): px (%d, %d) depth %.3f m (%d px) -> camera "
                           "(%.3f, %.3f, %.3f) -> world (%.3f, %.3f, %.3f), angle %.1f deg",
-                          zone, u, v, z_cam, n, cam[0], cam[1], cam[2],
+                          zone, n_items, u, v, z_cam, n, cam[0], cam[1], cam[2],
                           world[0], world[1], world[2], ang_deg)
             parts.append(f"Zone{zone}=OK world ({world[0]:.3f}, {world[1]:.3f}, {world[2]:.3f})")
             zones_log[zone]['world'] = [float(w) for w in world[:3]]
 
+        self.lbl_items_pub.publish(String(data=json.dumps(state)))
         res.success = any(part.startswith(f"Zone{z}=OK") for part in parts for z in (1, 2))
         res.message = ", ".join(parts)
         self._label_record_finish(record, debug_lbl, {
@@ -1193,12 +1316,10 @@ class CombinedPerceptionNode:
             "zones": {str(z): ({k: (float(v) if isinstance(v, (np.floating, np.integer)) else v)
                                 for k, v in zl.items()} if zl else None)
                       for z, zl in zones_log.items()},
-            "detections": [{"phrase": str(ph), "logit": float(lg), "box_xyxy": [float(c) for c in bx]}
-                           for ph, lg, bx in zip(phrases, logits, boxes_xyxy)]})
+            "items": state["zones"]})
         self.rlog.lbl(color_base, best_masks, boxes_xyxy, phrases, logits, ok=res.success,
                       reason=res.message, zones=zones_log)
         return res
-
 
 if __name__ == "__main__":
     try:

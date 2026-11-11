@@ -1311,6 +1311,12 @@ class Dashboard:
             box(c, cx, cy + 4, 26, label=zs['state'] == 'READY_FOR_PICKUP')
         else:
             rrect(c, cx - 28, cy - 16, cx + 28, cy + 22, 8, fill='', outline=SURF2, dash=(4, 4))
+        if zs['state'] != 'EMPTY':
+            # two or more items seen in the zone (a double pick), or one a pick left behind
+            if (zs.get('items') or 0) >= 2:
+                text = "%d items: %s" % (zs['items'], text[0].lower() + text[1:])
+            elif zs.get('leftover'):
+                text = "Left behind: %s" % (text[0].lower() + text[1:])
         c.create_text(cx, y1 - 18, text=text, fill=outline if zs['state'] != 'EMPTY' else SUBTEXT,
                       font=self.f_bodyb)
 

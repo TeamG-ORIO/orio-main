@@ -20,9 +20,16 @@ at start — with the pick path upgraded to everything dexnet_pnp.py learned:
     motions      : hard-timeout _move() wrapper — a dead control PC raises a
                    clear error instead of hanging frankapy forever
 
-Arm 2 (labelling) is unchanged from state_machine.py: label from the dispenser,
-pose from /compute_grasps_labelling via the ZED, collision-checked IK, RFID
-registration through /inventory/add_item (degrades to a warning if absent).
+Arm 2 (labelling): label from the dispenser, pose from /compute_grasps_labelling
+via the ZED, collision-checked IK, RFID registration through /inventory/add_item
+(degrades to a warning if absent).
+
+Two items in one zone (arm 1 lifted two out of the bin): perception counts the
+items in a zone and the label goes on the top one. Arm 1 then picks that one at
+its centroid rather than at the taught zone position, and looks at the zone
+again after every zone pick (/scan_label_zones): an item still there sends the
+zone back to NEEDS_LABEL; none left after two were seen opens arm 1's recovery
+window (it is probably carrying both). --no-zone-rescan turns the look off.
 
 Runs INSIDE the main docker container (needs its ROS + frankapy + smach + X11
 for the GUIs), from this directory:
@@ -82,6 +89,19 @@ INPUT_RETRACT_DISTANCE = 0.15  # m arm 1 backs out of the input bin after a pick
 PICK_UP_ZONE_GROUND_Z = 0.09
 LABEL_ZONE_GROUND_Z = 0.055
 LABEL_PLACE_CORRECTION_Z = 0.00  # To prevent excessive interference with the object while placing the label
+
+# ── ITEMS IN A LABEL ZONE ────────────────────────────────────────────────────────
+# Perception counts the items in each zone (label_seg_node.py) and gives the top item's
+# pick point (its centroid, at the measured height) in the label arm's base frame. Arm 1
+# picks there, straight down, when a zone holds two or more items or an item arm 1 did
+# not put down itself; a single item it dropped is picked at the taught zone position.
+# CELL_FILE has the label arm's base in arm 1's frame, to carry the point across.
+CELL_FILE = "../orio_logging/config/cell.yaml"
+# A pick point farther than this (m, XY) from the taught zone position is refused: it is
+# either a wrong detection or beyond where arm 1 placed anything.
+ZONE_PICK_MAX_OFFSET = 0.15
+ZONE_NUMBER = {'A': 1, 'B': 2}
+ZONE_TAG = {'A': "LABEL_ZONE_1", 'B': "LABEL_ZONE_2"}
 
 POSES_FILE        = "joint_angles.json"
 TARGET_POSES_FILE = "Target_Task_Poses.json"
@@ -621,6 +641,10 @@ def _rot_err(R, Rd):
     return 0.5 * np.array([E[2, 1] - E[1, 2], E[0, 2] - E[2, 0], E[1, 0] - E[0, 1]])
 
 
+class ZoneEmpty(RuntimeError):
+    """Perception saw no item at all in a zone that was to be labelled."""
+
+
 class RobotHardware:
     """Wrapper holding Franka interfaces, IK, Vision, and poses."""
 
@@ -683,6 +707,19 @@ class RobotHardware:
         rospy.Subscriber("/label_pose_z1", PoseArray, self._label_pose_callback_z1, queue_size=1)
         rospy.Subscriber("/label_pose_z2", PoseArray, self._label_pose_callback_z2, queue_size=1)
 
+        # What perception last saw in the zones (JSON, see perception's _zones_state)
+        self.label_zone_items = None
+        rospy.Subscriber("/label_zones/items", String, self._zone_items_callback, queue_size=1)
+        self.label_zone_info = {}    # zone number -> that zone's entry at the last label pose
+        # The label arm's base in arm 1's frame: (yaw rotation, translation)
+        import yaml
+        with open(CELL_FILE) as f:
+            cell = yaml.safe_load(f)['arm2_in_arm1']
+        self.arm2_in_arm1 = (R.from_euler('z', float(cell['yaw_deg']), degrees=True).as_matrix(),
+                             np.asarray(cell['xyz'], dtype=float))
+        log.info("[Hardware] Label arm base in arm 1's frame: xyz=%s yaw=%.1f deg (%s)",
+                 cell['xyz'], float(cell['yaw_deg']), CELL_FILE)
+
         # Stored dynamically per cycle
         self.current_fetch_depth = 0.0
         self.label_measured_z = {}   # zone number -> item top z the label arm last measured
@@ -711,6 +748,28 @@ class RobotHardware:
 
     def _pose_callback(self, msg):
         self.latest_pose_msg = msg
+
+    def _zone_items_callback(self, msg):
+        try:
+            self.label_zone_items = json.loads(msg.data)
+        except ValueError as exc:
+            log.warning("[Zones] unreadable /label_zones/items message: %s", exc)
+
+    def label_to_arm1(self, xyz):
+        """A point in the label arm's base frame, in arm 1's."""
+        rot, t = self.arm2_in_arm1
+        return [float(v) for v in rot @ np.asarray(xyz, dtype=float) + t]
+
+    def scan_zones(self):
+        """Have perception look at the label zones (no label pose). Returns its state
+        ({"zones": {"1": {"n_items", "top", ...}, "2": ...}}), or None if the scan failed."""
+        if not call_trigger_service('/scan_label_zones'):
+            return None
+        try:
+            return json.loads(_service_messages.get('/scan_label_zones', ''))
+        except ValueError:
+            log.warning("[Zones] /scan_label_zones answered without a readable state")
+            return None
 
     def _label_pose_callback_z1(self, msg):
         self.latest_label_pose_z1 = msg
@@ -1215,8 +1274,13 @@ class RobotHardware:
                 self.latest_label_pose_z2 = None
 
             miss = None
+            empty = False
+            self.label_zone_items = None
             if not call_trigger_service('/compute_grasps_labelling'):
                 miss = "service /compute_grasps_labelling failed"
+            elif "Zone%d=FAIL (no item)" % zone_number in _service_messages.get('/compute_grasps_labelling', ''):
+                miss = "perception found no item in zone %d" % zone_number
+                empty = True
             elif "Zone%d=FAIL" % zone_number in _service_messages.get('/compute_grasps_labelling', ''):
                 # perception found no placement in this zone: no pose is coming, don't wait for it
                 miss = "perception found no label placement in zone %d" % zone_number
@@ -1234,8 +1298,9 @@ class RobotHardware:
                 # drop, or the item settling): look again a moment later.
                 misses += 1
                 if misses >= LABEL_POSE_ATTEMPTS:
-                    raise RuntimeError("%s (%d attempts, %.0f s apart)"
-                                       % (miss[0].upper() + miss[1:], misses, LABEL_POSE_RETRY_S))
+                    raise (ZoneEmpty if empty else RuntimeError)(
+                        "%s (%d attempts, %.0f s apart)"
+                        % (miss[0].upper() + miss[1:], misses, LABEL_POSE_RETRY_S))
                 log.warning("[compute_label_joints] %s (attempt %d/%d); looking again in %.0f s",
                             miss, misses, LABEL_POSE_ATTEMPTS, LABEL_POSE_RETRY_S)
                 rospy.sleep(LABEL_POSE_RETRY_S)
@@ -1271,6 +1336,12 @@ class RobotHardware:
                 raise RuntimeError(err_msg)
 
             self.label_measured_z[zone_number] = float(p.position.z)   # item top, for arm 1's retrieve
+            # The zone's items in the same look (published just before the service answered)
+            deadline = time.time() + 1.0
+            while self.label_zone_items is None and time.time() < deadline:
+                rospy.sleep(0.05)
+            state = self.label_zone_items or {}
+            self.label_zone_info[zone_number] = (state.get('zones') or {}).get(str(zone_number))
             task_ori_Mat = R.from_quat(task_ori).as_matrix()
             rpy = R.from_quat(task_ori).as_euler('xyz', degrees=True)
             log.info("[compute_label_joints] Zone %d received pose: x=%.4f y=%.4f z=%.4f  RPY r=%.2f p=%.2f y=%.2f deg",
@@ -1363,7 +1434,7 @@ class RobotHardware:
         raise RuntimeError(f"[IK] no collision-free configuration for target={np.round(task_pos, 4)} "
                            f"after {max_attempts} attempts")
 
-    def pose_to_joints(self, location_tag, depth_offset=0.0, flat=False):
+    def pose_to_joints(self, location_tag, depth_offset=0.0, flat=False, xy=None):
         """Resolve a location tag to joint angles via IK.
 
         Args:
@@ -1371,6 +1442,8 @@ class RobotHardware:
             depth_offset (float): Offset added to the z-translation before IK (default 0.0).
             flat (bool): prefer the solution with joints 3 and 5 at 0 (see _flat_ik), so
                 the same pose always gets the same untwisted arm; falls back to ikpy.
+            xy: (x, y) to use instead of the tag's, keeping its height and orientation
+                (a pick point inside a label zone).
 
         Returns:
             np.ndarray: 7-element joint angle array compatible with goto_joints().
@@ -1384,6 +1457,8 @@ class RobotHardware:
 
         entry = task_poses[location_tag]
         tx, ty, tz = entry["translation"]
+        if xy is not None:
+            tx, ty = float(xy[0]), float(xy[1])
         tz += depth_offset
         target_pos = [tx, ty, tz]
         target_rot = np.array(entry["rotation"])
@@ -1693,6 +1768,19 @@ class ZoneManager:
         self.depths = {'A': 0.0, 'B': 0.0}          # Tracks object depth per zone
         self.measured_z = {'A': None, 'B': None}    # item top z measured by the ZED before labelling
         self.items = {'A': None, 'B': None}         # (name, expiry) of the item in the zone
+        # From perception's look at the zone before labelling (ApplyLabel):
+        self.n_items = {'A': 0, 'B': 0}             # items seen in the zone (0 = not looked at yet)
+        self.top_pick = {'A': None, 'B': None}      # the top item's pick point [x, y, z], arm 1's frame
+        # True when the zone's item was left behind by a pick (it came in under or beside
+        # another one): arm 1 did not put it where it lies.
+        self.leftover = {'A': False, 'B': False}
+
+    def reset_items(self, zone):
+        """Forget what was seen in a zone (a new drop, the zone emptied, or its state set
+        by hand): the next pick is at the taught position unless a look says otherwise."""
+        self.n_items[zone] = 0
+        self.top_pick[zone] = None
+        self.leftover[zone] = False
 
     def set_state(self, zone, new_state):
         """Set zone state and log the transition."""
@@ -1882,6 +1970,8 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
         def apply_zone_changes():
             with manager.lock:
                 for zone in ['A', 'B']:
+                    if manager.states[zone] != zone_vars[zone].get():
+                        manager.reset_items(zone)
                     manager.states[zone] = zone_vars[zone].get()
                     manager.busy[zone] = False
             log.info("[Recovery] Zones updated: %s  busy: %s", manager.states, manager.busy)
@@ -2052,6 +2142,7 @@ class RecoveryBoard:
             log.info("[%s Recovery] zone %s set from the dashboard", arm.upper(), cmd['zone'])
             with manager.lock:
                 manager.set_state(cmd['zone'], cmd['state'])
+                manager.reset_items(cmd['zone'])
 
     def _run_action(self, arm, action):
         fa, vacuum_on, vacuum_off = self.ctx[arm]
@@ -2532,6 +2623,7 @@ class DropToZone(smach.State):
         arm_status.set('arm1', target=target_zone)
         manager.depths[target_zone] = userdata.item_depth
         manager.measured_z[target_zone] = None
+        manager.reset_items(target_zone)
 
         try:
             arm1 = hardware.pick_and_place_arm
@@ -2581,10 +2673,92 @@ class DropToZone(smach.State):
 
 
 class RetrieveFromZone(smach.State):
+    """Pick the labelled item out of a zone, then look at the zone again.
+
+    Where: a single item arm 1 dropped is picked at the taught zone position. With two or
+    more items in the zone (a double pick), or an item a pick left behind, it is the top
+    item's centroid as perception measured it, straight down, so the cup does not come
+    down on both items again.
+
+    After the pick the zone is scanned (unless --no-zone-rescan): an item still there
+    sends the zone back to NEEDS_LABEL; none after two or more were seen means arm 1 is
+    probably carrying both, and the recovery window opens with the item still held."""
+
     def __init__(self):
         smach.State.__init__(self, outcomes=['picked', 'no_items', 'failed'],
                              output_keys=['retrieved_depth', 'retrieved_zone',
                                           'recovery_failed_state', 'recovery_error_msg'])
+
+    def _pick_point(self, zone, depth_taught):
+        """(xy or None for the taught position, pick height) for this zone's pick."""
+        n_items, top = manager.n_items[zone], manager.top_pick[zone]
+        if n_items < 2 and not manager.leftover[zone]:
+            return None, depth_taught
+        why = "%d items in the zone" % n_items if n_items >= 2 else "an item left by the last pick"
+        if top is None:
+            raise RuntimeError("Zone %s has %s, but perception gave no pick point for the top "
+                               "item (no depth there?)" % (zone, why))
+        with open(TARGET_POSES_FILE) as f:
+            tx, ty, _ = json.load(f)[ZONE_TAG[zone]]["translation"]
+        off = float(np.hypot(top[0] - tx, top[1] - ty))
+        if off > ZONE_PICK_MAX_OFFSET:
+            raise RuntimeError("Zone %s: the top item's pick point (%.3f, %.3f) is %.0f mm from the "
+                               "zone position (%.3f, %.3f), over the %.0f mm allowed"
+                               % (zone, top[0], top[1], 1000 * off, tx, ty, 1000 * ZONE_PICK_MAX_OFFSET))
+        log.info("[RetrieveFromZone] Zone %s: %s, picking the top item at its centroid "
+                 "(%.3f, %.3f, z %.4f), %.0f mm from the zone position", zone, why,
+                 top[0], top[1], top[2], 1000 * off)
+        events.emit('zone_pick', zone, n_items=n_items, leftover=manager.leftover[zone],
+                    pos=list(top), offset_m=off)
+        return (top[0], top[1]), top[2]
+
+    def _after_pick(self, zone, n_before):
+        """Scan the zone arm 1 just picked from and set its state. Raises when two or more
+        items were seen before the pick and nothing is left (both lifted?)."""
+        left = 0
+        if opts.no_zone_rescan:
+            log.info("[RetrieveFromZone] Zone %s not looked at after the pick (--no-zone-rescan)", zone)
+        else:
+            arm_status.set('arm1', activity="Checking zone %s for another item (ZED)" % zone)
+            scan = hardware.scan_zones()
+            entry = ((scan or {}).get('zones') or {}).get(str(ZONE_NUMBER[zone]))
+            if entry is None:
+                if n_before >= 2:
+                    with manager.lock:
+                        manager.items[zone] = None
+                        manager.measured_z[zone] = None
+                        manager.reset_items(zone)
+                        manager.set_state(zone, 'EMPTY')
+                        manager.busy[zone] = False
+                    raise RuntimeError(
+                        "Zone %s held %d items before this pick and could not be looked at "
+                        "afterwards (the scan failed). An unlabelled item may be left in the "
+                        "zone or attached to the held one. The zone is set EMPTY: set it to "
+                        "NEEDS_LABEL if an item is still there, then resume with PLACE_OUTPUT."
+                        % (zone, n_before))
+                log.warning("[RetrieveFromZone] Zone %s could not be looked at after the pick "
+                            "(the scan failed); taking it as empty", zone)
+            else:
+                left = int(entry['n_items'])
+        events.emit('zone_rescan', zone, n_before=n_before, n_left=left,
+                    rescan=not opts.no_zone_rescan)
+        with manager.lock:
+            manager.items[zone] = None     # a label for an item left here uses the current item setting
+            manager.measured_z[zone] = None
+            manager.reset_items(zone)
+            if left >= 1:
+                log.warning("[RetrieveFromZone] Zone %s still holds %d item(s) after the pick: "
+                            "it goes back to be labelled", zone, left)
+                manager.leftover[zone] = True
+                manager.set_state(zone, 'NEEDS_LABEL')
+            else:
+                manager.set_state(zone, 'EMPTY')
+            manager.busy[zone] = False
+        if left == 0 and n_before >= 2 and not opts.no_zone_rescan:
+            raise RuntimeError(
+                "Zone %s held %d items before this pick and is empty after it: arm 1 is "
+                "probably carrying both, and only one has a label. Take the unlabelled item "
+                "off the cup, then resume with PLACE_OUTPUT." % (zone, n_before))
 
     def _run(self, userdata):
         log.info("[RetrieveFromZone] Entering state")
@@ -2615,19 +2789,20 @@ class RetrieveFromZone(smach.State):
             depth = measured
         userdata.retrieved_depth = carried   # the output drop height stays as before
         userdata.retrieved_zone = target_zone
-        log.info("[RetrieveFromZone] Picking from zone %s (depth=%.4f, %s; carried over %.4f)",
-                 target_zone, depth, 'ZED' if measured is not None else 'carried over', carried)
+        n_before = manager.n_items[target_zone]
 
         try:
+            xy, depth = self._pick_point(target_zone, depth)
+            log.info("[RetrieveFromZone] Picking from zone %s (depth=%.4f, %s; carried over %.4f)",
+                     target_zone, depth,
+                     'top item centroid' if xy is not None else
+                     ('ZED' if measured is not None else 'carried over'), carried)
             arm1 = hardware.pick_and_place_arm
-            if target_zone == 'A':
-                int_joints = hardware.pose_to_joints("L1_INTER", depth_offset=depth)
-                pre_pick_joints = hardware.pose_to_joints("LABEL_ZONE_1", depth_offset=depth + APPROACH_DISTANCE)
-                pick_joints = hardware.pose_to_joints("LABEL_ZONE_1", depth_offset=depth - 0.01)
-            else:
-                int_joints = hardware.pose_to_joints("L2_INTER", depth_offset=depth)
-                pre_pick_joints = hardware.pose_to_joints("LABEL_ZONE_2", depth_offset=depth + APPROACH_DISTANCE)
-                pick_joints = hardware.pose_to_joints("LABEL_ZONE_2", depth_offset=depth - 0.01)
+            tag = ZONE_TAG[target_zone]
+            int_joints = hardware.pose_to_joints("L1_INTER" if target_zone == 'A' else "L2_INTER",
+                                                 depth_offset=depth)
+            pre_pick_joints = hardware.pose_to_joints(tag, depth_offset=depth + APPROACH_DISTANCE, xy=xy)
+            pick_joints = hardware.pose_to_joints(tag, depth_offset=depth - 0.01, xy=xy)
             log.info("[RetrieveFromZone] %s pre_pick=%s pick=%s", target_zone,
                      np.round(pre_pick_joints, 4), np.round(pick_joints, 4))
             hardware._move('arm1', arm1.goto_joints, int_joints, duration=3, desc="transit to zone")
@@ -2643,17 +2818,15 @@ class RetrieveFromZone(smach.State):
             hardware._move('arm1', arm1.goto_joints, int_joints, duration=2, desc="transit from zone")
 
             hardware.assert_vacuum('pnp', True)
-
-            with manager.lock:
-                manager.set_state(target_zone, 'EMPTY')
-                manager.items[target_zone] = None
-                manager.busy[target_zone] = False
-            log.info("[RetrieveFromZone] Exiting: picked (zone %s)", target_zone)
-            return 'picked'
         except Exception:
             with manager.lock:
                 manager.busy[target_zone] = False
             raise
+
+        # Arm 1 is clear of the zone here, holding the item: look at what is left.
+        self._after_pick(target_zone, n_before)
+        log.info("[RetrieveFromZone] Exiting: picked (zone %s)", target_zone)
+        return 'picked'
 
     def execute(self, userdata):
         return _safe_execute('RETRIEVE', self._run, userdata)
@@ -2774,9 +2947,35 @@ class ApplyLabel(smach.State):
             log.info("[ApplyLabel] Applying label to zone %s (zone_number=%d)",
                      target_zone, zone_number)
             hardware.label_measured_z.pop(zone_number, None)
-            pre_joints, final_joints = hardware.compute_label_joints(
-                zone_number, arm1_depth=manager.depths[target_zone])
+            hardware.label_zone_info.pop(zone_number, None)
+            try:
+                pre_joints, final_joints = hardware.compute_label_joints(
+                    zone_number, arm1_depth=manager.depths[target_zone])
+            except ZoneEmpty as exc:
+                if not manager.leftover[target_zone]:
+                    raise
+                # The item seen after arm 1's pick is not there now (it was the arm, or the
+                # item was taken out by hand): nothing to label.
+                log.warning("[ApplyLabel] Zone %s was to be labelled again but is empty (%s): "
+                            "setting it EMPTY", target_zone, exc)
+                with manager.lock:
+                    manager.reset_items(target_zone)
+                    manager.set_state(target_zone, 'EMPTY')
+                    manager.busy[target_zone] = False
+                arm_status.set('arm2', target=None)
+                return 'wait'
             manager.measured_z[target_zone] = hardware.label_measured_z.get(zone_number)
+            # What the same look found in the zone: the label goes on the top item, and
+            # arm 1 picks that one (RetrieveFromZone).
+            info = hardware.label_zone_info.get(zone_number) or {}
+            top_world = (info.get('top') or {}).get('world')
+            manager.n_items[target_zone] = int(info.get('n_items') or 1)
+            manager.top_pick[target_zone] = hardware.label_to_arm1(top_world) if top_world else None
+            if manager.n_items[target_zone] >= 2:
+                log.warning("[ApplyLabel] Zone %s holds %d items: labelling the top one",
+                            target_zone, manager.n_items[target_zone])
+            events.emit('zone_items', target_zone, n_items=manager.n_items[target_zone],
+                        leftover=manager.leftover[target_zone], top_pick=manager.top_pick[target_zone])
             log.info("[ApplyLabel] IK pre_joints=%s  final_joints=%s",
                      np.round(pre_joints, 4), np.round(final_joints, 4))
 
@@ -2883,6 +3082,9 @@ def _parse_args():
     parser.add_argument('--no-rfid', action='store_true',
                         help="Do not register labels with the RFID inventory node "
                              "(skips the 5 s wait for /inventory/add_item on each label).")
+    parser.add_argument('--no-zone-rescan', action='store_true',
+                        help="Do not look at a label zone again after arm 1 picks from it "
+                             "(the zone then always counts as empty, as before).")
     parser.add_argument('--no-dashboard', action='store_true',
                         help="Do not open the live dashboard window (status + Pause). "
                              "The status topic and pause services stay up.")
@@ -2919,7 +3121,8 @@ def _status_snapshot():
     """Everything the dashboard shows, as one JSON-able dict."""
     with manager.lock:
         zones = {z: {'state': manager.states[z], 'busy': manager.busy[z] or None,
-                     'depth': float(manager.depths[z])} for z in ('A', 'B')}
+                     'depth': float(manager.depths[z]), 'items': manager.n_items[z],
+                     'leftover': manager.leftover[z]} for z in ('A', 'B')}
     arms = arm_status.snapshot()
     for arm, rec in (('arm1', recovery_event_arm1), ('arm2', recovery_event_arm2)):
         arms[arm].update(state=_active_state(_machines.get(arm)),

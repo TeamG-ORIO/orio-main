@@ -17,6 +17,7 @@
 #               luisa_bringup luisa_kill_session luisa_kill_stack (robot 2, iam-luisa)
 #   services    main_container_bringup xtion_bringup zed_bringup zed_stop
 #               planner_resolve planner_bringup perception_bringup ffs_bringup ffs_wait
+#               label_seg_bringup label_seg_wait
 #               recorder_start recorder_flush pneumatics_start pneumatics_wait vacuum_off
 #   run         affordance_panels_setup run_log_paths unlock_robot preflight_check
 #               run_in_container stop_run_in_container install_cleanup_traps
@@ -50,6 +51,7 @@ DEXNET_CONTAINER="${DEXNET_CONTAINER_NAME:-orio_dexnet}"
 SUCTION_CONTAINER="${SUCTION_CONTAINER_NAME:-orio_suction}"
 PERCEPTION_CONTAINER="${ORIO_PERCEPTION_CONTAINER:-orio_perception}"
 FFS_CONTAINER="${ORIO_FFS_CONTAINER:-orio_ffs}"
+LABEL_SEG_CONTAINER="${ORIO_LABEL_SEG_CONTAINER:-orio_label_seg}"
 
 # iam-doc control PC (robot 1, the pick-and-place arm): franka-interface + the ROS action
 # server, started over ssh so their output is captured (frankapy's start_control_pc.sh
@@ -789,6 +791,28 @@ ffs_bringup() {
     fi
 }
 
+# The label-zone segmentation node: finds the items in the label zones for perception's
+# labelling and scan services. It answers on a topic (its image has no std_srvs), which it
+# advertises once its model is loaded.
+label_seg_bringup() {
+    local conf="ckpt=${ORIO_LABEL_SEG_CHECKPOINT:-rgbd_v3_deformables} six_pass"
+    stack_service label_seg "$LABEL_SEG_CONTAINER" "$conf" \
+        bash -lc "bash '$DOCKER_DIR/run_label_seg.sh' && docker logs -f $LABEL_SEG_CONTAINER"
+    if [ "$SERVICE_REUSED" -eq 1 ]; then
+        log "label-zone segmentation already running ($conf)."
+    else
+        log "starting label-zone segmentation ($conf)…"
+    fi
+}
+label_seg_wait() {
+    wait_for_topic /label_seg/result 180 && return 0
+    rm -f "$STACK_DIR/label_seg.conf"   # so the next run restarts it instead of reusing it
+    echo
+    log "/label_seg/result did not come up in 180s — check the [label_seg] lines above"
+    log "(image built? checkpoint found? see src/devel_packages/orio_bringup/docker/run_label_seg.sh)."
+    log "Aborting: without it the label zones cannot be looked at."
+    return 1
+}
 ffs_wait() {
     stack_wait_service ffs /ffs/compute 180 && return 0
     echo

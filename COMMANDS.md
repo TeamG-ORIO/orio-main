@@ -72,6 +72,11 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
 - Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2). It unlocks both arms
   at the start (they move slightly); `--no-unlock` skips this.
 - Uses the ZED for label placement. If it won't start, replug it or use `--no-zed`.
+- Counts the items in each label zone. With two items in a zone (arm 1 lifted two), the
+  top one gets the label and arm 1 picks that one; the other is then labelled too. After
+  every zone pick arm 1 waits about half a second while the zone is looked at again. If a
+  zone held two items and is empty after the pick, arm 1 stops and asks for help: it is
+  probably carrying both.
 - Measures how high to put the label with Fast-FoundationStereo on the ZED's two images
   (the ZED's own depth is off). Build its image once:
   `docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs`
@@ -128,6 +133,7 @@ bash run_full_demo.sh
 | `--planner NAME` | `suction` (default) or `dexnet` (see `docs/DEXNET.md`). |
 | `--checkpoint TAG` | Which grasp network to use (a run tag or a file path). |
 | `--no-zed` | Run without the ZED. Labels cannot be placed. |
+| `--no-zone-rescan` | Do not look at a label zone again after arm 1 picks from it. |
 | `--no-rfid` | Do not start the RFID inventory node or register labels. |
 | `--no-inventory` | Do not open the inventory window. |
 | `--no-shelf-reader` | Register labels but do not use the Impinj shelf reader. |
@@ -230,6 +236,34 @@ read. It prints how much of the depth image was valid and the median range, whic
 quick way to tell whether the camera is actually seeing the bin. If the Xtion does not
 start after five tries it says so and stops; see `docs/TROUBLESHOOTING.md` for the
 camera's known start-up failure.
+
+---
+
+## `snap_label_zones.sh`
+
+Saves pictures (colour and depth) of the two label zones for testing the label perception
+offline. You place items in both zones by hand and press Enter; it takes one picture, then
+asks for the next setup. No arm moves. It starts the ZED and the stereo depth if they are
+not running and leaves them running.
+
+**Base command:**
+
+```bash
+bash snap_label_zones.sh
+```
+
+| Option | Description |
+| --- | --- |
+| `--single` | One item in each zone, any items. No names asked; it keeps going until you quit. Without it: two overlapping items in each zone, 10 pictures per item type. |
+| `--setups N` | Pictures per item type (not with `--single`). Default: 10. |
+| `--items a,b,c` | Item type names up front (not with `--single`). Without it the script asks for each name. |
+| `[outdir]` | Where to save. Default: `logging/label_zones/`. |
+
+While it runs: Enter takes a picture, `u` removes the last one, `n` moves to the next item
+type, `q` quits. Run it again later and it carries on from what is already saved.
+
+Pictures go to `<outdir>/double/<item>/setup_NN/`, or `<outdir>/single/setup_NN/` with `--single`. Look at `preview.png`
+there to check a picture; `zone1.png` and `zone2.png` are the two zones on their own.
 
 ---
 

@@ -42,6 +42,8 @@
 #                                           #   one with joints 3 and 5 nearest 0
 #   bash run_full_demo.sh --no-zed        # skip the ZED: labelling poses will time out
 #                                           #   (arm 2 will sit in its recovery GUI)
+#   bash run_full_demo.sh --no-zone-rescan  # do not look at a label zone again after arm 1
+#                                           #   picks from it (it then counts as empty)
 #   bash run_full_demo.sh --no-rfid       # skip the RFID node and label registration
 #   bash run_full_demo.sh --no-inventory  # RFID on, but no inventory window
 #   bash run_full_demo.sh --no-shelf-reader  # RFID labels only: skip the Impinj shelf
@@ -118,7 +120,8 @@ while [ $# -gt 0 ]; do
         --speed)         SM_EXTRA+=(--speed "${1:?--speed needs a factor}"); shift ;;
         --settle-s)      SM_EXTRA+=(--settle-s "${1:?--settle-s needs seconds}"); shift ;;
         --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
-        --no-zed)        USE_ZED=0 ;;
+        --no-zed)        USE_ZED=0; SM_EXTRA+=(--no-zone-rescan) ;;
+        --no-zone-rescan) SM_EXTRA+=(--no-zone-rescan) ;;
         --no-rfid)       USE_RFID=0; SM_EXTRA+=(--no-rfid) ;;
         --no-inventory)  INVENTORY_WINDOW=0 ;;
         --no-shelf-reader) RFID_ARGS=--no-shelf ;;
@@ -140,7 +143,7 @@ while [ $# -gt 0 ]; do
         --checkpoint)    SUCTION_CKPT="${1:?--checkpoint needs a run tag or a path}"; shift ;;
         --checkpoint=*)  SUCTION_CKPT="${arg#*=}" ;;
         --fresh)         FRESH=1 ;;
-        -h|--help) sed -n '2,64p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,66p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
@@ -164,8 +167,8 @@ run_log_paths demo
 log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|\[Pause\]|\[Stop\]|\[Dashboard\]|\[desk\]' 0 \
     '\[ApplyLabel\] (Entering state \(zones|No zone needs label)|\[TaskSelector\] (Evaluating zone states|. wait \(no actionable zones\))'
 
-STACK_SERVICES=(roscore control_pc_fi control_pc_ros planner zed ffs xtion perception rfid)
-STACK_CONTAINERS=("$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" "$PERCEPTION_CONTAINER" orio_cameras)
+STACK_SERVICES=(roscore control_pc_fi control_pc_ros planner zed ffs label_seg xtion perception rfid)
+STACK_CONTAINERS=("$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" "$LABEL_SEG_CONTAINER" "$PERCEPTION_CONTAINER" orio_cameras)
 
 # ── Teardown (this run only) ─────────────────────────────────────────────────
 cleanup() {
@@ -196,6 +199,7 @@ follow roscore roscore
 follow "$PLANNER" planner
 [ "$USE_ZED" -eq 1 ] && follow cameras zed
 [ "$USE_ZED" -eq 1 ] && follow ffs ffs
+[ "$USE_ZED" -eq 1 ] && follow label_seg label_seg
 follow cameras xtion
 follow perception perception
 [ "$USE_RFID" -eq 1 ] && follow rfid rfid
@@ -269,15 +273,16 @@ xtion_bringup || exit 1
 # Fast-FoundationStereo (label depth from the ZED pair: /ffs/compute). Started here and
 # waited for after perception, so the two load their models together.
 [ "$USE_ZED" -eq 1 ] && ffs_bringup
+# The label-zone segmentation (/label_seg/request: the items in each zone, from the grasp
+# planner's RGB-D model). Its own container, so it is there whichever planner picks.
+[ "$USE_ZED" -eq 1 ] && label_seg_bringup
 
-# Perception (serves /compute_grasps and /compute_grasps_labelling). The labelling service
-# needs SAM/GroundingDINO, which a planner backend skips by default;
-# ORIO_LOAD_LABELLING_MODELS=1 loads them alongside it. Part of the conf key, so a stack
-# started by run_pickup-only.sh (no labelling models) is restarted here rather than
-# reused. lbl_depth=ffs restarts a perception from before the label depth moved to
-# Fast-FoundationStereo.
-LBL_MODELS=$([ "$USE_ZED" -eq 1 ] && echo 1 || echo 0)
-perception_bringup "backend=$PLANNER labelling=$LBL_MODELS lbl_depth=ffs" "ORIO_LOAD_LABELLING_MODELS=$LBL_MODELS"
+# Perception (serves /compute_grasps, /compute_grasps_labelling and /scan_label_zones).
+# The labelling services get the items from the label-zone segmentation above, so
+# SAM/GroundingDINO are not loaded for them (ORIO_LOAD_LABELLING_MODELS=0). lbl_seg=rgbd
+# in the conf key restarts a perception from before that change.
+LBL_MODELS=0
+perception_bringup "backend=$PLANNER labelling=$LBL_MODELS lbl_seg=rgbd" "ORIO_LOAD_LABELLING_MODELS=$LBL_MODELS"
 
 # RFID inventory node (/inventory/add_item). Best effort: the sequence degrades to a
 # warning per label when it is absent.
@@ -322,6 +327,9 @@ wait_for_service /compute_grasps_labelling 15 \
     || log "NOTE: /compute_grasps_labelling not up (yet) — labelling will fail until it is."
 if [ "$USE_ZED" -eq 1 ]; then
     ffs_wait || exit 1
+    label_seg_wait || exit 1
+    wait_for_service /scan_label_zones 15 \
+        || log "NOTE: /scan_label_zones not up (yet) — arm 1 cannot check a zone after a pick until it is."
 fi
 if [ "$USE_VACUUM" -eq 1 ]; then
     pneumatics_wait pnp_cup lbl_cup || exit 1
