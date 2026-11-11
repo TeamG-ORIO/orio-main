@@ -678,6 +678,12 @@ class Dashboard:
         self.item_lbl.pack(anchor='w')
         self.exp_lbl = tk.Label(txt, font=self.f_small, fg=SUBTEXT, bg=MANTLE, anchor='w')
         self.exp_lbl.pack(anchor='w')
+        self.item_btn = tk.Button(mid, text="CHANGE ITEM", font=self.f_smallb, relief='flat', bd=0,
+                                  padx=12, pady=7, cursor='hand2', bg=BLUE, fg=CRUST,
+                                  activebackground='#b4cefb', activeforeground=CRUST,
+                                  disabledforeground=SURF2, highlightthickness=0,
+                                  command=self.change_item)
+        self.item_btn.pack(side='left', padx=(16, 0))
 
         # Banner + buttons (packed right to left: E-STOP, SHUTDOWN, PAUSE)
         self.banner = tk.Frame(r, bg=SURF0, height=100)
@@ -838,9 +844,17 @@ class Dashboard:
         """The brake button does whatever its label says (see _draw_brakes)."""
         self.desk(arm, 'lock' if self.desk_btns[arm].cget('text') == "LOCK" else 'unlock')
 
+    def change_item(self):
+        """CHANGE ITEM: both arms pause and the item window opens (on the robot PC's
+        screen); confirming a new item resumes them, items already picked keep theirs."""
+        if not self.connected() or self.status.get('stopping') or self.status.get('item_dialog'):
+            return
+        self._call('/orio/change_item', track=False)
+
     def bin_refilled(self):
         """ITEMS ADDED: the input bin has items again, so arm 1 starts picking."""
-        if not self.connected() or self.status.get('stopping') or time.time() - self.refill_sent < 5.0:
+        if (not self.connected() or self.status.get('stopping') or self.status.get('item_dialog')
+                or time.time() - self.refill_sent < 3.0):
             return
         self.refill_sent = time.time()
         self.map.configure(cursor='')
@@ -1013,6 +1027,11 @@ class Dashboard:
 
     # ── header / banner ──────────────────────────────────────────────────────
     def _draw_header(self, s, t):
+        dialog = s.get('item_dialog') if s else None
+        usable = s is not None and not s.get('stopping') and not s.get('shutdown') and not dialog
+        self.item_btn.configure(text="ITEM WINDOW OPEN" if dialog else "CHANGE ITEM",
+                                state='normal' if usable else 'disabled',
+                                bg=BLUE if usable else SURF0)
         if s is None:
             self.conn.configure(text="●  NO SIGNAL", fg=RED)
             self.clock.configure(text="")
@@ -1100,6 +1119,16 @@ class Dashboard:
                     rest = ""
                 sub = "Fix what is needed and choose where %s continues, in %s. %s" % (
                     "it" if len(stuck) == 1 else "each", where, rest)
+            dialog = s.get('item_dialog') if not s.get('stopping') else None
+            if dialog == 'change':
+                bg, fg = '#26304a', BLUE
+                title = "CHANGING ITEM" if not stuck else title
+                sub = ("Choose the item and expiry in the item window. Both arms pause after "
+                       "their current move and carry on when you confirm. Items already "
+                       "picked keep their details.")
+            elif dialog == 'refill':
+                sub = ("Choose the items you added in the item window: arm 1 starts picking "
+                       "when you confirm. " + sub)
             if s.get('prompt'):
                 sub = "The terminal is waiting for you: %s" % s['prompt'].split('\n')[0]
         self.banner.configure(bg=bg)
@@ -1209,8 +1238,10 @@ class Dashboard:
                     c.create_text(x1 - 14, y0 + 16, text=note, anchor='e', fill=PEACH,
                                   font=self.f_smallb)
                     break
-            sent = time.time() - self.refill_sent < 5.0   # clicked; waiting for the status
-            choices = ((("Resuming…", self.f_bodyb),) if sent else
+            sent = (s.get('item_dialog') == 'refill'
+                     or time.time() - self.refill_sent < 3.0)   # clicked; window opening
+            choices = ((("Choose in item window…", self.f_bodyb), ("Item window…", self.f_smallb))
+                       if sent else
                        (("ITEMS ADDED: RESUME PICKING", self.f_bodyb),
                         ("ITEMS ADDED", self.f_bodyb), ("ITEMS ADDED", self.f_smallb)))
             label, font = next(((txt, f) for txt, f in choices if f.measure(txt) + 32 <= w - 20),

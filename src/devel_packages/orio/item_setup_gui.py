@@ -115,17 +115,24 @@ def _load_icon(master, path, default):
         return default
 
 
-def show_item_setup_gui():
+def show_item_setup_gui(initial=None, title="Label Registration Setup",
+                        submit_text="Start Run →", cancel_text="Cancel",
+                        cancel_question="Abort the run?", should_close=None):
     """Blocking window that collects the item name and expiry date before a run.
 
     Returns (item_name, expiry). Closing the window or cancelling returns
     (None, None) so a run cannot start without them.
+
+    full_sequence.py opens it again mid-run (the dashboard's CHANGE ITEM and ITEMS
+    ADDED) with `initial` = the current (name, expiry) prefilled, its own title and
+    button texts, cancel_question=None (cancel without asking), and `should_close`, a
+    function polled every 300 ms that closes the window (as a cancel) when it is true.
     """
     result = {'name': None, 'expiry': None}
     items = load_items()
 
     root = tk.Tk()
-    root.title("[ORIO] Label Registration Setup")
+    root.title("[ORIO] %s" % title)
     root.configure(bg=BG)
     root.resizable(False, False)
 
@@ -138,7 +145,7 @@ def show_item_setup_gui():
     # ── Header ──────────────────────────────────────────────────────────────
     header = tk.Frame(root, bg=ACCENT, pady=8)
     header.pack(fill='x')
-    tk.Label(header, text="  ORIO — Label Registration Setup",
+    tk.Label(header, text="  ORIO — %s" % title,
              font=('Helvetica', 14, 'bold'), fg=BG, bg=ACCENT).pack()
 
     # ── Fields ──────────────────────────────────────────────────────────────
@@ -245,17 +252,35 @@ def show_item_setup_gui():
         root.destroy()
 
     def on_cancel():
-        if messagebox.askyesno("Cancel", "Abort the run?", parent=root):
+        if cancel_question is None or messagebox.askyesno("Cancel", cancel_question, parent=root):
             root.destroy()
 
-    tk.Button(btn_frame, text="Start Run →", command=on_submit, bg=OK, fg=BG,
+    tk.Button(btn_frame, text=submit_text, command=on_submit, bg=OK, fg=BG,
               font=('Helvetica', 12, 'bold'), relief='flat', padx=16, pady=6).pack(side='left', padx=(0, 12))
-    tk.Button(btn_frame, text="Cancel", command=on_cancel, bg=ERR, fg=BG,
+    tk.Button(btn_frame, text=cancel_text, command=on_cancel, bg=ERR, fg=BG,
               font=('Helvetica', 12, 'bold'), relief='flat', padx=16, pady=6).pack(side='left')
 
     root.protocol("WM_DELETE_WINDOW", on_cancel)
     root.bind('<Return>', lambda _: on_submit())
     item_btn.focus_set()
+
+    if initial and initial[0]:   # the current item, prefilled
+        if initial[0] in icons:
+            select(initial[0])
+        else:
+            select(OTHER)
+            new_var.set(initial[0])
+        if initial[1]:
+            expiry_var.set(initial[1])
+        err_var.set("")
+
+    if should_close is not None:
+        def poll():
+            if should_close():
+                root.destroy()
+                return
+            root.after(300, poll)
+        root.after(300, poll)
     root.lift()
     root.mainloop()
 

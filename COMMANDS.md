@@ -80,7 +80,11 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
   change them, and the steps the arm can continue from (one marked RECOMMENDED). Without
   the dashboard (`--no-dashboard`, or it was closed) a separate recovery window opens.
 - When the bin is empty, arm 1's card says so and arm 1 only takes labelled items to the
-  output. Refill the bin, then click **ITEMS ADDED** on the dashboard's input bin.
+  output. Refill the bin, then click **ITEMS ADDED** on the dashboard's input bin: the item
+  window opens, and arm 1 starts picking once you confirm the item and expiry.
+- **CHANGE ITEM** (top of the dashboard, beside the item) pauses both arms and opens the
+  item window. **Use this item** resumes with the new item; **Keep current item** resumes
+  unchanged. Items already picked or waiting in a zone keep the details they were picked with.
 - A dashboard window shows both arms and both label zones live, plus the latest grasp
   (with its score) and label placement pictures. A red bar says why a grasp was turned
   down. Click a picture to enlarge it.

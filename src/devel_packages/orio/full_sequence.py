@@ -1511,6 +1511,7 @@ class ZoneManager:
         self.busy = {'A': False, 'B': False}        # False, or the arm using it ('arm1'/'arm2')
         self.depths = {'A': 0.0, 'B': 0.0}          # Tracks object depth per zone
         self.measured_z = {'A': None, 'B': None}    # item top z measured by the ZED before labelling
+        self.items = {'A': None, 'B': None}         # (name, expiry) of the item in the zone
 
     def set_state(self, zone, new_state):
         """Set zone state and log the transition."""
@@ -1527,9 +1528,12 @@ hardware = None  # Will be initialized in main()
 # Operator settings from argparse (set in main())
 opts = None
 
-# Item metadata provided by the operator at startup
+# Item metadata provided by the operator at startup; CHANGE ITEM / ITEMS ADDED on the
+# dashboard change it mid-run (_item_dialog). An item keeps the details it was picked with:
+# _held_item while arm 1 carries it, then manager.items[zone] until it is labelled.
 _item_name = ""
 _item_expiry = ""
+_held_item = None
 
 # Used instead of the setup GUI with --skip-item-setup
 DEFAULT_ITEM_NAME = "test_item"
@@ -1910,6 +1914,60 @@ def _ask_recovery(arm, title, failed, err_msg, choices, fa, vacuum_on, vacuum_of
     return _show_recovery_gui(title, failed, err_msg, choices, fa, vacuum_on, vacuum_off)
 
 
+# ── Item change from the dashboard ───────────────────────────────────────────
+
+_item_dialog = {'kind': None}   # 'change' (CHANGE ITEM) or 'refill' (ITEMS ADDED) while open
+_item_dialog_lock = Lock()
+
+
+def _open_item_dialog(kind):
+    """The dashboard's CHANGE ITEM ('change') or ITEMS ADDED ('refill'): show the item
+    setup window, the current item prefilled. 'change' pauses both arms while it is open
+    and resumes them after (unless the run was paused already); 'refill' leaves them
+    running, and arm 1 picks again once an item is confirmed. False if one is open."""
+    with _item_dialog_lock:
+        if _item_dialog['kind']:
+            return False
+        _item_dialog['kind'] = kind
+    threading.Thread(target=_item_dialog_run, args=(kind,), daemon=True,
+                     name='item-dialog').start()
+    return True
+
+
+def _item_dialog_run(kind):
+    global _item_name, _item_expiry, _declines
+    paused_here = kind == 'change' and pause_ctl.pause()
+    try:
+        log.info("[Item] %s: item window open", "CHANGE ITEM" if kind == 'change' else "ITEMS ADDED")
+        with _gui_lock:   # one Tk window at a time
+            name, expiry = show_item_setup_gui(
+                initial=(_item_name, _item_expiry),
+                title="Change Item" if kind == 'change' else "Items Added",
+                submit_text="Use this item →" if kind == 'change' else "Start picking →",
+                cancel_text="Keep current item" if kind == 'change' else "Cancel",
+                cancel_question=None, should_close=_stopping)
+            gc.collect()   # free its Tk objects in this thread (see _show_recovery_gui)
+        if not name:
+            log.info("[Item] item window closed, item unchanged")
+            return
+        if (name, expiry) != (_item_name, _item_expiry):
+            log.info("[Item] Next picks are '%s' (expiry %s); was '%s' (%s). Items already "
+                     "picked keep theirs.", name, expiry, _item_name, _item_expiry)
+            events.emit('operator', 'item_change', item=name, expiry=expiry, old=_item_name)
+        _item_name, _item_expiry = name, expiry
+        if kind == 'refill' and _bin_empty.is_set():
+            _bin_empty.clear()
+            _declines = 0
+            log.info("[Main] Operator: items added to the input bin, arm 1 picks again")
+            events.emit('operator', 'refilled', pick=_pick_n)
+    except Exception as exc:  # noqa: BLE001 — a failed window must not end the run
+        log.error("[Item] item window failed: %s", exc)
+    finally:
+        _item_dialog['kind'] = None
+        if paused_here and not _stopping():
+            pause_ctl.resume()
+
+
 def _safe_execute(state_name, fn, userdata):
     """Run fn(userdata); catch any exception, store diagnostics, and return 'failed'.
 
@@ -2150,7 +2208,7 @@ class FetchInput(smach.State):
         return True
 
     def _run(self, userdata):
-        global _pick_n, _declines, _pick_misses
+        global _pick_n, _declines, _pick_misses, _held_item
         if shutdown_event.is_set():
             return 'no_grasp'   # DECIDE_HUB turns this into a clean shutdown
         pause_ctl.gate('arm1')
@@ -2236,6 +2294,7 @@ class FetchInput(smach.State):
         except RuntimeError as exc:
             return self._missed_pick(exc)
         _pick_misses = 0
+        _held_item = (_item_name, _item_expiry)
         log.info("[FetchInput] Exiting: succeeded (item_depth=%.4f)", hardware.current_fetch_depth)
         return 'succeeded'
 
@@ -2327,6 +2386,7 @@ class DropToZone(smach.State):
 
             with manager.lock:
                 manager.set_state(target_zone, 'NEEDS_LABEL')
+                manager.items[target_zone] = _held_item or (_item_name, _item_expiry)
                 manager.busy[target_zone] = False
             log.info("[DropToZone] Exiting: dropped (zone %s)", target_zone)
             return 'dropped'
@@ -2405,6 +2465,7 @@ class RetrieveFromZone(smach.State):
 
             with manager.lock:
                 manager.set_state(target_zone, 'EMPTY')
+                manager.items[target_zone] = None
                 manager.busy[target_zone] = False
             log.info("[RetrieveFromZone] Exiting: picked (zone %s)", target_zone)
             return 'picked'
@@ -2541,9 +2602,10 @@ class ApplyLabel(smach.State):
             if opts.no_rfid:
                 log.info("[ApplyLabel] RFID off (--no-rfid): label not registered")
             else:
-                log.info("[ApplyLabel] Registering label — item='%s' expiry='%s'",
-                         _item_name, _item_expiry)
-                call_add_item_service(_item_name, _item_expiry)
+                # the details the item was picked with, not a later CHANGE ITEM's
+                name, expiry = manager.items.get(target_zone) or (_item_name, _item_expiry)
+                log.info("[ApplyLabel] Registering label — item='%s' expiry='%s'", name, expiry)
+                call_add_item_service(name, expiry)
 
             arm2 = hardware.label_arm
             hardware._move('arm2', arm2.goto_joints, pre_joints, duration=5, desc="goto label pre")
@@ -2697,6 +2759,7 @@ def _status_snapshot():
         'item': {'name': _item_name, 'expiry': _item_expiry},
         'vacuum': not disable_pneumatics,
         'bin_empty': _bin_empty.is_set(),
+        'item_dialog': _item_dialog['kind'],
     }
 
 
@@ -2745,17 +2808,22 @@ def _start_status_server():
     rospy.Service('/orio/intervene/arm2', Trigger, on_intervene('arm2'))
 
     def on_bin_refilled(_req):
-        """The dashboard's ITEMS ADDED: the input bin has items again, arm 1 picks again."""
-        global _declines
+        """The dashboard's ITEMS ADDED: the item window opens; once an item is confirmed
+        the input bin counts as full again and arm 1 picks (_item_dialog_run)."""
         if not _bin_empty.is_set():
             return TriggerResponse(success=False, message="the input bin is not marked empty")
-        _bin_empty.clear()
-        _declines = 0
-        log.info("[Main] Operator: items added to the input bin, arm 1 picks again")
-        events.emit('operator', 'refilled', pick=_pick_n)
-        return TriggerResponse(success=True, message="arm 1 picks again")
+        if _stopping() or not _open_item_dialog('refill'):
+            return TriggerResponse(success=False, message="the item window is already open")
+        return TriggerResponse(success=True, message="item window open")
+
+    def on_change_item(_req):
+        """The dashboard's CHANGE ITEM: pause both arms and open the item window."""
+        if _stopping() or not _open_item_dialog('change'):
+            return TriggerResponse(success=False, message="the item window is already open")
+        return TriggerResponse(success=True, message="item window open")
 
     rospy.Service('/orio/bin_refilled', Trigger, on_bin_refilled)
+    rospy.Service('/orio/change_item', Trigger, on_change_item)
 
     def loop():
         rate = rospy.Rate(STATUS_HZ)
