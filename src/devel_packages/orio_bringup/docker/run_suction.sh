@@ -16,6 +16,9 @@
 #                        $ORIO_GRASPING/runs/seg/*/checkpoint_best_total.pth); ignored otherwise
 #   SUCTION_SEG_MODEL    RF-DETR size it was trained as (default RFDETRSegLarge)
 #   SUCTION_SEG_THRESHOLD  lowest mask confidence kept (default 0.5)
+#   SUCTION_SEG_RETRIES  true (default): a frame with an item but no grasp above the minimum
+#                        score is segmented again, mirrored and at lower thresholds (down to
+#                        0.2), and the first good grasp is used; false: one pass only
 #   SUCTION_NODE_NAME    ROS node name (default suction_grasp_planner); the service is
 #                        /<name>/plan_grasp, so a second planner can run beside the first
 #   SUCTION_IMAGE, SUCTION_CONTAINER_NAME
@@ -84,4 +87,5 @@ exec docker run -d --name "$NAME" --restart unless-stopped \
         _min_score:="$MIN_SCORE" _rot180:="$ROT180_PARAM" \
         _seg_checkpoint:="$SEG_PARAM" _seg_model:="${SUCTION_SEG_MODEL:-RFDETRSegLarge}" \
         _seg_threshold:="${SUCTION_SEG_THRESHOLD:-0.5}" \
-        _seg_max_mask_frac:="${SUCTION_SEG_MAX_MASK_FRAC:-0.5}" __name:="${SUCTION_NODE_NAME:-suction_grasp_planner}"
+        _seg_max_mask_frac:="${SUCTION_SEG_MAX_MASK_FRAC:-0.5}" \
+        _seg_retries:="${SUCTION_SEG_RETRIES:-true}" __name:="${SUCTION_NODE_NAME:-suction_grasp_planner}"

@@ -42,6 +42,12 @@ import numpy as np
 ROT180 = np.diag([-1.0, -1.0, 1.0, 1.0])
 
 
+# When a frame has an item but no grasp above min_score: segment it again this way, in
+# order, until one is good. (mirror input, mask threshold; None = the ~seg_threshold).
+# 0.2 is the floor: lower finds junk masks. See SuctionGraspPlanner._plan_with_retries.
+SEG_RETRIES = ((True, None), (False, 0.3), (True, 0.3), (False, 0.2), (True, 0.2))
+
+
 def align_hires(img, x0, y0, shape):
     """The part of a 1280x1024 Xtion colour frame on the 640x480 grid at twice its
     resolution: hires[2v + i, 2u + j] lies in 640x480 pixel (u, v). (x0, y0) is where that
@@ -150,7 +156,7 @@ class SuctionModel(object):
         self.seg = rgbd_seg.load_model(getattr(rfdetr, model_name), checkpoint)
         self.checkpoint_info += "; seg %s (%s, threshold %.2f)" % (checkpoint, model_name, self.seg_threshold)
 
-    def segment(self, color, depth, K, color_hires=None):
+    def segment(self, color, depth, K, color_hires=None, threshold=None, mirror=False):
         """Instance image (request orientation and shape, 0 = no object; k = the k-th most
         confident mask) from the RGB-D segmentation model, and each mask's confidence in id
         order. The model sees the frame in the calibration orientation, cut to the table
@@ -159,7 +165,11 @@ class SuctionModel(object):
         color_hires, when given, is the colour at exactly twice the request's resolution
         on the same pixel grid (see align_hires). The model then sees that sharper crop,
         with the depth channels repeated 2x2 to match, and its masks are brought back to
-        the depth's resolution (a pixel is in a mask when most of its 2x2 block is)."""
+        the depth's resolution (a pixel is in a mask when most of its 2x2 block is).
+
+        threshold overrides seg_threshold; mirror runs the model on the left-right mirrored
+        input and mirrors its masks back (the model is deterministic: these are the ways to
+        get a different segmentation of the same frame, see SEG_RETRIES)."""
         import torch
 
         h, w = depth.shape
@@ -184,8 +194,12 @@ class SuctionModel(object):
         rgb[~seg_keep] = 0
         x = torch.cat([torch.from_numpy(rgb).permute(2, 0, 1).float() / 255.0,
                        torch.from_numpy(ch)])
-        det = self.seg.predict(x, threshold=self.seg_threshold, include_source_image=False)
+        det = self.seg.predict(x.flip(-1) if mirror else x,
+                               threshold=self.seg_threshold if threshold is None else threshold,
+                               include_source_image=False)
         masks = det.mask if det.mask is not None else np.zeros((0,) + seg_keep.shape, bool)
+        if mirror and det.mask is not None:
+            masks = np.ascontiguousarray(masks[:, :, ::-1])
         conf = np.asarray(det.confidence if det.mask is not None else [], dtype=np.float64)
         if color_hires is not None and len(masks):
             n, mh, mw = masks.shape
@@ -210,7 +224,7 @@ class SuctionModel(object):
         p = self.T_cam_world.dot(np.append(np.asarray(xyz_world, dtype=np.float64), 1.0))
         return K[0, 0] * p[0] / p[2] + K[0, 2], K[1, 1] * p[1] / p[2] + K[1, 2], p[2]
 
-    def plan(self, depth_m, K, color=None, color_hires=None):
+    def plan(self, depth_m, K, color=None, color_hires=None, seg_threshold=None, seg_mirror=False):
         """Best grasp for one depth image (metres; NaN or <= 0 invalid) and its 3x3 K, plus
         the registered RGB image when the checkpoint reads segmentation masks.
 
@@ -233,7 +247,8 @@ class SuctionModel(object):
                 raise ValueError("the high-res colour must be exactly 2x the depth (%dx%d), got %dx%d"
                                  % (2 * depth.shape[1], 2 * depth.shape[0],
                                     color_hires.shape[1], color_hires.shape[0]))
-            instances, mask_scores, dropped = self.segment(color, depth, K, color_hires)
+            instances, mask_scores, dropped = self.segment(color, depth, K, color_hires,
+                                                           seg_threshold, seg_mirror)
         if self.crop is not None and depth.shape == self.full_shape:
             x0, y0, x1, y1 = self.crop
             windowed = np.zeros_like(depth)
@@ -429,10 +444,12 @@ class SuctionGraspPlanner(object):
                       1000 * self._model.grid.cell, self._model.angles_deg,
                       "rotated 180 deg" if rot180 else "as calibrated")
         self._min_score = float(rospy.get_param("~min_score", 0.0))
+        self._seg_retries = bool(rospy.get_param("~seg_retries", True))
         # Everything a later offline rerun needs besides the frame itself (see _save_inputs).
         self._settings = {
             "grasping_repo": repo, "checkpoint": checkpoint, "checkpoint_info": self._model.checkpoint_info,
             "config": config, "rot180": rot180, "min_score": self._min_score,
+            "seg_retries": self._seg_retries,
             "seg_checkpoint": rospy.get_param("~seg_checkpoint", "") or None,
             "seg_model": rospy.get_param("~seg_model", "RFDETRSegLarge"),
             "seg_threshold": float(rospy.get_param("~seg_threshold", 0.5)),
@@ -541,6 +558,36 @@ class SuctionGraspPlanner(object):
         with open(path, "w") as f:
             json.dump(meta, f, indent=1)
 
+    def _plan_with_retries(self, depth, K, color, color_hires):
+        """Plan; if the frame has an item but no grasp good enough, plan the SAME frame
+        again with a different segmentation (SEG_RETRIES) and keep the first good one.
+        The models are deterministic, so a new camera frame of the same scene gives the
+        same answer: a lower mask threshold or a mirrored input is what changes it (e.g.
+        a box lying on another, missed at 0.5). A frame with no item at all is not
+        retried, so an empty bin still reads as empty."""
+        g = self._model.plan(depth, K, color, color_hires)
+        good = lambda r: r["n_masks"] != 0 and r["score"] >= self._min_score  # noqa: E731
+        if (good(g) or not self._seg_retries or self._model.seg is None or not g["n_masks"]):
+            return g
+        tries = [{"threshold": self._model.seg_threshold, "mirror": False, "score": g["score"],
+                  "n_masks": g["n_masks"]}]
+        best = g
+        for n, (mirror, threshold) in enumerate(SEG_RETRIES, start=2):
+            r = self._model.plan(depth, K, color, color_hires, seg_threshold=threshold,
+                                 seg_mirror=mirror)
+            tries.append({"threshold": threshold or self._model.seg_threshold, "mirror": mirror,
+                          "score": r["score"], "n_masks": r["n_masks"]})
+            r["seg_try"] = "seg retry %d/%d (%smask threshold %.2f)" % (
+                n, len(SEG_RETRIES) + 1, "mirrored, " if mirror else "",
+                threshold or self._model.seg_threshold)
+            if good(r):
+                best = r
+                break
+            if r["n_masks"] != 0 and r["score"] > best["score"]:
+                best = r
+        best["seg_tries"] = tries
+        return best
+
     def _handle(self, req):
         import rospy
         from custom_msgs.msg import DexnetGrasp
@@ -571,7 +618,7 @@ class SuctionGraspPlanner(object):
 
         start = time.time()
         try:
-            g = self._model.plan(depth, K, color, color_hires)
+            g = self._plan_with_retries(depth, K, color, color_hires)
         except ValueError as exc:
             if base:
                 try:
@@ -605,6 +652,8 @@ class SuctionGraspPlanner(object):
                    % (g["score"], g["seal"], g["hold"], g["access"], g["angle_deg"], g["tilt_deg"]))
         if g["n_masks"] is not None:
             summary += ", %d masks" % g["n_masks"]
+        if g.get("seg_try"):
+            summary += ", %s" % g["seg_try"]
 
         if base:
             try:
@@ -615,6 +664,7 @@ class SuctionGraspPlanner(object):
                     "unseen": g["unseen"], "n_masks": g["n_masks"], "mask_scores": g["mask_scores"], "accepted": not rejected,
                     "dropped_masks": g["dropped_masks"], "reject_reason": g["reject_reason"],
                     "seg_input": "1280x960" if color_hires is not None else "640x480",
+                    "seg_try": g.get("seg_try"), "seg_tries": g.get("seg_tries"),
                     "plan_time_s": elapsed})
             except Exception as exc:  # noqa: BLE001
                 rospy.logwarn("Could not save grasp result: %s", exc)

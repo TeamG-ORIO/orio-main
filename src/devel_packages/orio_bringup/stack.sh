@@ -129,6 +129,8 @@ kill_bg() {  # stop this run's background processes (followers, recorder, pneuma
 #   SHOW  signal (stage progress, grasps, prompts, ANY error): the terminal AND the file.
 # $1 = extra SHOW regex for this launcher's own stage prefixes (ERE; may be empty).
 # $2 = 1 to show every line that is not dropped (a small launcher with little chatter).
+# $3 = regex (ERE; may be empty) of lines to SAVE but never show, e.g. a state machine's
+#      idle polling that the dashboard already displays. It overrides $1 and $2.
 # Errors always win: a line matching the error patterns is shown whatever else it matches.
 # ANSI colours are stripped. The terminal gets CRLF: the foreground script runs under
 # `docker exec -it`, whose pty leaves the terminal in raw-ish output mode for the whole
@@ -136,7 +138,7 @@ kill_bg() {  # stop this run's background processes (followers, recorder, pneuma
 # file gets plain LF. Needs LOG_FILE.
 log_filter_start() {
     exec > >(
-        LOG_FILE="$LOG_FILE" SHOW_RE="${1:-}" SHOW_ALL="${2:-0}" awk '
+        LOG_FILE="$LOG_FILE" SHOW_RE="${1:-}" SHOW_ALL="${2:-0}" HIDE_RE="${3:-}" awk '
         function strip(s){ gsub(/\033\[[0-9;]*m/, "", s); gsub(/\r/, "", s); return s }
         {
             line = strip($0)
@@ -148,6 +150,7 @@ log_filter_start() {
             show = (ENVIRON["SHOW_ALL"] == "1")
             if (ENVIRON["SHOW_RE"] != "" && line ~ ENVIRON["SHOW_RE"]) show = 1
             if (line ~ /\[launcher\]|\[check\]|\[doc\]|\[luisa\]|\[stop\]|\[Main\]|\[Hardware\]|\[Grasp\]|\[Loop\]|Press Enter/) show = 1
+            if (ENVIRON["HIDE_RE"] != "" && line ~ ENVIRON["HIDE_RE"]) show = 0
             if (line ~ /GAVE UP|ERROR|Error|error|Traceback|has died|disconnected|CAMERA NOT DETECTED|FAIL|Rejected|refus|not ready|NOT ready|Aborting/) show = 1
             if (line ~ /Planned suction grasp|grasp q=|Affordance panel|Grasp panel/) show = 1
 
@@ -740,8 +743,9 @@ planner_resolve() {
 planner_bringup() {
     # view=camera / seg_max / seg=hires: restart a planner from before it wrote the
     # dashboard's camera-only view, dropped table-sized masks (SUCTION_SEG_MAX_MASK_FRAC)
-    # or could segment the Xtion's high-res frames.
-    local conf="planner=$PLANNER min_q=$MIN_Q panels=$PANELS view=camera seg_max=${SUCTION_SEG_MAX_MASK_FRAC:-default} seg=hires"
+    # or could segment the Xtion's high-res frames. seg_retry: from before it re-segmented a
+    # frame with an item but no good grasp (SUCTION_SEG_RETRIES).
+    local conf="planner=$PLANNER min_q=$MIN_Q panels=$PANELS view=camera seg_max=${SUCTION_SEG_MAX_MASK_FRAC:-default} seg=hires seg_retry=${SUCTION_SEG_RETRIES:-true}"
     [ "$PLANNER" = suction ] && conf+=" checkpoint=$SUCTION_CKPT"
     if [ "$STACK_FRESH" -eq 0 ] && container_up "$PLANNER_CONTAINER" && conf_is planner "$conf"; then
         log "$PLANNER grasp planner already running (min score $MIN_Q)."
