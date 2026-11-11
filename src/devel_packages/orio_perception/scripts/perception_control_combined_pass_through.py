@@ -33,7 +33,13 @@ import groundingdino.datasets.transforms as T
 # Custom modules
 from grasp_solver import optimize_grasp_pose
 import dexnet_geometry
-from opt_label_location import opt_label_loc
+from opt_label_location import opt_label_loc, is_safe_oriented_placement
+
+# The label footprint opt_label_loc tests a placement with (pixels in the crop): the
+# defaults of is_safe_oriented_placement, so the debug drawing matches the check.
+_FOOTPRINT_PARAMS = __import__('inspect').signature(is_safe_oriented_placement).parameters
+LABEL_W_PX = _FOOTPRINT_PARAMS['label_w'].default
+LABEL_H_PX = _FOOTPRINT_PARAMS['label_h'].default
 from rerun_writer import PerceptionLog
 
 # ==============================================================================
@@ -1015,6 +1021,15 @@ class CombinedPerceptionNode:
         a = angle_deg % 180.0
         return a - 180.0 if a > 90.0 else a
 
+    @staticmethod
+    def _label_footprint(x, y, angle_deg):
+        """Corners of the label's footprint at crop pixel (x, y), for cv2.polylines.
+        opt_label_loc returns the footprint's angle + 90, so take the 90 back off to draw
+        the box it actually checked (a 180 deg turn from normalising draws the same box)."""
+        import cv2
+        rect = ((float(x), float(y)), (float(LABEL_W_PX), float(LABEL_H_PX)), float(angle_deg) - 90.0)
+        return np.int32(cv2.boxPoints(rect)).reshape(-1, 1, 2)
+
     # ── Labelling service ─────────────────────────────────────────────────────
 
     def _label_record_start(self, color, depth, info):
@@ -1128,10 +1143,13 @@ class CombinedPerceptionNode:
             zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
                                'depth': float(z_cam) if z_cam is not None else 0.0,
                                'px_full': [u, v], 'depth_px': n}
-            cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 8, dot, -1)
+            box = self._label_footprint(opt_x, opt_y, ang_deg)
+            cv2.polylines(debug_lbl, [box], isClosed=True, color=dot, thickness=2)
+            cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 4, dot, -1)
             cv2.putText(debug_lbl, f"Z{zone} {ang_deg:.1f}deg "
                         + (f"{z_cam:.3f}m" if z_cam is not None else "NO DEPTH"),
-                        (int(opt_x) + 10, int(opt_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
+                        (int(box[:, 0, 0].max()) + 8, int(opt_y) + 5),   # right of the box
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
             if z_cam is None:
                 rospy.logerr(f"No valid depth within {LBL_DEPTH_WINDOW} px of the Zone {zone} "
                              f"pixel ({u}, {v}). Aborting zone {zone}.")
