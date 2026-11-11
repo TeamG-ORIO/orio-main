@@ -8,7 +8,8 @@
 # sequence (full_sequence.py) runs in the FOREGROUND so its prompts own the keyboard. Its
 # Tkinter windows: the item name/expiry setup at start, the live dashboard (Pause/Resume,
 # the newest grasp and label images, LOCK / UNLOCK & PRIME per arm through desk_helper.py
-# on the host; --no-dashboard to skip it), and the per-arm recovery dialog when a state fails.
+# on the host; --no-dashboard to skip it), whose recovery panel opens when an arm fails (a
+# separate recovery window instead without the dashboard).
 # With RFID on, the inventory window (orio_rfid/inventory_dashboard.py) also opens on the
 # host and shows each label as it is registered; --no-inventory to skip it.
 #
@@ -158,7 +159,10 @@ planner_resolve || exit 2
 # Run logs live in logging/demo/; the STACK is SHARED with run_pickup-only.sh (same
 # stack dir), so either launcher reuses it and stop_all.sh stops it.
 run_log_paths demo
-log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|\[Pause\]|\[Stop\]|\[Dashboard\]|\[desk\]'
+# The zone polling (every 0.5 s while both arms wait) is saved to the log but not shown:
+# the dashboard already shows the zone states.
+log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|\[Pause\]|\[Stop\]|\[Dashboard\]|\[desk\]' 0 \
+    '\[ApplyLabel\] (Entering state \(zones|No zone needs label)|\[TaskSelector\] (Evaluating zone states|. wait \(no actionable zones\))'
 
 STACK_SERVICES=(roscore control_pc_fi control_pc_ros planner zed ffs xtion perception rfid)
 STACK_CONTAINERS=("$CONTAINER" "$DEXNET_CONTAINER" "$SUCTION_CONTAINER" "$FFS_CONTAINER" "$PERCEPTION_CONTAINER" orio_cameras)

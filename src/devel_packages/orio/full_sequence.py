@@ -1771,6 +1771,145 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
     return result['choice']
 
 
+# ── Recovery from the dashboard ──────────────────────────────────────────────
+# An arm that needs help posts a request (what failed, which steps it can resume from)
+# in the dashboard status; the dashboard's recovery panel answers on CMD_TOPIC with JSON
+# commands. The Tk window above is the fallback when no dashboard is connected.
+
+CMD_TOPIC = '/orio/dashboard/cmd'   # {"cmd": "hello" | "action" | "zone" | "resume", ...}
+DASHBOARD_ALIVE_S = 3.0             # a dashboard heard from this recently is connected
+DASHBOARD_LOST_S = 6.0              # silent this long while an arm waits: Tk window instead
+ZONE_STATES = ('EMPTY', 'NEEDS_LABEL', 'READY_FOR_PICKUP')
+
+
+class RecoveryBoard:
+    """The open recovery request per arm, and the arm actions run for it. Commands come
+    from the ROS callback thread; the arm's state machine thread waits in ask()."""
+
+    ACTIONS = ('stop_skill', 'reset_joints', 'vacuum_on', 'vacuum_off')
+    ACTION_NAME = {'stop_skill': "Stop motion", 'reset_joints': "Send home",
+                   'vacuum_on': "Suction on", 'vacuum_off': "Suction off"}
+
+    def __init__(self):
+        self.lock = Lock()
+        self.heard = 0.0     # last command from a dashboard
+        self.req = {}        # arm -> the open request (dict, published in the status)
+        self.ctx = {}        # arm -> (FrankaArm, vacuum on service, vacuum off service)
+        self.answer = {}     # arm -> chosen state
+        self.running = {'arm1': 0, 'arm2': 0}
+        self._ids = 0
+
+    def dashboard_alive(self):
+        return time.time() - self.heard < DASHBOARD_ALIVE_S
+
+    def snapshot(self, arm):
+        with self.lock:
+            req = self.req.get(arm)
+            return dict(req, busy=self.running[arm] > 0) if req else None
+
+    def ask(self, arm, failed, err_msg, choices, fa, vacuum_on, vacuum_off, reason):
+        """Post a request and block until the dashboard answers. Returns the chosen state,
+        'shutdown' on E-stop / SHUTDOWN, or None if the dashboard went away."""
+        with self.lock:
+            self._ids += 1
+            self.req[arm] = {'id': self._ids, 'failed_state': failed, 'error': str(err_msg),
+                             'choices': list(choices), 'reason': reason,
+                             'since': time.time(), 'action': None}
+            self.ctx[arm] = (fa, vacuum_on, vacuum_off)
+            self.answer.pop(arm, None)
+        lost = None
+        try:
+            while True:
+                with self.lock:
+                    choice = self.answer.pop(arm, None)
+                if choice:
+                    return choice
+                if _stopping():
+                    return 'shutdown'
+                if self.dashboard_alive():
+                    lost = None
+                elif lost is None:
+                    lost = time.time()
+                elif time.time() - lost > DASHBOARD_LOST_S:
+                    return None
+                rospy.sleep(0.2)
+        finally:
+            with self.lock:
+                self.req.pop(arm, None)
+
+    def on_command(self, msg):
+        try:
+            cmd = json.loads(msg.data)
+        except ValueError:
+            return
+        self.heard = time.time()
+        arm = cmd.get('arm')
+        with self.lock:
+            req = self.req.get(arm)
+            if req is None or cmd.get('id') != req['id']:
+                return   # a hello, or for a request that is already closed
+            kind = cmd.get('cmd')
+            if kind == 'resume':
+                if self.running[arm]:
+                    log.warning("[%s Recovery] resume ignored: an arm action is still running",
+                                arm.upper())
+                elif cmd.get('state') in req['choices']:
+                    self.answer[arm] = cmd['state']
+                return
+            if kind == 'action' and cmd.get('action') in self.ACTIONS:
+                self.running[arm] += 1
+                req['action'] = {'name': self.ACTION_NAME[cmd['action']], 'state': 'running',
+                                 'msg': '', 't': time.time()}
+                threading.Thread(target=self._run_action, args=(arm, cmd['action']),
+                                 daemon=True).start()
+                return
+        if kind == 'zone' and cmd.get('zone') in ('A', 'B') and cmd.get('state') in ZONE_STATES:
+            log.info("[%s Recovery] zone %s set from the dashboard", arm.upper(), cmd['zone'])
+            with manager.lock:
+                manager.set_state(cmd['zone'], cmd['state'])
+
+    def _run_action(self, arm, action):
+        fa, vacuum_on, vacuum_off = self.ctx[arm]
+        name = self.ACTION_NAME[action]
+        log.info("[%s Recovery] %s (dashboard)", arm.upper(), name)
+        try:
+            if action == 'stop_skill':
+                fa.stop_skill()
+            elif action == 'reset_joints':
+                hardware._move(arm, fa.reset_joints, duration=5, desc="go home (recovery)",
+                               pausable=False)
+                arm_status.set(arm, target=None)
+            elif not call_trigger_service(vacuum_on if action == 'vacuum_on' else vacuum_off):
+                raise RuntimeError("the vacuum service did not answer")
+            result = {'state': 'done', 'msg': ''}
+        except Exception as exc:  # noqa: BLE001 — shown on the dashboard
+            log.error("[%s Recovery] %s failed: %s", arm.upper(), name, exc)
+            result = {'state': 'error', 'msg': str(exc)}
+        with self.lock:
+            self.running[arm] -= 1
+            req = self.req.get(arm)
+            if req is not None:
+                req['action'] = dict(result, name=name, t=time.time())
+
+
+recovery_board = RecoveryBoard()
+
+
+def _ask_recovery(arm, title, failed, err_msg, choices, fa, vacuum_on, vacuum_off):
+    """The operator's choice for a stopped arm: from the dashboard's recovery panel when
+    a dashboard is connected, otherwise (or if it goes away) from the Tk window."""
+    reason = 'intervene' if 'intervene' in str(err_msg).lower() else 'error'
+    if recovery_board.dashboard_alive():
+        log.warning("[%s Recovery] waiting for the operator on the dashboard", arm.upper())
+        choice = recovery_board.ask(arm, failed, err_msg, choices, fa, vacuum_on, vacuum_off,
+                                    reason)
+        if choice is not None:
+            return choice
+        log.warning("[%s Recovery] the dashboard stopped answering: opening the recovery "
+                    "window instead", arm.upper())
+    return _show_recovery_gui(title, failed, err_msg, choices, fa, vacuum_on, vacuum_off)
+
+
 def _safe_execute(state_name, fn, userdata):
     """Run fn(userdata); catch any exception, store diagnostics, and return 'failed'.
 
@@ -1819,11 +1958,9 @@ class HumanRecoveryArm1(smach.State):
         failed = getattr(userdata, 'recovery_failed_state', 'UNKNOWN')
         err_msg = getattr(userdata, 'recovery_error_msg', 'No details available.')
         while True:
-            choice = _show_recovery_gui(
-                "ARM1 (Pick-and-Place)", failed, err_msg, ARM1_STATES,
-                fa=hardware.pick_and_place_arm,
-                vacuum_on_service='/orio/pnp_cup/on',
-                vacuum_off_service='/orio/pnp_cup/off')
+            choice = _ask_recovery(
+                'arm1', "ARM1 (Pick-and-Place)", failed, err_msg, ARM1_STATES,
+                hardware.pick_and_place_arm, '/orio/pnp_cup/on', '/orio/pnp_cup/off')
             log.info("[ARM1 Recovery] choice=%s", choice)
             events.emit('recovery', 'arm1', failed_state=failed, error=err_msg, choice=choice)
             recovery_event_arm1.clear()
@@ -1876,11 +2013,9 @@ class HumanRecoveryArm2(smach.State):
                 manager.busy[z] = False
         failed = getattr(userdata, 'recovery_failed_state', 'UNKNOWN')
         err_msg = getattr(userdata, 'recovery_error_msg', 'No details available.')
-        choice = _show_recovery_gui(
-            "ARM2 (Labeling)", failed, err_msg, ARM2_STATES,
-            fa=hardware.label_arm,
-            vacuum_on_service='/orio/lbl_cup/on',
-            vacuum_off_service='/orio/lbl_cup/off')
+        choice = _ask_recovery(
+            'arm2', "ARM2 (Labeling)", failed, err_msg, ARM2_STATES,
+            hardware.label_arm, '/orio/lbl_cup/on', '/orio/lbl_cup/off')
         log.info("[ARM2 Recovery] choice=%s", choice)
         _end_intervention_pause()
         events.emit('recovery', 'arm2', failed_state=failed, error=err_msg, choice=choice)
@@ -2546,7 +2681,8 @@ def _status_snapshot():
     for arm, rec in (('arm1', recovery_event_arm1), ('arm2', recovery_event_arm2)):
         arms[arm].update(state=_active_state(_machines.get(arm)),
                          held=pause_ctl.held[arm], recovery=rec.is_set(),
-                         intervene=intervene[arm].is_set())
+                         intervene=intervene[arm].is_set(),
+                         help=recovery_board.snapshot(arm))
     if hardware is not None:
         arms['arm1'].update(has_item=bool(hardware.pnp_has_item), raw=hardware.pnp_raw)
         arms['arm2'].update(has_item=bool(hardware.lbl_has_item), raw=hardware.lbl_raw)
@@ -2587,6 +2723,7 @@ def _start_status_server():
                                message="arms going home, then exit" if started else "already stopping")
 
     rospy.Service('/orio/pause', Trigger, on_pause)
+    rospy.Subscriber(CMD_TOPIC, String, recovery_board.on_command, queue_size=20)
     rospy.Service('/orio/resume', Trigger, on_resume)
     rospy.Service('/orio/estop', Trigger, on_estop)
     rospy.Service('/orio/shutdown', Trigger, on_shutdown)

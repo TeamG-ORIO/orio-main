@@ -87,6 +87,65 @@ ZONE_LOOK = {   # state -> (text, fill, outline)
     'READY_FOR_PICKUP': ('Labelled, ready', '#253a2c', GREEN),
 }
 
+# Recovery panel. Commands go to full_sequence.py's RecoveryBoard as JSON on CMD_TOPIC;
+# a 'hello' every HELLO_S tells it a dashboard is there to answer.
+CMD_TOPIC = '/orio/dashboard/cmd'
+HELLO_S = 1.0
+STEP_INFO = {   # the steps an arm can continue from: (title, what it does)
+    'DECIDE_HUB': ("Choose the next task",
+                   "The robot decides: load an empty zone, or unload a labelled item."),
+    'FETCH_INPUT': ("Bin pick", "Scan the input bin and pick a new item."),
+    'DROP_TO_ZONE': ("Place in a zone", "Put the item in the cup into an empty zone."),
+    'RETRIEVE': ("Take from a zone", "Pick a labelled item up from its zone."),
+    'PLACE_OUTPUT': ("Place in the output", "Drop the item in the cup into the output box."),
+    'GET_LABEL': ("Get a label", "Take a new label from the dispenser."),
+    'APPLY': ("Apply the label", "Put the label in the cup onto the item in a zone."),
+}
+NEEDS_CUP = ('DROP_TO_ZONE', 'PLACE_OUTPUT', 'APPLY')   # only make sense holding something
+GOES_HOME = ('DECIDE_HUB', 'FETCH_INPUT')              # arm 1 goes home before these
+ZONE_CHOICES = (('EMPTY', 'Empty', SUBTEXT), ('NEEDS_LABEL', 'Needs label', YELLOW),
+                ('READY_FOR_PICKUP', 'Labelled', GREEN))
+
+
+def recovery_hint(arm, error, reason):
+    """What the operator should do about a recovery request, in plain words."""
+    e = (error or '').lower()
+    if reason == 'intervene':
+        return "You stepped in. Change anything you need below, then choose where the arm continues."
+    if 'vacuum failed to pick' in e:
+        return ("The cup came up without the item. Check the item can be picked, then "
+                "continue from Bin pick." if arm == 'arm1' else
+                "The cup did not take a label. Check the dispenser has one ready, then "
+                "continue from Get a label.")
+    if 'vacuum failed to release' in e:
+        return "The cup did not let go. Turn suction off and check where the item is."
+    if 'still moving' in e or 'franka' in e or 'controller' in e or 'reflex' in e:
+        return ("The robot controller stopped a move. Check the arm is clear, Send home, "
+                "then continue.")
+    if 'timed out' in e or 'timeout' in e:
+        return "A move or a service took too long. Check the control PC and cameras, then continue."
+    if 'ik' in e.split() or 'arm pose' in e or 'reach' in e:
+        return "No safe arm pose for the target. Move the item, or continue from another step."
+    if 'label pose' in e or 'placement' in e or 'zone' in e:
+        return "The camera could not find where to put the label. Check the item in the zone is in view."
+    return "Check the cell, fix what you can below, then choose where the arm continues."
+
+
+def recommended_step(arm, req, a, vacuum_on):
+    """The step to suggest: arm 2 applies a label it is holding, or gets one; arm 1
+    finishes with an item it is holding, retries a bin pick, or lets the robot decide."""
+    holding = a.get('has_item') if vacuum_on else a.get('cup')
+    failed, choices = req.get('failed_state'), req.get('choices') or []
+    if arm == 'arm2':
+        pick = 'APPLY' if holding else 'GET_LABEL'
+    elif holding and failed in NEEDS_CUP:
+        pick = failed
+    elif failed == 'FETCH_INPUT':
+        pick = 'FETCH_INPUT'
+    else:
+        pick = 'DECIDE_HUB'
+    return pick if pick in choices else (choices[0] if choices else None)
+
 
 # ── Drawing helpers ──────────────────────────────────────────────────────────
 
@@ -230,6 +289,315 @@ class FeedView:
             rrect(c, 1, 1, W - 1, H - 1, 14, fill='', outline=RED, width=2)
 
 
+# ── Recovery panel ───────────────────────────────────────────────────────────
+
+def flat_button(parent, text, command, bg, fg, font, padx=12, pady=6):
+    return tk.Button(parent, text=text, command=command, font=font, relief='flat', bd=0,
+                     padx=padx, pady=pady, cursor='hand2', bg=bg, fg=fg, activebackground=bg,
+                     activeforeground=fg, disabledforeground=SURF2, highlightthickness=0)
+
+
+class RecoveryPanel:
+    """Shown in place of the cell map while an arm needs help: what went wrong, what the
+    cell is like now with buttons to change it, and the step the arm continues from.
+    Built once per request (_build), refreshed every tick (_refresh)."""
+
+    def __init__(self, dash, parent):
+        self.d = dash
+        self.frame = tk.Frame(parent, bg=BASE)
+        self.key = None      # (arm, request id, arms needing help) the widgets show
+        self.arm = None      # the arm shown; tabs switch it when both need help
+        self.chosen = {}     # (arm, id) -> the step picked in CONTINUE FROM
+        self.sent = {}       # (arm, id) -> when RESUME was clicked
+        self.w = {}
+
+    def show(self, s, helping):
+        if self.arm not in helping:
+            self.arm = helping[0]
+        req = s['arms'][self.arm]['help']
+        key = (self.arm, req['id'], tuple(helping))
+        self.req = req
+        if key != self.key:
+            self._build(s, req, helping)
+            self.key = key
+        self._refresh(s, req)
+
+    def _send(self, req, **cmd):
+        self.d.send(dict(cmd, arm=self.arm, id=req['id']))
+
+    # ── layout ──
+    def _build(self, s, req, helping):
+        d, arm = self.d, self.arm
+        for child in self.frame.winfo_children():
+            child.destroy()
+        self.w = w = {}
+        rid = (arm, req['id'])
+        a = s['arms'][arm]
+        self.chosen.setdefault(rid, recommended_step(arm, req, a, s.get('vacuum', True)))
+
+        card = tk.Frame(self.frame, bg=MANTLE, highlightthickness=2, highlightbackground=RED)
+        card.pack(fill='both', expand=True)
+
+        # header: who needs help, why, for how long; tabs when both arms do
+        head = tk.Frame(card, bg='#3a2229')
+        head.pack(fill='x')
+        title = "%s NEEDS YOUR HELP" % ARM_TITLE[arm] if req['reason'] != 'intervene' \
+            else "%s IS WAITING FOR YOU" % ARM_TITLE[arm]
+        tk.Label(head, text="●  " + title, font=d.f_h2, fg=RED, bg='#3a2229').pack(
+            side='left', padx=(18, 10), pady=10)
+        w['since'] = tk.Label(head, font=d.f_body, fg=SUBTEXT, bg='#3a2229')
+        w['since'].pack(side='left', pady=10)
+        if len(helping) > 1:
+            for other in reversed(helping):
+                on = other == arm
+                b = flat_button(head, ARM_TITLE[other], lambda o=other: self._switch(o),
+                                ARM_COLOR[other] if on else SURF0, CRUST if on else TEXT,
+                                d.f_smallb)
+                b.pack(side='right', padx=(0, 10), pady=8)
+            tk.Label(head, text="Both arms need help:", font=d.f_small, fg=SUBTEXT,
+                     bg='#3a2229').pack(side='right', padx=6)
+
+        body = tk.Frame(card, bg=MANTLE)
+        body.pack(fill='both', expand=True, padx=18, pady=(12, 14))
+        for col, weight in enumerate((3, 4, 4)):
+            body.columnconfigure(col, weight=weight, uniform='rec')
+        body.rowconfigure(0, weight=1)
+        cols = []
+        for col in range(3):
+            f = tk.Frame(body, bg=MANTLE)
+            f.grid(row=0, column=col, sticky='nsew', padx=(0 if col == 0 else 18, 0))
+            cols.append(f)
+        for col in (1, 2):   # thin dividers between the columns
+            tk.Frame(body, bg=SURF0, width=1).grid(row=0, column=col, sticky='nsw', padx=(8, 0))
+
+        self._build_what(cols[0], req)
+        self._build_now(cols[1], req, s)
+        self._build_next(cols[2], req)
+
+    def _section(self, parent, text):
+        tk.Label(parent, text=text, font=self.d.f_smallb, fg=OVERLAY, bg=MANTLE,
+                 anchor='w').pack(fill='x', pady=(0, 6))
+
+    def _build_what(self, col, req):
+        d, w = self.d, self.w
+        self._section(col, "WHAT HAPPENED")
+        failed = req.get('failed_state') or ''
+        intervene = req['reason'] == 'intervene'
+        tk.Label(col, text="You stepped in during" if intervene else "Stopped during",
+                 font=d.f_small, fg=SUBTEXT, bg=MANTLE, anchor='w').pack(fill='x')
+        step = STEP_INFO.get(failed, (STATE_NAME.get(failed, failed or 'unknown'),))[0]
+        tk.Label(col, text=step, font=d.f_h2, fg=TEXT, bg=MANTLE, anchor='w').pack(fill='x')
+        tk.Label(col, text=failed, font=d.f_small, fg=OVERLAY, bg=MANTLE, anchor='w').pack(fill='x')
+        if not intervene:
+            w['err'] = tk.Label(col, text=req['error'], font=d.f_body, fg=PEACH, bg='#2a2430',
+                                anchor='w', justify='left', padx=10, pady=8)
+            w['err'].pack(fill='x', pady=(10, 0))
+        tk.Label(col, text="WHAT TO DO", font=d.f_smallb, fg=OVERLAY, bg=MANTLE,
+                 anchor='w').pack(fill='x', pady=(12, 2))
+        w['hint'] = tk.Label(col, text=recovery_hint(self.arm, req['error'], req['reason']),
+                             font=d.f_body, fg=TEXT, bg=MANTLE, anchor='w', justify='left')
+        w['hint'].pack(fill='x')
+
+    def _build_now(self, col, req, s):
+        d, w = self.d, self.w
+        self._section(col, "RIGHT NOW   →   CHANGE TO")
+        grid = tk.Frame(col, bg=MANTLE)
+        grid.pack(fill='x')
+        grid.columnconfigure(1, weight=1)
+
+        def row(r, label):
+            tk.Label(grid, text=label, font=d.f_smallb, fg=SUBTEXT, bg=MANTLE, anchor='w',
+                     width=8).grid(row=r, column=0, sticky='w', pady=5)
+            now = tk.Label(grid, font=d.f_bodyb, bg=MANTLE, anchor='w')
+            now.grid(row=r, column=1, sticky='w', padx=(4, 8))
+            btns = tk.Frame(grid, bg=MANTLE)
+            btns.grid(row=r, column=2, sticky='e')
+            return now, btns
+
+        w['cup_now'], b = row(0, "SUCTION")
+        w['cup_on'] = flat_button(b, "ON", lambda: self._action(req, 'vacuum_on'), SURF0, TEXT, d.f_smallb)
+        w['cup_off'] = flat_button(b, "OFF", lambda: self._action(req, 'vacuum_off'), SURF0, TEXT, d.f_smallb)
+        w['cup_on'].pack(side='left', padx=(0, 6))
+        w['cup_off'].pack(side='left')
+        w['cup_note'] = tk.Label(grid, font=d.f_small, fg=OVERLAY, bg=MANTLE, anchor='w')
+        w['cup_note'].grid(row=1, column=1, columnspan=2, sticky='w', padx=(4, 0))
+
+        w['arm_now'], b = row(2, "ARM")
+        w['home'] = flat_button(b, "SEND HOME", lambda: self._action(req, 'reset_joints'), SURF0, TEXT, d.f_smallb)
+        w['stop'] = flat_button(b, "STOP MOTION", lambda: self._action(req, 'stop_skill'), SURF0, TEXT, d.f_smallb)
+        w['home'].pack(side='left', padx=(0, 6))
+        w['stop'].pack(side='left')
+        w['act_note'] = tk.Label(grid, font=d.f_small, fg=OVERLAY, bg=MANTLE, anchor='w')
+        w['act_note'].grid(row=3, column=1, columnspan=2, sticky='w', padx=(4, 0))
+
+        w['zones'] = {}
+        for i, z in enumerate(('A', 'B')):
+            now, b = row(4 + i, "ZONE %s" % z)
+            seg = {}
+            for state, label, _col in ZONE_CHOICES:
+                btn = flat_button(b, label, lambda z=z, st=state: self._zone(req, z, st),
+                                  SURF0, SUBTEXT, d.f_smallb, padx=9)
+                btn.pack(side='left', padx=(0, 2))
+                seg[state] = btn
+            w['zones'][z] = (now, seg)
+        w['note_now'] = tk.Label(col, text="Zone changes apply at once. RESUME waits for a "
+                                 "running suction or arm action to finish.", font=d.f_small,
+                                 fg=OVERLAY, bg=MANTLE, anchor='w', justify='left')
+        w['note_now'].pack(fill='x', pady=(10, 0))
+
+    def _build_next(self, col, req):
+        d, w = self.d, self.w
+        self._section(col, "CONTINUE FROM")
+        w['resume'] = flat_button(col, "", lambda: self._resume(), GREEN, CRUST, d.f_h2,
+                                  padx=16, pady=10)
+        w['resume'].pack(side='bottom', fill='x', pady=(10, 0))
+        w['steps'] = {}
+        for state in req['choices']:
+            row = tk.Frame(col, bg=MANTLE, highlightthickness=2, highlightbackground=MANTLE,
+                           cursor='hand2')
+            row.pack(fill='x', pady=2)
+            dot = tk.Label(row, font=d.f_bodyb, bg=MANTLE, width=2)
+            dot.pack(side='left', padx=(6, 0))
+            txt = tk.Frame(row, bg=MANTLE)
+            txt.pack(side='left', fill='x', expand=True, pady=3)
+            top = tk.Frame(txt, bg=MANTLE)
+            top.pack(fill='x')
+            name = tk.Label(top, text=STEP_INFO.get(state, (state,))[0], font=d.f_bodyb,
+                            fg=TEXT, bg=MANTLE, anchor='w')
+            name.pack(side='left')
+            tag = tk.Label(top, font=d.f_smallb, bg=MANTLE, anchor='w')
+            tag.pack(side='left', padx=8)
+            desc = tk.Label(txt, text=STEP_INFO.get(state, ('', ''))[1], font=d.f_small,
+                            fg=SUBTEXT, bg=MANTLE, anchor='w')
+            desc.pack(fill='x')
+            parts = (row, dot, txt, top, name, tag, desc)
+            for p in parts:
+                p.bind('<Button-1>', lambda e, st=state: self._choose(req, st))
+            w['steps'][state] = parts
+
+    # ── actions ──
+    def _switch(self, arm):
+        self.arm, self.key = arm, None
+
+    def _action(self, req, action):
+        self._send(req, cmd='action', action=action)
+
+    def _zone(self, req, zone, state):
+        self._send(req, cmd='zone', zone=zone, state=state)
+
+    def _choose(self, req, state):
+        self.chosen[(self.arm, req['id'])] = state
+
+    def _resume(self):
+        req = self.req   # the latest status, not the one the panel was built from
+        rid = (self.arm, req['id'])
+        if req.get('busy') or rid in self.sent:
+            return
+        self.sent[rid] = time.time()
+        self._send(req, cmd='resume', state=self.chosen[rid])
+
+    # ── refresh ──
+    def _refresh(self, s, req):
+        d, w, arm = self.d, self.w, self.arm
+        a = s['arms'][arm]
+        rid = (arm, req['id'])
+        el = int(time.time() - req['since'])
+        w['since'].configure(text="waiting %d:%02d" % (el // 60, el % 60))
+        width = self.frame.winfo_width()
+        for key, share in (('err', 0.27), ('hint', 0.27), ('note_now', 0.36)):
+            if key in w:
+                w[key].configure(wraplength=max(180, int(width * share) - 30))
+
+        # suction
+        cup, vacuum = a.get('cup'), s.get('vacuum', True)
+        w['cup_now'].configure(text="●  On" if cup else "●  Off", fg=GREEN if cup else SUBTEXT)
+        if not vacuum:
+            note = "pneumatics off (dry run)"
+        elif a.get('raw') is not None:
+            note = "sensor: %s (raw %s)" % ("holding" if a.get('has_item') else "nothing held", a['raw'])
+        else:
+            note = ""
+        w['cup_note'].configure(text=note)
+        busy = bool(req.get('busy'))
+        for key, on in (('cup_on', not cup), ('cup_off', cup)):
+            w[key].configure(state='normal' if on else 'disabled',
+                             bg=SURF1 if on else SURF0, fg=TEXT)
+
+        # arm and the last action
+        act = req.get('action') or {}
+        if act.get('state') == 'running':
+            w['arm_now'].configure(text="●  Busy", fg=YELLOW)
+        elif a.get('moving'):
+            w['arm_now'].configure(text="●  Moving", fg=ARM_COLOR[arm])
+        else:
+            w['arm_now'].configure(text="●  Stopped", fg=TEXT)
+        if act.get('state') == 'running':
+            w['act_note'].configure(text="… %s: running" % act['name'], fg=YELLOW)
+        elif act.get('state') == 'done':
+            w['act_note'].configure(text="✓ %s: done %s" % (act['name'], ago(time.time() - act['t'])),
+                                    fg=GREEN)
+        elif act.get('state') == 'error':
+            w['act_note'].configure(text=shorten("✗ %s failed: %s" % (act['name'], act['msg']),
+                                                 d.f_small, max(200, int(width * 0.34))), fg=RED)
+        else:
+            w['act_note'].configure(text="", fg=OVERLAY)
+        for key in ('home', 'stop'):
+            w[key].configure(bg=SURF1, fg=TEXT)
+
+        # zones: the current state lit in its colour; locked while the other arm uses it
+        for z, (now, seg) in w['zones'].items():
+            zs = s['zones'][z]
+            text, col = next(((lbl, c) for st, lbl, c in ZONE_CHOICES if st == zs['state']),
+                             (zs['state'], SUBTEXT))
+            owner = zs.get('busy')
+            locked = owner in ARM_TITLE and owner != arm
+            now.configure(text="%s busy" % ARM_TITLE[owner] if locked else text, fg=col)
+            for state, label, col in ZONE_CHOICES:
+                cur = zs['state'] == state
+                seg[state].configure(bg=col if cur else SURF0, fg=CRUST if cur else SUBTEXT,
+                                     state='disabled' if (cur or locked) else 'normal',
+                                     disabledforeground=CRUST if cur else SURF2)
+
+        # continue from
+        chosen = self.chosen.get(rid)
+        rec = recommended_step(arm, req, a, vacuum)
+        holding = a.get('has_item') if vacuum else cup
+        for state, (row, dot, txt, top, name, tag, desc) in w['steps'].items():
+            on = state == chosen
+            bg = SURF0 if on else MANTLE
+            for p in (row, dot, txt, top, name, tag, desc):
+                p.configure(bg=bg)
+            row.configure(highlightbackground=ARM_COLOR[arm] if on else MANTLE)
+            dot.configure(text="◉" if on else "○", fg=ARM_COLOR[arm] if on else OVERLAY)
+            if on:
+                desc.configure(wraplength=max(160, int(width * 0.33) - 40))
+                desc.pack(fill='x')
+            else:
+                desc.pack_forget()
+            if state in NEEDS_CUP and not holding:
+                tag.configure(text="needs %s in the cup" % ('an item' if arm == 'arm1' else 'a label'),
+                              fg=YELLOW)
+            elif state == rec:
+                tag.configure(text="RECOMMENDED", fg=GREEN)
+            elif arm == 'arm1' and state in GOES_HOME:
+                tag.configure(text="goes home first", fg=OVERLAY)
+            else:
+                tag.configure(text="")
+
+        step = STEP_INFO.get(chosen, (chosen,))[0]
+        if rid in self.sent and time.time() - self.sent[rid] > 5.0:
+            del self.sent[rid]   # not taken (e.g. an action had just started): allow again
+        if rid in self.sent:
+            w['resume'].configure(text="RESUMING…", state='disabled', bg=SURF1,
+                                  disabledforeground=TEXT, cursor='')
+        elif busy:
+            w['resume'].configure(text="WAIT: %s RUNNING…" % act.get('name', 'action').upper(),
+                                  state='disabled', bg=SURF0, disabledforeground=SUBTEXT, cursor='')
+        else:
+            w['resume'].configure(text="▶  RESUME %s  ·  %s" % (ARM_TITLE[arm], step),
+                                  state='normal', bg=GREEN, cursor='hand2')
+
+
 # ── Dashboard ────────────────────────────────────────────────────────────────
 
 class Dashboard:
@@ -271,8 +639,10 @@ class Dashboard:
 
         self._build()
         rospy.Subscriber(STATUS_TOPIC, String, self._on_status, queue_size=1)
+        self.cmd_pub = rospy.Publisher(CMD_TOPIC, String, queue_size=10)
         root.bind('<space>', lambda e: self.toggle())
         threading.Thread(target=self._poll_loop, daemon=True, name='poll').start()
+        threading.Thread(target=self._hello_loop, daemon=True, name='hello').start()
         self._tick()
 
     # ── layout ───────────────────────────────────────────────────────────────
@@ -340,6 +710,9 @@ class Dashboard:
         self.map.tag_bind('bin_refilled', '<Button-1>', lambda e: self.bin_refilled())
         self.map.tag_bind('bin_refilled', '<Enter>', lambda e: self.map.configure(cursor='hand2'))
         self.map.tag_bind('bin_refilled', '<Leave>', lambda e: self.map.configure(cursor=''))
+        # Shown instead of the map while an arm needs help
+        self.rec = RecoveryPanel(self, r)
+        self.rec_shown = False
 
         # Bottom: arm cards (with their brake buttons), then the newest debug images
         bot = tk.Frame(r, bg=BASE, height=330)
@@ -394,6 +767,24 @@ class Dashboard:
 
     def connected(self):
         return self.status is not None and time.time() - self.rx_time < STALE_S
+
+    def send(self, cmd):
+        """A command for full_sequence.py's recovery board."""
+        self.cmd_pub.publish(String(data=json.dumps(cmd)))
+
+    def _hello_loop(self):
+        """Tell the sequence a dashboard is here, so a stopped arm asks in the recovery
+        panel instead of opening its own window."""
+        while not rospy.is_shutdown():
+            try:
+                self.send({'cmd': 'hello'})
+            except Exception:  # noqa: BLE001 — shutting down
+                pass
+            time.sleep(HELLO_S)
+
+    def _helping(self, s):
+        """Arms with an open recovery request (answered in the recovery panel)."""
+        return [arm for arm in ('arm1', 'arm2') if s and s['arms'][arm].get('help')]
 
     def toggle(self):
         if self.pending or not self.connected() or self.status.get('stopping'):
@@ -457,14 +848,14 @@ class Dashboard:
 
     def intervene(self, arm):
         """INTERVENE: both arms stop at their next pause point (as for Pause, never in the
-        middle of touching an item) and this arm's recovery window opens, where the
+        middle of touching an item) and this arm's recovery panel opens, where the
         operator picks what it does next; resuming from it releases both."""
         if not self.connected() or self.status.get('stopping'):
             return
         if messagebox.askyesno(
                 "Intervene on %s" % ARM_TITLE[arm],
                 "Stop BOTH arms after their current moves and open %s's recovery "
-                "window?\n\nThere you choose which step %s continues from. Both arms "
+                "panel?\n\nThere you choose which step %s continues from. Both arms "
                 "carry on when you resume from it." % (ARM_TITLE[arm], ARM_TITLE[arm]),
                 parent=self.root):
             self._call('/orio/intervene/%s' % arm, track=False)
@@ -589,7 +980,15 @@ class Dashboard:
         try:
             self._draw_header(s, t)
             self._draw_banner(s)
-            self._draw_map(s, t)
+            helping = self._helping(s)
+            if bool(helping) != self.rec_shown:   # the panel takes the map's place
+                self.rec_shown = bool(helping)
+                (self.map if helping else self.rec.frame).pack_forget()
+                (self.rec.frame if helping else self.map).pack(fill='both', expand=True, padx=16)
+            if helping:
+                self.rec.show(s, helping)
+            else:
+                self._draw_map(s, t)
             for arm in ('arm1', 'arm2'):
                 self._draw_card(arm, s, t)
             for view in self.views:
@@ -685,10 +1084,22 @@ class Dashboard:
             title = "RUNNING"
             sub = "Pause stops both arms after their current move (Space bar works too)."
         if s is not None:
-            for arm in ('arm1', 'arm2'):
-                if s['arms'][arm].get('recovery'):
-                    bg, fg = '#3a2229', RED
-                    sub = "%s needs help: see its recovery window. " % ARM_TITLE[arm] + sub
+            stuck = [arm for arm in ('arm1', 'arm2') if s['arms'][arm].get('recovery')]
+            if stuck and not s.get('stopping'):
+                bg, fg = '#3a2229', RED
+                title = "%s NEED%s HELP" % (" AND ".join(ARM_TITLE[a] for a in stuck),
+                                            "" if len(stuck) > 1 else "S")
+                where = ("the panel below" if all(s['arms'][a].get('help') for a in stuck)
+                         else "its recovery window")
+                others = [a for a in ('arm1', 'arm2') if a not in stuck]
+                if s['paused']:
+                    rest = "Everything stays paused until you resume."
+                elif others:
+                    rest = "%s keeps working." % ARM_TITLE[others[0]]
+                else:
+                    rest = ""
+                sub = "Fix what is needed and choose where %s continues, in %s. %s" % (
+                    "it" if len(stuck) == 1 else "each", where, rest)
             if s.get('prompt'):
                 sub = "The terminal is waiting for you: %s" % s['prompt'].split('\n')[0]
         self.banner.configure(bg=bg)
@@ -951,7 +1362,8 @@ class Dashboard:
         if s is None:
             now = "No signal"
         elif a.get('recovery'):
-            now = "In the recovery window"
+            now = ("Needs you: see the panel above" if a.get('help')
+                   else "Waiting for you in its recovery window")
         else:
             now = a.get('activity') or STATE_NAME.get(state, '')
             if state == 'DECIDE_HUB' and not a.get('moving'):
