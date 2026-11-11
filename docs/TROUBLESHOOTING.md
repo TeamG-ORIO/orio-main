@@ -227,6 +227,39 @@ enough — the **FCI must be active** and franka-interface running.)
 
 ---
 
+## Arm 1 stops mid-run: `std::bad_cast` in control_pc.log
+
+**Symptom.** In the full demo, a move times out ("goto pre-pick (arm1) did not complete in
+11.0s") and arm 1's recovery panel opens. After that, even "go home" times out. Seen in run
+`20261110_190006`. In `control_pc.log`:
+
+```
+done_skill_id error: done_skill_id = 293, skill_id = 295
+Cannot create Trajectory Generator with type:
+Parsing ContactTerminationHandler params failed. Data size = 0
+Caught non-franka exception (type: St8bad_cast): std::bad_cast
+```
+
+**Cause.** The action server reads franka-interface's status with a `try_lock`, and a
+failed read counts as "not ready". So it sometimes aborts a skill that is still running.
+frankapy then reports the move done while the arm is still moving. The next skill is sent
+and stored in shared memory. When the first move ends with the usual
+`acceleration_discontinuity` fault, error handling clears those buffers
+(`clearAllBuffers`), so the next skill starts with empty parameters. That throws
+`std::bad_cast`, and the run loop exits for good: franka-interface stays up but runs no more
+skills. The same pattern appears four more times in the log (Oct 21 ×2, Nov 3, Nov 6).
+
+**Fix.**
+- Restart the control PC (`bash run_full_demo.sh --fresh`); franka-interface does not
+  recover on its own.
+- `full_sequence.py`'s `_run_motion` now waits for franka-interface to be ready before
+  sending a move. If a move reports done before its duration is up, it waits until the
+  trajectory would have ended, then checks the arm is at the target, and sends the move
+  again once if it never ran. The warning reads `control PC ended the skill after …s of
+  …s`. `dexnet_pnp.py` does not have this yet.
+
+---
+
 ## Perception crashes on startup with `ORIO_LOGGING=1` (rerun on Python 3.8)
 
 **Symptom.** Perception exits during import with

@@ -112,6 +112,12 @@ HOME_JOINTS = [0.0, -np.pi / 4, 0.0, -3 * np.pi / 4, 0.0, np.pi / 2, np.pi / 4] 
 # "Motion finished commanded, but the robot is still moving!" (velocity / acceleration
 # discontinuity), which got much more frequent with shorter moves (--speed).
 DEFAULT_SETTLE_S = 0.0
+# A skill the control PC ends before its duration is up (see _finish_dropped_skill): how long
+# past its planned end to wait. The skill starts ~0.2 s after it is sent, and the end-of-move
+# fault plus franka-interface's recovery take ~0.2 s more. Then the arm must be within
+# DROPPED_SKILL_TOL_RAD of the target on every joint, or the move is sent again.
+DROPPED_SKILL_MARGIN_S = 0.75
+DROPPED_SKILL_TOL_RAD = 0.05
 
 # Same safe workspace box FetchInput has always enforced on the incoming grasp pose (world).
 PICK_BOUNDS = {'x_min': -0.2, 'x_max': 0.55, 'y_min': -0.8, 'y_max': -0.1,
@@ -135,10 +141,24 @@ FLAT_ARM_MAX_SHORT = 0.08
 FLAT_PICK_MIN_LIMIT_GAP = 0.15
 # 180 deg about the cup axis: the two cups swap places, the same grasp.
 CUP_FLIP = np.diag([-1.0, -1.0, 1.0])
-# Of the two cup orders, the pick IK prefers the one with joint 7 nearer its home value
-# (frankapy's reset pose), so the wrist does not spin up to ~180 deg more than needed.
+# Of the two cup orders, the pick IK prefers the one whose pre-pick J7 is nearer its home
+# value (frankapy's reset pose, where the arm starts the pick), so the wrist turns less on
+# the way to the bin. The arm shape is the same for both orders; only J7 differs by 180 deg.
 PICK_J7_HOME = np.pi / 4
-PICK_J7_WEIGHT = 0.1   # cost per rad^2 of J7 away from PICK_J7_HOME, against J3^2 + J5^2
+PICK_J7_WEIGHT = 0.1   # cost per rad^2 of pre-pick J7 away from PICK_J7_HOME, against J3^2 + J5^2
+# Cost per rad^2 of the largest J1/J3/J5/J7 change from pre-pick to pick. A straight
+# descent barely moves these on a good arm shape; grasp_0054 (20261111) was given an arm
+# reaching round from the other side (J1 +0.94 -> +0.09) over one facing the item.
+PICK_DESCENT_WEIGHT = 2.0
+# Limits on the pick's arm pose: compute_flat_pick_joints never picks one past them (the
+# grasp is declined if none is left), and ik_grid_test.py checks every kind of grasp the
+# planner can give against the same numbers. grasp_0054 as run broke two: a 0.85 rad J1
+# change on the descent, and J1 2.2 rad off the item's direction.
+PICK_MAX_DESCENT_CHANGE = 0.5      # rad, largest J1/J3/J5/J7 change, pre-pick -> pick
+PICK_MAX_DESCENT_OFF_LINE = 0.015  # m the cup may stray from the straight line on the descent
+PICK_MAX_RETRACT_CHANGE = 0.7      # rad, the same for the INPUT_RETRACT_DISTANCE retract
+PICK_MAX_RETRACT_OFF_LINE = 0.02   # m; over either, FetchInput backs out to pre-pick instead
+PICK_MAX_FACING = 1.3              # rad J1 at pre-pick may point away from the item (seen from the base)
 
 # ── LABEL PLACEMENT ──────────────────────────────────────────────────────────────
 # compute_label_joints asks perception for the label pose this many times, this far apart,
@@ -775,18 +795,21 @@ class RobotHardware:
         """
         arm = self._arm(arm_name)
         _raise_if_interrupted()      # Ctrl-C: issue no new motion
-        motion_fn(*args, **kwargs)   # issue asynchronously
         deadline = rospy.Time.now() + rospy.Duration(timeout)
+        # Every _move is a fixed-duration goto_joints / reset_joints, so its skill cannot
+        # really finish before its duration has passed (frankapy's default is 5 s).
+        duration = float(kwargs.get("duration", 5))
+        self._wait_controller_ready(arm_name, deadline, desc)
+        motion_fn(*args, **kwargs)   # issue asynchronously
+        issued = time.monotonic()
+        reissued = False
         rate = rospy.Rate(20)
         faults = 0
         while True:
             try:
-                if arm.is_skill_done(ignore_errors=False):
-                    _raise_if_interrupted()   # done because Ctrl-C cancelled it
-                    if settle_s > 0:
-                        rospy.sleep(settle_s)   # let the arm settle (see DEFAULT_SETTLE_S)
-                    return faults
+                done = arm.is_skill_done(ignore_errors=False)
             except Exception as exc:   # FrankaArmException / ...NotReadyException
+                done = False
                 faults += 1
                 if faults == 1:        # once per motion; the fault repeats while recovering
                     log.warning("[Move] %s (%s): controller fault (recovering): %s",
@@ -795,6 +818,26 @@ class RobotHardware:
                     arm.wait_for_franka_interface()
                 except Exception:
                     pass
+            if done:
+                _raise_if_interrupted()   # done because Ctrl-C cancelled it
+                if time.monotonic() < issued + duration:
+                    # The control PC ended the skill before its trajectory could have
+                    # finished (its status read glitched, or it was not ready). The arm
+                    # may still be moving it, and sending the next skill now is what
+                    # crashed franka-interface (std::bad_cast): the fault at the end of
+                    # this move wiped the next skill's params from shared memory.
+                    if not self._finish_dropped_skill(arm_name, args, motion_fn,
+                                                      issued, duration, deadline,
+                                                      desc, reissued, faults > 0):
+                        motion_fn(*args, **kwargs)   # never ran: send it again, once
+                        issued = time.monotonic()
+                        reissued = True
+                        deadline = max(deadline, rospy.Time.now() + rospy.Duration(
+                            duration + self.motion_timeout_margin))
+                        continue
+                if settle_s > 0:
+                    rospy.sleep(settle_s)   # let the arm settle (see DEFAULT_SETTLE_S)
+                return faults
             if rospy.Time.now() > deadline:
                 # Cancel the stuck skill before raising, or frankapy keeps it
                 # marked active and the recovery GUI's Reset Joints then dies
@@ -814,6 +857,73 @@ class RobotHardware:
                 self._abort_skill(arm_name)
                 raise KeyboardInterrupt
             rate.sleep()
+
+    def _wait_controller_ready(self, arm_name, deadline, desc):
+        """Block until franka-interface reports ready, so no skill is sent mid-recovery.
+
+        A skill sent while it is not ready is aborted at once, so the move
+        looks done but never ran. Raises the usual 'did not complete' error if it
+        is still not ready at the move's deadline.
+        """
+        arm = self._arm(arm_name)
+        remaining = (deadline - rospy.Time.now()).to_sec()
+        try:
+            arm.wait_for_franka_interface(timeout=max(0.1, remaining))
+        except Exception as exc:  # noqa: BLE001 — FrankaArmCommException, service errors
+            self._abort_skill(arm_name)
+            raise RuntimeError(
+                "%s (%s) did not complete: franka-interface not ready (%s) — the robot is "
+                "not executing (control PC crashed / FCI not active / e-stop, or it never "
+                "recovered from a fault)." % (desc, arm_name, exc))
+
+    def _finish_dropped_skill(self, arm_name, args, motion_fn, issued, duration,
+                              deadline, desc, reissued, faulted):
+        """Handle a skill that ended before its duration was up.
+
+        Waits until its trajectory would have ended (plus the controller's
+        end-of-move fault and recovery), then until franka-interface is ready.
+        Returns True if the arm is at the target (or it cannot be checked), and
+        False if the move never ran and should be sent again. Raises if that
+        already happened once. After a controller fault (e.g. a collision
+        reflex) the move is not sent again; it carries on as before.
+        """
+        log.warning("[Move] %s (%s): control PC ended the skill after %.1fs of %.1fs; "
+                    "waiting for the arm to finish before the next command",
+                    desc, arm_name, time.monotonic() - issued, duration)
+        rate = rospy.Rate(20)
+        while time.monotonic() < issued + duration + DROPPED_SKILL_MARGIN_S:
+            if interrupted.is_set() or rospy.is_shutdown():
+                raise KeyboardInterrupt
+            rate.sleep()
+        self._wait_controller_ready(arm_name, deadline, desc)
+
+        if getattr(motion_fn, '__name__', '') == 'reset_joints':
+            target = HOME_JOINTS
+        elif args and np.ndim(args[0]) == 1 and len(args[0]) == 7:
+            target = args[0]
+        else:
+            return True
+        try:
+            err = float(np.max(np.abs(np.asarray(target, dtype=float)
+                                      - np.asarray(self._arm(arm_name).get_joints(),
+                                                   dtype=float))))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[Move] %s (%s): could not read joints to check the move (%s)",
+                        desc, arm_name, exc)
+            return True
+        if err <= DROPPED_SKILL_TOL_RAD:
+            return True
+        if faulted:
+            log.warning("[Move] %s (%s): stopped %.3f rad from the target after a controller "
+                        "fault; carrying on from there", desc, arm_name, err)
+            return True
+        if reissued:
+            raise RuntimeError(
+                "%s (%s) did not complete: the control PC ended it twice with the arm "
+                "%.3f rad from the target." % (desc, arm_name, err))
+        log.warning("[Move] %s (%s): arm is %.3f rad from the target; sending the move again",
+                    desc, arm_name, err)
+        return False
 
     def _abort_skill(self, arm_name):
         """Best-effort cancel of an in-flight skill so the next command is accepted.
@@ -1431,56 +1541,127 @@ class RobotHardware:
             return None, err
         return q, err
 
+    @staticmethod
+    def flat_pick_starts(task_pos, wide=False):
+        """The _flat_ik starts compute_flat_pick_joints tries for each cup order; wide: the
+        ones it tries when those give nothing usable, with J1 turned away from the item."""
+        yaw = np.arctan2(task_pos[1], task_pos[0])
+        if wide:
+            return [[yaw + d1, 0.3, 0.0, -2.2, 0.0, 2.5, j7]
+                    for d1 in (-0.75, 0.75, -1.5, 1.5) for j7 in (-2.0, 0.4, 2.6)]
+        starts = [[yaw, 0.3, 0.0, -2.2, 0.0, 2.5, j7] for j7 in (-2.0, -0.8, 0.4, 1.6, 2.6)]
+        starts += [[yaw, -0.3, 0.0, -2.6, 0.0, 2.3, j7] for j7 in (-0.8, 0.4, 1.6)]
+        return starts
+
+    def straight_move_ok(self, q0, q1, max_change, max_off_line):
+        """True if a goto_joints move q0 -> q1 meant to be a straight line is one: no
+        J1/J3/J5/J7 change over max_change (rad), and the cup within max_off_line (m) of
+        the straight line between its ends all the way (goto_joints interpolates joints)."""
+        q0, q1 = np.asarray(q0, dtype=float), np.asarray(q1, dtype=float)
+        if np.abs(q1 - q0)[[0, 2, 4, 6]].max() > max_change:
+            return False
+        a, b = self._fk7(q0)[:3, 3], self._fk7(q1)[:3, 3]
+        ab = b - a
+        for s in np.linspace(0.1, 0.9, 9):
+            p = self._fk7(q0 + s * (q1 - q0))[:3, 3]
+            t = np.clip((p - a) @ ab / max(ab @ ab, 1e-12), 0.0, 1.0)
+            if np.linalg.norm(p - (a + t * ab)) > max_off_line:
+                return False
+        return True
+
+    def input_retract_joints(self, final_joints, quiet=True):
+        """Joints INPUT_RETRACT_DISTANCE back up the cup axis from the pick, or None if
+        there are none or the move would not be straight (PICK_MAX_RETRACT_*)."""
+        back = self.compute_retract_joints(final_joints, INPUT_RETRACT_DISTANCE, quiet=quiet)
+        if back is None or not self.straight_move_ok(final_joints, back, PICK_MAX_RETRACT_CHANGE,
+                                                     PICK_MAX_RETRACT_OFF_LINE):
+            return None
+        return back
+
+    def flat_pick_candidate(self, task_pos, ori, seed):
+        """One compute_flat_pick_joints candidate from one _flat_ik start: see
+        score_flat_pick, or None if there is no solution or no straight pre-pick."""
+        final, _ = self._flat_ik(task_pos, ori, seed=seed, quiet=True)
+        if final is None:
+            return None
+        pre = self.compute_retract_joints(final, APPROACH_DISTANCE, quiet=True)
+        if pre is None:
+            return None
+        return self.score_flat_pick(task_pos, pre, final)
+
+    def score_flat_pick(self, task_pos, pre, final):
+        """(cost, pre, final, limit gap, retract_ok) for these pick joints, or None if they
+        are under FLAT_PICK_MIN_LIMIT_GAP from a joint limit, the descent is not straight
+        (PICK_MAX_DESCENT_*), or J1 points over PICK_MAX_FACING away from the item."""
+        lims = np.array([self.ik_chain.links[i].bounds for i in range(1, 8)], dtype=float)
+
+        def limit_gap(q):
+            return float(np.min(np.minimum(q - lims[:, 0], lims[:, 1] - q)))
+
+        gap = min(limit_gap(pre), limit_gap(final))
+        if gap < FLAT_PICK_MIN_LIMIT_GAP:
+            return None
+        facing = (pre[0] - np.arctan2(task_pos[1], task_pos[0]) + np.pi) % (2 * np.pi) - np.pi
+        if abs(facing) > PICK_MAX_FACING:
+            return None
+        if not self.straight_move_ok(pre, final, PICK_MAX_DESCENT_CHANGE, PICK_MAX_DESCENT_OFF_LINE):
+            return None
+        retract_ok = self.input_retract_joints(final) is not None
+        descent = float(np.abs(final - pre)[[0, 2, 4, 6]].max())
+        cost = (final[2] ** 2 + final[4] ** 2
+                + PICK_J7_WEIGHT * (pre[6] - PICK_J7_HOME) ** 2
+                + PICK_DESCENT_WEIGHT * descent ** 2
+                + (0.0 if retract_ok else 10.0))
+        return cost, pre, final, gap, retract_ok
+
     def compute_flat_pick_joints(self, task_pos, target_ori=None):
         """(pre_joints, final_joints) for the input pick with joints 3 and 5 as near 0 as
-        the grasp allows, or None if no such solution keeps FLAT_PICK_MIN_LIMIT_GAP from
-        every joint limit (the caller then uses compute_pick_joints).
+        the grasp allows, or None if no solution keeps FLAT_PICK_MIN_LIMIT_GAP from every
+        joint limit and within the PICK_MAX_* limits (score_flat_pick): FetchInput then
+        declines the grasp.
 
         The grasp is kept exactly: position, cup axis and cup line, or the cup line turned
         180 deg (CUP_FLIP), which only swaps the two identical cups. The final joints come
         from _flat_ik from a few starts; the pre joints from backing straight up the cup
         axis by APPROACH_DISTANCE (compute_retract_joints), so pre-pick and pick have the
         same arm shape and the descent is a straight line. Of the valid solutions the one
-        with the smallest J3^2 + J5^2 (+ PICK_J7_WEIGHT x J7's distance from PICK_J7_HOME
-        squared, which picks the cup order with less wrist turn) wins, preferring one that
-        also allows the INPUT_RETRACT_DISTANCE retract."""
+        with the smallest J3^2 + J5^2 wins, plus PICK_J7_WEIGHT x (pre-pick J7 - PICK_J7_HOME)^2
+        (picks the cup order with less wrist turn from home) and PICK_DESCENT_WEIGHT x the
+        largest J1/J3/J5/J7 change on the descent, squared (avoids arms reaching round from
+        the other side), preferring one that also allows the INPUT_RETRACT_DISTANCE retract.
+        Each solution's twin with the cups swapped (J7 half a turn round) is weighed too."""
         target_ori = VERTICAL_ORI if target_ori is None else np.asarray(target_ori)
         task_pos = np.asarray(task_pos, dtype=float)
-        lims = np.array([self.ik_chain.links[i].bounds for i in range(1, 8)], dtype=float)
-
-        def limit_gap(q):
-            return float(np.min(np.minimum(q - lims[:, 0], lims[:, 1] - q)))
-
-        yaw = np.arctan2(task_pos[1], task_pos[0])
-        starts = [[yaw, 0.3, 0.0, -2.2, 0.0, 2.5, j7] for j7 in (-2.0, -0.8, 0.4, 1.6, 2.6)]
-        starts += [[yaw, -0.3, 0.0, -2.6, 0.0, 2.3, j7] for j7 in (-0.8, 0.4, 1.6)]
         best = None
         tried = 0
-        for ori in (target_ori, target_ori @ CUP_FLIP):
-            for seed in starts:
+        for ori, wide in ((target_ori, False), (target_ori @ CUP_FLIP, False),
+                          (target_ori, True), (target_ori @ CUP_FLIP, True)):
+            if wide and best is not None:
+                break   # the wide starts only when the usual ones found nothing usable
+            for seed in self.flat_pick_starts(task_pos, wide):
                 tried += 1
-                final, _ = self._flat_ik(task_pos, ori, seed=seed, quiet=True)
-                if final is None:
+                cand = self.flat_pick_candidate(task_pos, ori, seed)
+                if cand is None:
                     continue
-                pre = self.compute_retract_joints(final, APPROACH_DISTANCE, quiet=True)
-                if pre is None:
-                    continue
-                gap = min(limit_gap(pre), limit_gap(final))
-                if gap < FLAT_PICK_MIN_LIMIT_GAP:
-                    continue
-                retract_ok = self.compute_retract_joints(
-                    final, INPUT_RETRACT_DISTANCE, quiet=True) is not None
-                flat_cost = final[2] ** 2 + final[4] ** 2
-                cost = (flat_cost + PICK_J7_WEIGHT * (final[6] - PICK_J7_HOME) ** 2
-                        + (0.0 if retract_ok else 10.0))
+                cost, pre, final, gap, retract_ok = cand
+                flipped = ori is not target_ori
                 if best is None or cost < best[0]:
-                    best = (cost, pre, final, ori is not target_ori, gap)
-                if flat_cost < 0.05 and retract_ok:
+                    best = (cost, pre, final, flipped, gap)
+                # The same arm with the cups swapped: J7 half a turn round (the starts may
+                # not find it), so the cup order with less wrist turn is always weighed.
+                for turn in (-np.pi, np.pi):
+                    twin_pre, twin_final = pre.copy(), final.copy()
+                    twin_pre[6] += turn
+                    twin_final[6] += turn
+                    twin = self.score_flat_pick(task_pos, twin_pre, twin_final)
+                    if twin is not None and twin[0] < best[0]:
+                        best = (twin[0], twin_pre, twin_final, not flipped, twin[3])
+                if final[2] ** 2 + final[4] ** 2 < 0.05 and retract_ok:
                     break   # this cup order: J3/J5 within ~0.2 rad, more starts add nothing
         if best is None:
             log.warning("[IK] no flat-arm pick solution %.2f rad inside the joint limits "
-                        "(%d starts) for target %s", FLAT_PICK_MIN_LIMIT_GAP, tried,
-                        np.round(task_pos, 4))
+                        "with a straight descent and J1 facing the item (%d starts) for "
+                        "target %s", FLAT_PICK_MIN_LIMIT_GAP, tried, np.round(task_pos, 4))
             return None
         _, pre, final, flipped, gap = best
         log.info("[IK] flat-arm pick: J3/J5 %+.2f/%+.2f, %.2f rad from the nearest joint "
@@ -2277,10 +2458,10 @@ class FetchInput(smach.State):
         rospy.sleep(1.0)
 
         # One move straight back out of the bin, INPUT_RETRACT_DISTANCE along the cup axis.
-        retract_joints = hardware.compute_retract_joints(hardware.pick_up_final_joints,
-                                                         INPUT_RETRACT_DISTANCE)
+        retract_joints = hardware.input_retract_joints(hardware.pick_up_final_joints,
+                                                       quiet=False)
         if retract_joints is None:
-            log.warning("[FetchInput] No IK for the %.2f m retract; retracting to pre-pick "
+            log.warning("[FetchInput] No straight %.2f m retract; retracting to pre-pick "
                         "height (%.2f m) instead", INPUT_RETRACT_DISTANCE, APPROACH_DISTANCE)
             retract_joints = hardware.pick_up_pre_joints
         else:
