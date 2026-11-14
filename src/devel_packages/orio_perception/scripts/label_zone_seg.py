@@ -20,6 +20,15 @@ shows all of itself, the one under it has a piece of its rectangle hidden. Again
 item marked by hand in 57 zones (test/mark_top_items.py): 57 right, 56 without the
 tie-break, 50 by whole-item height.
 
+A mask whose pick point is within BORDER_M of the zone's outer edges, or MIDDLE_BORDER_M of
+the line between the two zones, is not an item: arm 1 places items in the middle of the
+zone, and what the model finds along the edge is the table's edge (a sliver along the right
+edge of zone 2 once sent arm 2 out of reach) or a piece of the other zone's item. It is
+dropped in every pass, before the passes vote. The middle line's border is narrower because
+zone 2's items lie close to it: in the 104 hand-placed zones real items came within 7.2 cm
+of it, the pieces of the other zone's items within 1.2 cm; at the outer edges no real item
+came within 15 cm.
+
 Pure numpy + OpenCV: the model is passed in as `predict`, so this imports without torch
 (the perception node uses the zone boxes; label_seg_node.py and the offline test run it).
 """
@@ -37,6 +46,11 @@ MIN_AGREE = 2          # passes that must find 2+ items for the zone to count as
 EDGE_PX = 12           # width of the band beside another mask used for the top-item test
 TOP_TIE_MM = 1.0       # edge heights closer than this do not decide which item is on top
 TABLE_TOL_M = 0.002    # depth within this of the fitted plane is table
+BORDER_M = 0.10        # a pick point closer than this to the zone's outer edges is not an item
+MIDDLE_BORDER_M = 0.05  # the same along the line between the two zones
+SHARED_EDGE = {1: "right", 2: "left"}   # the side of each zone on that line
+ZED_FX_PX = 1509.6     # ZED left focal length (px) at 1920x1080, when none is given
+ZED_RANGE_M = 0.97     # camera to table, when the zone has no valid depth
 
 # name, into the model, back to the zone
 PASSES = (
@@ -95,13 +109,45 @@ def height_map(depth):
     return (p[0] * uu + p[1] * vv + p[2] - depth).astype(np.float32), frac
 
 
-def _keep_masks(masks, scores):
-    """The masks of one pass that count as items, most confident first."""
+def border_px(depth, fx=ZED_FX_PX, zone=None):
+    """{side: border in pixels} at the zone's median range (depth in metres, NaN invalid):
+    BORDER_M on every side but the one on the line to the other zone (MIDDLE_BORDER_M).
+    zone None: BORDER_M on every side."""
+    rng = float(np.nanmedian(depth)) if np.isfinite(depth).any() else ZED_RANGE_M
+    px = fx / rng
+    out = {side: BORDER_M * px for side in ("left", "right", "top", "bottom")}
+    if zone in SHARED_EDGE:
+        out[SHARED_EDGE[zone]] = MIDDLE_BORDER_M * px
+    return out
+
+
+def _pick_px(mask):
+    """Where a cup would go: the centroid, or the item's pixel nearest it when the centroid
+    falls outside (a bent or ring-shaped mask). ((cx, cy) centroid, (u, v) pick point)."""
+    ys, xs = np.nonzero(mask)
+    cx, cy = float(xs.mean()), float(ys.mean())
+    i = int(np.argmin((xs - cx) ** 2 + (ys - cy) ** 2))
+    return (cx, cy), (int(xs[i]), int(ys[i]))
+
+
+def _in_border(mask, border):
+    """True when the mask's pick point is within the border ({side: px}) of the zone's edge."""
+    h, w = mask.shape
+    _c, (u, v) = _pick_px(mask)
+    gap = {"left": u, "right": w - 1 - u, "top": v, "bottom": h - 1 - v}
+    return any(gap[side] < px for side, px in border.items())
+
+
+def _keep_masks(masks, scores, border=None):
+    """The masks of one pass that count as items, most confident first. A mask whose pick
+    point is within the border ({side: px}) of the zone's edge is dropped."""
     keep = []
     for i in np.argsort(-np.asarray(scores)):
         m = masks[i]
         n = int(m.sum())
         if scores[i] < SCORE_MIN or n < MIN_MASK_PX or n > MAX_MASK_FRAC * m.size:
+            continue
+        if border and _in_border(m, border):
             continue
         if any((m & masks[j]).sum() / float((m | masks[j]).sum()) > DUPLICATE_IOU for j in keep):
             continue
@@ -112,10 +158,7 @@ def _keep_masks(masks, scores):
 def _describe(mask, height, others):
     """One item's numbers. `others` is the union of the other items' masks."""
     ys, xs = np.nonzero(mask)
-    cx, cy = float(xs.mean()), float(ys.mean())
-    # Where a cup would go: the centroid, or the item's pixel nearest it when the centroid
-    # falls outside (a bent or ring-shaped mask).
-    i = int(np.argmin((xs - cx) ** 2 + (ys - cy) ** 2))
+    (cx, cy), pick = _pick_px(mask)
     h = height[mask]
     h = h[np.isfinite(h)]
     near = mask & cv2.dilate(others.astype(np.uint8), np.ones((2 * EDGE_PX + 1,) * 2, np.uint8)).astype(bool)
@@ -126,32 +169,35 @@ def _describe(mask, height, others):
     rect = np.zeros(mask.shape, np.uint8)
     box = cv2.boxPoints(cv2.minAreaRect(np.stack([xs, ys], axis=1).astype(np.int32)))
     cv2.fillPoly(rect, [np.round(box).astype(np.int32)], 1)
-    return {"centroid_px": [cx, cy], "pick_px": [int(xs[i]), int(ys[i])], "area_px": int(mask.sum()),
+    return {"centroid_px": [cx, cy], "pick_px": list(pick), "area_px": int(mask.sum()),
             "height_mm": float(np.median(h) * 1000) if h.size else None,
             "edge_height_mm": float(np.median(hn) * 1000) if hn.size >= 50 else None,
             "covered_px": int((rect.astype(bool) & others & ~mask).sum())}
 
 
-def segment_zone(predict, rgb, depth):
+def segment_zone(predict, rgb, depth, fx=ZED_FX_PX, zone=None):
     """The items in one zone.
 
     predict(rgb uint8 HxWx3, height float32 HxW in metres, no NaN) -> (masks (N, H, W) bool,
     scores (N,)), the raw output of the model on that input.
     rgb, depth: the zone's crop; depth in metres, NaN where invalid.
+    fx: the camera's focal length in pixels, to turn the borders into pixels.
+    zone: 1 or 2, which says the side on the middle line (see border_px).
 
     Returns {"n_items", "items": [...], "top": index into items or None, "masks": [HxW
     bool, ...] in the order of items, "votes": {pass: items it found}, "used": the pass the
-    masks come from, "table_frac"}. Items are ordered most confident first; each has score,
+    masks come from, "table_frac", "border_px": {side: px}}. Items are ordered most confident first; each has score,
     centroid_px and pick_px (zone pixels), area_px, height_mm, edge_height_mm, covered_px
     and top.
     """
     height, table_frac = height_map(depth)
     h_in = np.nan_to_num(height, nan=0.0).astype(np.float32)
+    border = border_px(depth, fx, zone)
     runs = {}
     for name, fwd, inv in PASSES:
         masks, scores = predict(np.ascontiguousarray(fwd(rgb)), np.ascontiguousarray(fwd(h_in)))
         masks = [np.ascontiguousarray(inv(m)) for m in np.asarray(masks, bool)]
-        runs[name] = _keep_masks(masks, scores)
+        runs[name] = _keep_masks(masks, scores, border)
     votes = {name: len(s) for name, (_m, s) in runs.items()}
     multi = [n for n in runs if votes[n] >= 2]
     if len(multi) >= MIN_AGREE:
@@ -183,4 +229,5 @@ def segment_zone(predict, rgb, depth):
             top = min(tied, key=lambda k: items[k]["covered_px"])
         items[top]["top"] = True
     return {"n_items": len(items), "items": items, "top": top, "masks": masks, "votes": votes,
-            "used": used, "table_frac": round(table_frac, 3)}
+            "used": used, "table_frac": round(table_frac, 3),
+            "border_px": {side: round(px, 1) for side, px in border.items()}}

@@ -123,7 +123,7 @@ def main():
         for zone, (x1, y1, x2, y2) in sorted(zones.items()):
             rgb = np.ascontiguousarray(color[y1:y2, x1:x2, :3])
             t0 = time.time()
-            seg = lz.segment_zone(predict, rgb, depth[y1:y2, x1:x2])
+            seg = lz.segment_zone(predict, rgb, depth[y1:y2, x1:x2], zone=int(zone))
             dt = time.time() - t0
             expected = meta.get("items_per_zone")
             title = "%s zone %s: %d item%s%s  (%s)" % (

@@ -6,10 +6,11 @@ has Fast-FoundationStereo compute a fresh ZED left image + depth (/ffs/compute),
 this node to segment that frame:
 
   request  /label_seg/request  std_msgs/String, JSON {"id": any, "stamp_ns": the frame's
-           stamp}. This node keeps the last few /ffs/left and /ffs/depth frames by stamp.
+           stamp, "fx": the frame's focal length in px (optional, for the zone border)}.
+           This node keeps the last few /ffs/left and /ffs/depth frames by stamp.
   answer   /label_seg/result   std_msgs/String, JSON {"id", "ok", "error", "stamp_ns",
            "seconds", "zones": {"1": {"box", "n_items", "top", "votes", "used",
-           "table_frac", "items": [{"id", "score", "top", "centroid_px", "pick_px",
+           "table_frac", "border_px", "items": [{"id", "score", "top", "centroid_px", "pick_px",
            "area_px", "height_mm", "edge_height_mm"}]}, "2": ...}}, pixels in the full
            frame. The items of a zone come from label_zone_seg.segment_zone: six passes of
            the grasp planner's segmentation model, the top item of a pile marked.
@@ -111,13 +112,13 @@ class LabelSegNode:
             raise RuntimeError("depth %s and colour %s differ in size" % (depth.shape, color.shape[:2]))
         return np.ascontiguousarray(color), depth, d.header
 
-    def _segment(self, key):
+    def _segment(self, key, fx):
         color, depth, header = self._frame(key)
         instances = np.zeros(depth.shape, np.uint16)
         zones = {}
         for zone, (x1, y1, x2, y2) in lz.zone_boxes(depth.shape).items():
             seg = lz.segment_zone(self._predict, np.ascontiguousarray(color[y1:y2, x1:x2]),
-                                  depth[y1:y2, x1:x2])
+                                  depth[y1:y2, x1:x2], fx, zone)
             # least confident first, so a more confident mask wins a shared pixel
             for k in reversed(range(seg["n_items"])):
                 instances[y1:y2, x1:x2][seg["masks"][k]] = zone * 100 + k + 1
@@ -127,7 +128,8 @@ class LabelSegNode:
                      for k, it in enumerate(seg["items"])]
             zones[str(zone)] = {"box": [x1, y1, x2, y2], "n_items": seg["n_items"],
                                 "top": seg["top"], "votes": seg["votes"], "used": seg["used"],
-                                "table_frac": seg["table_frac"], "items": items}
+                                "table_frac": seg["table_frac"], "border_px": seg["border_px"],
+                                "items": items}
         msg = Image()
         msg.header = header
         msg.height, msg.width = instances.shape
@@ -144,7 +146,12 @@ class LabelSegNode:
             answer["id"] = req.get("id")
             key = int(req["stamp_ns"])
             answer["stamp_ns"] = key
-            answer["zones"] = self._segment(key)
+            fx = req.get("fx")
+            if not fx:
+                rospy.logwarn_once("[LabelSeg] requests carry no fx: the zone border uses the ZED's "
+                                   "%.1f px", lz.ZED_FX_PX)
+                fx = lz.ZED_FX_PX
+            answer["zones"] = self._segment(key, float(fx))
             answer["ok"] = True
             rospy.loginfo("[LabelSeg] zone 1: %d item(s) %s, zone 2: %d item(s) %s; %.2f s",
                           answer["zones"]["1"]["n_items"], list(answer["zones"]["1"]["votes"].values()),

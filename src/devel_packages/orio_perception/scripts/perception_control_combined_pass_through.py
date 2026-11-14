@@ -1032,7 +1032,8 @@ class CombinedPerceptionNode:
 
         self._seg_request_n += 1
         req_id = "%d-%d" % (os.getpid(), self._seg_request_n)
-        self.lbl_seg_req_pub.publish(String(data=json.dumps({"id": req_id, "stamp_ns": key})))
+        self.lbl_seg_req_pub.publish(String(data=json.dumps(
+            {"id": req_id, "stamp_ns": key, "fx": float(self.ffs_infos[key].K[0])})))
         deadline = time.time() + LBL_SEG_TIMEOUT_S
         while req_id not in self.seg_results:
             if time.time() > deadline:
