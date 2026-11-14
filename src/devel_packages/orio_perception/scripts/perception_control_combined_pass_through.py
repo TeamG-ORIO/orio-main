@@ -145,6 +145,14 @@ LBL_SEG_TIMEOUT_S = 15.0
 # JSON (see _zones_state): the item count and where the top item can be picked.
 LBL_ITEMS_TOPIC = "/label_zones/items"
 LBL_TF_YAML     = os.path.join(_REPO_ROOT, "src/devel_packages/manipulation/config/zed_to_label_tf.yaml")
+# Arm 1's zone pick, drawn on the label picture: it picks the top item at its pick point,
+# straight down, with the cups turned as in its taught zone pose (cup line = tool Y);
+# cell.yaml has the label arm's base in arm 1's frame, to turn that line into the ZED's view.
+ARM1_TASK_POSES_JSON = os.path.join(_REPO_ROOT, "src/devel_packages/orio/Target_Task_Poses.json")
+CELL_YAML            = os.path.join(_REPO_ROOT, "src/devel_packages/orio_logging/config/cell.yaml")
+ARM1_ZONE_TAG        = {"1": "LABEL_ZONE_1", "2": "LABEL_ZONE_2"}
+ARM1_CUP_RADIUS_M    = 0.015875   # measured: 1 1/4 in cups,
+ARM1_CUP_SPACING_M   = 0.03302    # 1.3 in apart, centre to centre
 
 LBL_WIDTH, LBL_HEIGHT = 1920, 1080
 LBL_FX, LBL_FY        = 1509.65, 1509.65
@@ -1089,6 +1097,43 @@ class CombinedPerceptionNode:
         return {"t": time.time(), "stamp": seg["stamp_ns"] / 1e9, "source": source, "zones": zones,
                 "scan_seconds": seg.get("scan_seconds")}
 
+    def _draw_arm1_picks(self, debug, state, info):
+        """Draw arm 1's two cups where it will pick each zone's top item (its pick point,
+        cups turned as in the taught zone pose), labelled "arm 1 pick". Best effort: a
+        drawing problem is logged, never raised."""
+        import cv2
+        try:
+            with open(ARM1_TASK_POSES_JSON) as f:
+                poses = json.load(f)
+            with open(CELL_YAML) as f:
+                cell = yaml.safe_load(f)["arm2_in_arm1"]
+            r_a2_in_a1 = R_scipy.from_euler("z", float(cell["yaw_deg"]), degrees=True).as_matrix()
+            cam_from_lbl = np.linalg.inv(self.tf_lbl)
+            fx, fy, cx, cy = info.K[0], info.K[4], info.K[2], info.K[5]
+            for z, zone in state["zones"].items():
+                top = zone.get("top")
+                if not top or top.get("world") is None or z not in ARM1_ZONE_TAG:
+                    continue
+                line_a1 = np.asarray(poses[ARM1_ZONE_TAG[z]]["rotation"], dtype=float)[:, 1]
+                line = r_a2_in_a1.T.dot(line_a1)          # cup line in the label arm's frame
+                centre = np.asarray(top["world"], dtype=float)
+                pts = []
+                for sgn in (-1.0, 1.0):
+                    p = cam_from_lbl.dot(np.append(centre + sgn * 0.5 * ARM1_CUP_SPACING_M * line, 1.0))
+                    pts.append((fx * p[0] / p[2] + cx - LBL_CROP_X1, fy * p[1] / p[2] + cy - LBL_CROP_Y1,
+                                ARM1_CUP_RADIUS_M * fx / p[2]))
+                for u, v, rad in pts:
+                    for colour, width in (((0, 0, 0), 5), ((0, 255, 255), 2)):
+                        cv2.circle(debug, (int(round(u)), int(round(v))), int(round(rad)), colour, width)
+                u0 = int(round(max(u for u, _, _ in pts) + pts[0][2] + 6))
+                v0 = int(round(min(v for _, v, _ in pts) - pts[0][2]))
+                for colour, width in (((0, 0, 0), 4), ((0, 255, 255), 1)):
+                    cv2.putText(debug, "arm 1 pick", (u0, max(v0, 14)), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                                colour, width)
+        except Exception as exc:  # noqa: BLE001 - a debug drawing must never fail a scan
+            rospy.logwarn("[Label] could not draw arm 1's pick: %s", exc)
+        return debug
+
     @staticmethod
     def _draw_items(color_base, inst_crop, seg):
         """The crop with every item shaded and outlined in its own colour, its number and
@@ -1210,6 +1255,7 @@ class CombinedPerceptionNode:
             color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
             debug, _masks, _boxes, _phrases, _scores = self._draw_items(
                 color_base, instances[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2], seg)
+            self._draw_arm1_picks(debug, state, info)
             self.lbl_items_pub.publish(String(data=json.dumps(state)))
             self._label_record_finish(record, debug, {"success": True, "scan_only": True, "items": state["zones"]})
             res.success, res.message = True, json.dumps(state)
@@ -1237,6 +1283,7 @@ class CombinedPerceptionNode:
         color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
         inst_crop = instances[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
         debug_lbl, best_masks, boxes_xyxy, phrases, logits = self._draw_items(color_base, inst_crop, seg)
+        self._draw_arm1_picks(debug_lbl, state, info)
 
         # The label goes on the top item of each zone, placed within that item's own mask
         # (never across two items lying on each other).
