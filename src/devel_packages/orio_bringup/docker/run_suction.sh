@@ -5,8 +5,7 @@
 #
 # Env:
 #   ORIO_GRASPING        orio-grasping repo (default ~/orio-grasping): code, config.toml, calibration
-#   SUCTION_CHECKPOINT   model checkpoint (default: PINNED_CKPT below, else the newest
-#                        $ORIO_GRASPING/runs/*/best.pt)
+#   SUCTION_CHECKPOINT   model checkpoint (default: the newest $ORIO_GRASPING/runs/*/best.pt)
 #   SUCTION_MIN_SCORE    lowest seal x hold x access the planner accepts (default 0.10)
 #   SUCTION_SEG_MAX_MASK_FRAC  drop segmentation masks bigger than this share of the table
 #                        window: the empty table comes back as one ~100% mask (default 0.5)
@@ -39,10 +38,7 @@ if [ ! -f "$GRASPING/orio_grasping/model.py" ]; then
     echo "orio-grasping repo not found at $GRASPING (set ORIO_GRASPING)." >&2
     exit 1
 fi
-# Pinned to seg_v2_deformables while the tilt-45 retrain (seg_v3_tilt45) is compared
-# against it; SUCTION_CHECKPOINT overrides. Remove the pin to go back to the newest run.
-PINNED_CKPT="$GRASPING/runs/2026-10-27_130723_seg_v2_deformables/best.pt"
-CKPT="${SUCTION_CHECKPOINT:-$([ -f "$PINNED_CKPT" ] && echo "$PINNED_CKPT" || ls -t "$GRASPING"/runs/*/best.pt 2>/dev/null | head -1)}"
+CKPT="${SUCTION_CHECKPOINT:-$(ls -t "$GRASPING"/runs/*/best.pt 2>/dev/null | head -1)}"
 if [ -z "$CKPT" ] || [ ! -f "$CKPT" ]; then
     echo "No checkpoint: set SUCTION_CHECKPOINT or train one into $GRASPING/runs/." >&2
     exit 1

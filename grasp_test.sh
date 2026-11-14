@@ -11,7 +11,7 @@
 # runs in, so the next run reuses it instead of restarting it. bash stop_all.sh stops it.
 # Each round (grasp_test.py): reset the arm, plan, Enter to move there, Enter to reset.
 #
-#   bash grasp_test.sh                       # seg_v2_deformables, arm goes down to the grasp
+#   bash grasp_test.sh                       # seg_v3_tilt45, arm goes down to the grasp
 #   bash grasp_test.sh --no-arm              # plan and draw only: no control PC, no motion
 #   bash grasp_test.sh --hover               # stop 10 cm above the grasp instead
 #   bash grasp_test.sh --straight-down       # ignore the grasp tilt, approach vertically
@@ -23,11 +23,11 @@
 #   bash grasp_test.sh --checkpoint <tag|path>
 #                                            # grasp network: a run tag under orio_grasping/runs
 #                                            #   (newest .pt in runs/*_<tag>/; default
-#                                            #   seg_v2_deformables, its epoch 59)
+#                                            #   seg_v3_tilt45)
 #   bash grasp_test.sh --seg-checkpoint <tag|path>
 #                                            # segmentation model the network's masks come from:
 #                                            #   runs/seg/<tag> (default rgbd_v3_deformables, which
-#                                            #   seg_v2_deformables was trained on; seg_v1 goes
+#                                            #   seg_v3_tilt45 and seg_v2_deformables were trained on; seg_v1 goes
 #                                            #   with rgbd_v2)
 #   bash grasp_test.sh --seg-threshold 0.5   # lowest mask confidence kept (default 0.4)
 #
@@ -48,7 +48,7 @@ GT_PLANNER_NODE=grasp_test_planner
 
 # ── Args ────────────────────────────────────────────────────────────────────
 NO_ARM=0
-CKPT=seg_v2_deformables
+CKPT=seg_v3_tilt45
 SEG_CKPT=rgbd_v3_deformables
 SEG_THRESHOLD=0.4
 MIN_Q=0.30

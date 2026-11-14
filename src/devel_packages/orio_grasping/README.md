@@ -22,6 +22,9 @@ Weights (git-ignored, copy them by hand onto a new machine):
   run's `last.pt` (epoch 59) without the optimiser state; its `best.pt` is epoch 23 (best
   validation top-1), and epoch 48 (lowest validation loss) was not saved
 - `runs/seg/rgbd_v3_deformables/checkpoint_best_total.pth`: rgbd_v2 fine-tuned on deformable
-  pouches, the model seg_v2_deformables' mask channels come from
+  pouches, the model seg_v2_deformables' and seg_v3_tilt45's mask channels come from
+- `runs/2026-11-07_174545_seg_v3_tilt45/best.pt` (with its `run.json`): OrioNet seg_v3_tilt45,
+  seg_v2_deformables' data relabelled with access up to 45 deg of tilt (flat to 30 deg); best
+  validation top-1 0.966 at epoch 51. The default of `grasp_test.sh`
 
 To update, copy the same files from a newer orio-grasping commit and change the commit above.
