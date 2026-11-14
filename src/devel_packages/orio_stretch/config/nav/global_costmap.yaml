@@ -1,0 +1,35 @@
+global_costmap:
+  global_frame: map
+  robot_base_frame: base_link
+  update_frequency: 2.0
+  publish_frequency: 0.5
+  rolling_window: false        # sized to the static map, so goals anywhere on the map are valid
+  static_map: true
+  track_unknown_space: true
+  plugins:
+    # 1) lidar map: exact outline of what the lidar sees (also the map AMCL localises on)
+    - {name: static_lidar,     type: "costmap_2d::StaticLayer"}
+    # 2) depth-projected map: table tops, counters, low objects. Merged with MAX, so its lethal cells
+    #    are added on top of the lidar map and its unknown cells never erase known lidar space.
+    - {name: static_depth,     type: "costmap_2d::StaticLayer"}
+    - {name: obstacles_laser,  type: "costmap_2d::ObstacleLayer"}
+    - {name: obstacles_depth,  type: "costmap_2d::VoxelLayer"}
+    - {name: inflation,        type: "costmap_2d::InflationLayer"}
+  static_lidar:
+    map_topic: /map_lidar
+    first_map_only: true
+    subscribe_to_updates: false
+    track_unknown_space: true
+    use_maximum: false
+    trinary_costmap: true
+    lethal_cost_threshold: 100
+    unknown_cost_value: -1
+  static_depth:
+    map_topic: /map_depth
+    first_map_only: true
+    subscribe_to_updates: false
+    track_unknown_space: true
+    use_maximum: true
+    trinary_costmap: true
+    lethal_cost_threshold: 100
+    unknown_cost_value: -1

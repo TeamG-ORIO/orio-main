@@ -1,0 +1,135 @@
+<launch>
+  <!-- Navigation with ORB-SLAM3 (IR camera) as the localiser, move_base as the planner.
+
+         roslaunch orio_stretch nav_orbslam.launch map:=basement_lap1 run_dir:=$HOME/orio/datasets/basement_map/orbslam/ir-rgbd_lap1
+
+       Pieces:  hardware (stretch_driver in navigation mode + wheel-odom TF, D435i with the IR streams, projector
+       alternating; the lidar only with lidar:=true) -> orb_feed (projector-off IR + depth) -> ORB-SLAM3 ros_rgbd
+       with the saved atlas <maps_dir>/<map>.osa -> orbslam_tf_bridge (map->odom) -> depth_to_cloud (obstacle
+       cloud from the projector-on depth frames) -> map_server with the 2D map drawn from the same run ->
+       move_base (static map + depth voxel layer + inflation; camera only, ~69 deg field of view) -> RViz.
+       Start it through scripts/nav_orbslam_start.sh, which also sets the camera and waits for localisation.
+       hardware:=false replays a bag instead (scripts/nav_orbslam_selftest.sh). -->
+  <arg name="map"       doc="atlas name: MAP.osa + MAP.live.yaml in maps_dir (orbslam_settings.py --load-atlas)"/>
+  <arg name="maps_dir"  default="$(env HOME)/orio/maps/orbslam" doc="folder with the saved atlases; the scripts pass $ORIO_DATA/maps/orbslam"/>
+  <arg name="run_dir"   doc="orbslam run folder the map was built from: frame_upright.json + dense_2d_orbslam.yaml"/>
+  <arg name="hardware"  default="true"/>
+  <arg name="move_base" default="true"/>
+  <arg name="rviz"      default="true"/>
+  <arg name="viewer"    default="false" doc="ORB-SLAM3's own Pangolin window"/>
+  <arg name="lidar"     default="false" doc="true = also start the RPLidar and use it in the costmaps; false = camera only"/>
+  <arg name="initial_pose" default="" doc="'x y yaw' in the map frame where the robot is parked (a taped cross): drive on odometry from there until ORB-SLAM3 recognises the map"/>
+  <arg name="fps"       default="30"/>
+
+  <group if="$(arg hardware)">
+    <param name="/stretch_driver/broadcast_odom_tf"      type="bool"   value="true"/>
+    <param name="/stretch_driver/mode"                   type="string" value="navigation"/>
+    <param name="/stretch_driver/fail_out_of_range_goal" type="bool"   value="false"/>
+    <include file="$(find stretch_core)/launch/stretch_driver.launch"/>
+    <include file="$(find stretch_core)/launch/rplidar.launch" if="$(arg lidar)"/>
+    <node name="d435i_accel_correction" pkg="stretch_core" type="d435i_accel_correction" output="log"/>
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+      <arg name="enable_color"  value="true"/>
+      <arg name="enable_depth"  value="true"/>
+      <arg name="enable_infra1" value="true"/>
+      <arg name="enable_infra2" value="true"/>
+      <arg name="enable_accel"  value="false"/>
+      <arg name="enable_gyro"   value="false"/>
+      <arg name="color_width"   value="640"/>  <arg name="color_height" value="480"/>
+      <arg name="depth_width"   value="640"/>  <arg name="depth_height" value="480"/>
+      <arg name="infra_width"   value="640"/>  <arg name="infra_height" value="480"/>
+      <arg name="color_fps"     value="$(arg fps)"/> <arg name="depth_fps" value="$(arg fps)"/> <arg name="infra_fps" value="$(arg fps)"/>
+      <arg name="align_depth"   value="false"/>
+      <arg name="enable_sync"   value="true"/>
+      <arg name="filters"       value=""/>
+      <arg name="enable_pointcloud" value="false"/>
+      <arg name="initial_reset" value="true"/>
+      <arg name="json_file_path" value="$(find stretch_core)/config/HighAccuracyPreset.json"/>
+    </include>
+  </group>
+
+  <!-- ORB-SLAM3: projector-off IR frames + their depth -->
+  <node name="orb_feed" pkg="orio_stretch" type="orb_feed.py" output="log">
+    <param name="laser"     value="off"/>
+    <param name="image_in"  value="/camera/infra1/image_rect_raw"/>
+    <param name="second_in" value="/camera/depth/image_rect_raw"/>
+  </node>
+  <node name="orb_slam3" pkg="orb_slam3_ros" type="ros_rgbd" output="log"
+        launch-prefix="$(find orio_stretch)/scripts/in_dir.sh $(arg maps_dir)">
+    <remap from="/camera/rgb/image_raw"              to="/orb_feed/image"/>
+    <remap from="/camera/depth_registered/image_raw" to="/orb_feed/second"/>
+    <param name="voc_file"       value="$(find orb_slam3_ros)/orb_slam3/Vocabulary/ORBvoc.txt.bin"/>
+    <param name="settings_file"  value="$(arg maps_dir)/$(arg map).live.yaml"/>
+    <param name="world_frame_id" value="orb_world"/>
+    <param name="cam_frame_id"   value="orb_camera"/>
+    <param name="enable_pangolin" value="$(arg viewer)"/>
+  </node>
+  <node name="orbslam_tf_bridge" pkg="orio_stretch" type="orbslam_tf_bridge.py" output="screen">
+    <param name="frame_file" value="$(arg run_dir)/frame_upright.json"/>
+    <param name="expected_maps" value="1"/>
+    <param name="initial_pose"  value="$(arg initial_pose)"/>
+  </node>
+
+  <!-- obstacle cloud for the costmaps from the depth image (projector-on frames, stride 4, 5 Hz, 0.3-2.6 m) -->
+  <node name="depth_to_cloud" pkg="orio_stretch" type="depth_to_cloud.py" output="log">
+    <remap from="~points" to="/camera/points_nav"/>
+    <param name="laser" value="on"/>
+    <param name="rate"  value="5.0"/>
+    <param name="floor_fit"  value="true"/>
+    <param name="base_frame" value="base_link"/>
+  </node>
+
+  <!-- the 2D map drawn from the same run (same frame as frame_upright.json) -->
+  <node name="map_server" pkg="map_server" type="map_server" args="$(arg run_dir)/dense_2d_orbslam.yaml" output="log"/>
+
+  <group if="$(arg move_base)">
+    <node name="move_base" pkg="move_base" type="move_base" respawn="false" output="screen">
+      <rosparam command="load" file="$(find orio_stretch)/config/nav/costmap_common.yaml" ns="global_costmap"/>
+      <rosparam command="load" file="$(find orio_stretch)/config/nav/costmap_common.yaml" ns="local_costmap"/>
+      <rosparam command="load" file="$(find orio_stretch)/config/nav/global_costmap.yaml"/>
+      <rosparam command="load" file="$(find orio_stretch)/config/nav/local_costmap.yaml"/>
+      <rosparam command="load" file="$(find orio_stretch)/config/nav/planners.yaml"/>
+      <!-- one static map (the ORB-SLAM3 depth projection) + the live depth cloud (+ lidar only if lidar:=true) -->
+      <rosparam param="global_costmap/static_map">{map_topic: /map, first_map_only: true, subscribe_to_updates: false, track_unknown_space: true, trinary_costmap: true, lethal_cost_threshold: 100, unknown_cost_value: -1}</rosparam>
+      <rosparam if="$(arg lidar)" param="global_costmap/plugins">
+        [{name: static_map, type: "costmap_2d::StaticLayer"}, {name: obstacles_laser, type: "costmap_2d::ObstacleLayer"},
+         {name: obstacles_depth, type: "costmap_2d::VoxelLayer"}, {name: inflation, type: "costmap_2d::InflationLayer"}]
+      </rosparam>
+      <rosparam if="$(arg lidar)" param="local_costmap/plugins">
+        [{name: obstacles_laser, type: "costmap_2d::ObstacleLayer"}, {name: obstacles_depth, type: "costmap_2d::VoxelLayer"},
+         {name: inflation, type: "costmap_2d::InflationLayer"}]
+      </rosparam>
+      <rosparam unless="$(arg lidar)" param="global_costmap/plugins">
+        [{name: static_map, type: "costmap_2d::StaticLayer"}, {name: obstacles_depth, type: "costmap_2d::VoxelLayer"},
+         {name: inflation, type: "costmap_2d::InflationLayer"}]
+      </rosparam>
+      <rosparam unless="$(arg lidar)" param="local_costmap/plugins">
+        [{name: obstacles_depth, type: "costmap_2d::VoxelLayer"}, {name: inflation, type: "costmap_2d::InflationLayer"}]
+      </rosparam>
+      <!-- the cloud comes from the depth camera's own optical frame (nav_orbslam does not align depth to colour) -->
+      <param name="global_costmap/obstacles_depth/depth/sensor_frame" value="camera_depth_optical_frame"/>
+      <param name="local_costmap/obstacles_depth/depth/sensor_frame"  value="camera_depth_optical_frame"/>
+      <!-- the cloud is published at ~5 Hz, but with ORB-SLAM3 on the same CPU it arrives late at times: a 1 s limit
+           made move_base refuse to drive ("Sensor data is out of date", first live try 2026-10-06). 3 s = blind for at
+           most 3 s if the camera really stops, which at 0.25 m/s is 0.75 m. -->
+      <param name="global_costmap/obstacles_depth/depth/expected_update_rate" value="3.0"/>
+      <param name="local_costmap/obstacles_depth/depth/expected_update_rate"  value="3.0"/>
+      <!-- obstacle band (user, 2026-11-06): 10 cm .. 45 in (1.143 m) above the floor. depth_to_cloud fits the floor
+           in every frame and publishes heights above it, so 10 cm is safe despite the camera pitch error. -->
+      <param name="global_costmap/obstacles_depth/depth/min_obstacle_height" value="0.10"/>
+      <param name="local_costmap/obstacles_depth/depth/min_obstacle_height"  value="0.10"/>
+      <param name="global_costmap/obstacles_depth/depth/max_obstacle_height" value="1.143"/>
+      <param name="local_costmap/obstacles_depth/depth/max_obstacle_height"  value="1.143"/>
+      <!-- global_planner's gradient path extraction failed on this map ("Failed to get a plan from potential when a
+           legal potential was found", 43x on the first live try) although start and goal were free: use navfn, which
+           has no such step -->
+      <param name="base_global_planner" value="navfn/NavfnROS"/>
+      <param name="NavfnROS/allow_unknown" value="false"/>
+      <param name="NavfnROS/default_tolerance" value="0.25"/>
+      <remap from="cmd_vel" to="/stretch/cmd_vel"/>
+      <remap from="odom"    to="/odom"/>
+    </node>
+  </group>
+
+  <node name="rviz" pkg="rviz" type="rviz" args="-d $(find orio_stretch)/rviz/navigation.rviz" output="log" if="$(arg rviz)"/>
+</launch>

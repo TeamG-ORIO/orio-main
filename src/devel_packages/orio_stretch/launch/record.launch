@@ -1,0 +1,163 @@
+<launch>
+  <!--
+    orio_stretch/launch/record.launch  -  record a SLAM / navigation dataset on Stretch RE1.
+
+        roslaunch orio_stretch record.launch                       # auto-named run folder
+        roslaunch orio_stretch record.launch run_name:=lab_loop1   # named run
+
+    Brings up ONLY the sensor drivers + the orio keyboard teleop + rosbag record.
+    No SLAM, no move_base, no scan matcher: /tf in the bag contains exactly one
+    odom->base_link source (wheel odometry from stretch_driver) plus the URDF
+    frames from robot_state_publisher, nothing else.
+
+    Output: <datasets_dir>/<run_name>/  with run_*.bag, stretch.urdf, calibration,
+    param dumps, meta.txt and rosbag info. See ../docs/RECORDING.md for what is in
+    the bag, what is NOT, and the replay rules.
+
+    STOP: press Ctrl-C in the TELEOP WINDOW. That node is `required`, so roslaunch
+    shuts everything down and the wrapper closes the bag cleanly and writes the
+    rosbag info files. (Ctrl-C in the roslaunch terminal also works; then close
+    the teleop window by hand.)
+
+    Over SSH:  export DISPLAY=:0  first (the teleop opens a gnome-terminal on the
+    robot's screen), or run with teleop:=false and start the teleop yourself:
+        rosrun orio_stretch stretch_twist_arm_teleop.py _lock_head:=true
+  -->
+
+  <!-- ===== run identity ===== -->
+  <arg name="datasets_dir" default="$(env HOME)/orio/datasets" doc="parent folder for runs; the scripts pass $ORIO_DATA/datasets" />
+  <arg name="run_name"     default=""  doc="run folder name; empty = run_YYYYMMDD_HHMMSS" />
+
+  <!-- ===== camera ===== -->
+  <arg name="camera"           default="true" />
+  <arg name="width"            default="640" doc="color AND depth width (RTAB-Map config uses 640x480)" />
+  <arg name="height"           default="480" />
+  <arg name="fps"              default="15"  doc="color and depth fps" />
+  <arg name="unite_imu_method" default="linear_interpolation" doc="none | copy | linear_interpolation; anything but none also publishes /camera/imu for VIO" />
+  <arg name="initial_reset"    default="true" doc="hardware-reset the D435i before streaming (slower start, fewer bad states)" />
+  <arg name="record_depth_raw" default="true" doc="also record the un-aligned /camera/depth/image_rect_raw (+9 MB/s)" />
+  <arg name="infra"            default="false" doc="also stream + record the two global-shutter IR imagers (infra1 = left, infra2 = right) at the depth resolution/fps, with their metadata. Used by scripts/slam_record.sh for the ORB-SLAM stereo tests" />
+
+  <!-- ===== lidar ===== -->
+  <arg name="lidar" default="true" />
+
+  <!-- ===== head pose (fixed for the whole run) ===== -->
+  <arg name="set_head"  default="true"  doc="move head to head_pan/head_tilt before the bag opens" />
+  <arg name="head_pan"  default="0.0"   doc="rad" />
+  <arg name="head_tilt" default="-0.30" doc="rad, negative = down. URDF limits -1.53 .. 0.79" />
+
+  <!-- ===== teleop ===== -->
+  <arg name="teleop"          default="true" />
+  <arg name="teleop_required" default="true" doc="Ctrl-C in the teleop window stops the whole launch (and closes the bag)" />
+  <arg name="start_linear"    default="0.10" doc="m/s at start (r/f keys change it)" />
+  <arg name="start_angular"   default="0.30" doc="rad/s at start (t/g keys change it)" />
+  <arg name="max_linear"      default="0.30" doc="m/s cap. RE1 base top speed is 0.30" />
+  <arg name="max_angular"     default="0.80" doc="rad/s cap. Fast spins smear lidar + blur RGB; keep it low for SLAM data" />
+
+  <!-- ===== rosbag ===== -->
+  <arg name="split"          default="false" doc="split into files of split_duration. OFF by default: latched topics (/tf_static, extrinsics) only land in the FIRST split" />
+  <arg name="split_duration" default="5m" />
+  <arg name="buffer_mb"      default="2048" />
+  <arg name="extra_topics"   default="" doc="space separated extra topics to record" />
+  <arg name="skip_preflight" default="false" doc="true = do not abort when another process owns /dev/video* or /dev/ttyACM* (see docs/RECORDING.md)" />
+  <arg name="topics" default="
+      /camera/color/image_raw /camera/color/camera_info
+      /camera/aligned_depth_to_color/image_raw /camera/aligned_depth_to_color/camera_info
+      /camera/depth/camera_info /camera/extrinsics/depth_to_color
+      /camera/gyro/sample /camera/accel/sample /camera/accel/sample_corrected /camera/imu
+      /scan /scan_filtered
+      /odom /imu_mobile_base /magnetometer_mobile_base /imu_wrist
+      /stretch/joint_states /joint_states /tf /tf_static
+      /stretch/cmd_vel /battery /is_runstopped /mode /is_calibrated /tool
+      /rosout_agg" />
+  <arg name="infra_topics" default="/camera/infra1/image_rect_raw /camera/infra1/camera_info /camera/infra1/metadata
+      /camera/infra2/image_rect_raw /camera/infra2/camera_info /camera/infra2/metadata
+      /camera/depth/metadata /camera/color/metadata
+      /camera/extrinsics/depth_to_infra1 /camera/extrinsics/depth_to_infra2" if="$(arg infra)" />
+  <arg name="infra_topics" default="" unless="$(arg infra)" />
+  <arg name="depth_raw_topic" default="/camera/depth/image_rect_raw" if="$(arg record_depth_raw)" />
+  <arg name="depth_raw_topic" default="" unless="$(arg record_depth_raw)" />
+  <arg name="split_args" default="--split --duration=$(arg split_duration)" if="$(arg split)" />
+  <arg name="split_args" default="" unless="$(arg split)" />
+
+  <!-- ================= STRETCH DRIVER (navigation mode, THE odom->base_link TF source) ================= -->
+  <param name="/stretch_driver/broadcast_odom_tf"      type="bool"   value="true" />
+  <param name="/stretch_driver/mode"                   type="string" value="navigation" />
+  <param name="/stretch_driver/fail_out_of_range_goal" type="bool"   value="false" />
+  <include file="$(find stretch_core)/launch/stretch_driver.launch" />
+
+  <!-- ================= RPLIDAR A1 (/scan raw, /scan_filtered shadow-filtered) ================= -->
+  <include file="$(find stretch_core)/launch/rplidar.launch" if="$(arg lidar)" />
+
+  <!-- ================= D435i ================= -->
+  <group if="$(arg camera)">
+    <!-- republishes /camera/accel/sample as /camera/accel/sample_corrected with NUC time + reduced rate (stock stretch node) -->
+    <node name="d435i_accel_correction" pkg="stretch_core" type="d435i_accel_correction" output="screen" />
+
+    <include file="$(find realsense2_camera)/launch/rs_camera.launch">
+      <arg name="enable_color"    value="true" />
+      <arg name="enable_depth"    value="true" />
+      <arg name="enable_infra"    value="false" />
+      <arg name="enable_infra1"   value="$(arg infra)" />
+      <arg name="enable_infra2"   value="$(arg infra)" />
+      <arg name="infra_width"     value="$(arg width)" />
+      <arg name="infra_height"    value="$(arg height)" />
+      <arg name="infra_fps"       value="$(arg fps)" />
+      <arg name="enable_confidence" value="false" />
+      <arg name="enable_accel"    value="true" />
+      <arg name="enable_gyro"     value="true" />
+      <arg name="color_width"     value="$(arg width)" />
+      <arg name="color_height"    value="$(arg height)" />
+      <arg name="depth_width"     value="$(arg width)" />
+      <arg name="depth_height"    value="$(arg height)" />
+      <arg name="color_fps"       value="$(arg fps)" />
+      <arg name="depth_fps"       value="$(arg fps)" />
+      <arg name="accel_fps"       value="63" />
+      <arg name="gyro_fps"        value="200" />
+      <arg name="unite_imu_method" value="$(arg unite_imu_method)" />
+      <!-- depth registered into the color frame: what RTAB-Map consumes -->
+      <arg name="align_depth"     value="true" />
+      <!-- same-timestamp bundling of color+depth -->
+      <arg name="enable_sync"     value="true" />
+      <!-- NO point cloud: not recorded (150 MB/s, derivable offline) and it costs CPU -->
+      <arg name="filters"           value="" />
+      <arg name="enable_pointcloud" value="false" />
+      <arg name="initial_reset"   value="$(arg initial_reset)" />
+      <!-- same visual preset as stretch_core / stretch_rtabmap -->
+      <arg name="json_file_path"  value="$(find stretch_core)/config/HighAccuracyPreset.json" />
+    </include>
+
+    <!-- offers /camera/switch_to_{default,high_accuracy}_mode services, same as the SLAM stack -->
+    <node name="d435i_configure" pkg="stretch_core" type="d435i_configure" output="screen" />
+  </group>
+
+  <!-- ================= TELEOP (orio custom, in its own terminal window, head keys locked) ================= -->
+  <node name="teleop" pkg="orio_stretch" type="stretch_twist_arm_teleop.py"
+        launch-prefix="gnome-terminal --wait --"
+        required="$(arg teleop_required)" if="$(arg teleop)">
+    <env name="DISPLAY" value="$(optenv DISPLAY :0)" />
+    <param name="cmd_vel_topic" value="/stretch/cmd_vel" />
+    <param name="lock_head"     value="true" />
+    <param name="start_linear"  value="$(arg start_linear)" />
+    <param name="start_angular" value="$(arg start_angular)" />
+    <param name="max_linear"    value="$(arg max_linear)" />
+    <param name="max_angular"   value="$(arg max_angular)" />
+  </node>
+
+  <!-- ================= RECORD ================= -->
+  <!-- record_wrap.sh: makes the run folder, copies URDF/calibration, dumps params, sets the
+       head pose, THEN runs rosbag record; on exit writes rosbag info. @RUN_DIR@ is replaced by
+       the wrapper with the real folder. -->
+  <node name="record" pkg="rosbag" type="record" output="screen" required="true"
+        launch-prefix="$(find orio_stretch)/scripts/record_wrap.sh"
+        args="-o @RUN_DIR@/run --lz4 -b $(arg buffer_mb) $(arg split_args)
+              $(arg topics) $(arg depth_raw_topic) $(arg infra_topics) $(arg extra_topics)">
+    <env name="ORIO_DATASETS_DIR" value="$(arg datasets_dir)" />
+    <env name="ORIO_RUN_NAME"     value="$(arg run_name)" />
+    <env name="ORIO_SET_HEAD"     value="$(arg set_head)" />
+    <env name="ORIO_SKIP_PREFLIGHT" value="$(arg skip_preflight)" />
+    <env name="ORIO_HEAD_PAN"     value="$(arg head_pan)" />
+    <env name="ORIO_HEAD_TILT"    value="$(arg head_tilt)" />
+    <env name="ORIO_LAUNCH_ARGS"  value="camera=$(arg camera) $(arg width)x$(arg height)@$(arg fps) unite_imu=$(arg unite_imu_method) depth_raw=$(arg record_depth_raw) infra=$(arg infra) lidar=$(arg lidar) split=$(arg split) max_lin=$(arg max_linear) max_ang=$(arg max_angular)" />
+  </node>
+</launch>

@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>orio_stretch</name>
+  <version>0.1.0</version>
+  <description>
+    Team ORIO's mobile robot (Hello Robot Stretch RE1 with an Impinj RFID panel on the lift):
+    dataset recording, ORB-SLAM3 mapping from a recording, camera-only navigation
+    (ORB-SLAM3 localiser + depth obstacle cloud + move_base) and autonomous RFID passes.
+    Nothing is compiled. The scripts add this package to ROS_PACKAGE_PATH themselves
+    (scripts/orio_env.sh); data lives outside the repo under $ORIO_DATA (default ~/orio).
+  </description>
+  <maintainer email="student@todo.todo">ORIO Team G</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>rosbag</exec_depend>
+  <exec_depend>actionlib</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>move_base_msgs</exec_depend>
+  <exec_depend>tf</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>dynamic_reconfigure</exec_depend>
+  <exec_depend>move_base</exec_depend>
+  <exec_depend>map_server</exec_depend>
+  <exec_depend>stretch_core</exec_depend>
+  <exec_depend>stretch_description</exec_depend>
+  <exec_depend>realsense2_camera</exec_depend>
+  <exec_depend>orb_slam3_ros</exec_depend>
+</package>

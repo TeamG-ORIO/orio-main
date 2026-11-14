@@ -1,0 +1,61 @@
+# Shared by the global and local costmaps (loaded into both namespaces by launch/nav_orbslam.launch).
+# These are the base values from the lidar + AMCL setup. nav_orbslam.launch (camera-only, ORB-SLAM3) overrides,
+# after loading them: the plugin lists, the depth layer's sensor_frame, expected_update_rate and obstacle band
+# (0.10 .. 1.143 m above the fitted floor), and the global planner. Read that file for the values in use.
+# Stretch RE1 footprint (stretch_navigation, the setup that already navigated well) with a little padding.
+footprint: [[0.05, 0.17], [0.05, -0.17], [-0.17, -0.17], [-0.27, -0.06], [-0.27, 0.06], [-0.17, 0.17]]
+footprint_padding: 0.03
+transform_tolerance: 0.5      # AMCL publishes map->odom continuously, so 0.5 s is plenty (RTAB-Map needed 1.2)
+obstacle_range: 2.5
+raytrace_range: 3.5
+
+# ---- 2D lidar: marks and clears at 17 cm above the floor -------------------------------------
+obstacles_laser:
+  enabled: true
+  observation_sources: laser
+  track_unknown_space: true
+  footprint_clearing_enabled: true
+  laser:
+    data_type: LaserScan
+    topic: /scan
+    sensor_frame: laser
+    marking: true
+    clearing: true
+    obstacle_range: 2.5
+    raytrace_range: 3.5
+    inf_is_valid: false
+    expected_update_rate: 0.5
+
+# ---- D435i depth: catches what the lidar cannot (table tops, low boxes, overhangs) -----------
+# Fed from /camera/points_nav: published by scripts/depth_to_cloud.py.
+# min_obstacle_height is 0.25 m (not 0.05) on purpose: this robot's head-camera TF is ~2.7 deg off in
+# pitch, so the floor appears to rise 5 cm per metre. Within obstacle_range 2.0 m the floor stays below
+# 0.2 m and is ignored; things lower than 25 cm are the lidar layer's job (it sees down to 17 cm).
+obstacles_depth:
+  enabled: true
+  observation_sources: depth
+  track_unknown_space: false   # camera FOV is narrow: never let it turn unseen space into "unknown"
+  footprint_clearing_enabled: true
+  origin_z: 0.0
+  z_resolution: 0.10
+  z_voxels: 14                 # 14 x 0.10 m = 1.4 m column (mast height)
+  unknown_threshold: 14
+  mark_threshold: 0
+  publish_voxel_map: false
+  combination_method: 1
+  depth:
+    data_type: PointCloud2
+    topic: /camera/points_nav
+    sensor_frame: camera_color_optical_frame
+    marking: true
+    clearing: true
+    min_obstacle_height: 0.25
+    max_obstacle_height: 1.40
+    obstacle_range: 2.0
+    raytrace_range: 2.5
+    expected_update_rate: 0.0    # never let a slow/absent camera cloud block the base; the lidar (0.5 s) is the safety sensor
+
+inflation:
+  enabled: true
+  inflation_radius: 0.45       # ~0.28 m half-diagonal of the footprint + 0.17 m margin
+  cost_scaling_factor: 3.0
