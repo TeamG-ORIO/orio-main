@@ -73,7 +73,8 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
   at the start (they move slightly); `--no-unlock` skips this.
 - Uses the ZED for label placement. If it won't start, replug it or use `--no-zed`.
 - Counts the items in each label zone. With two items in a zone (arm 1 lifted two), the
-  top one gets the label and arm 1 picks that one; the other is then labelled too. After
+  top one gets the label and arm 1 picks that one; the other is then labelled too. Arm 1
+  always picks a labelled item at the middle of the top item, also when it is alone. After
   every zone pick arm 1 waits about half a second while the zone is looked at again. If a
   zone held two items and is empty after the pick, arm 1 stops and asks for help: it is
   probably carrying both.
@@ -120,7 +121,10 @@ bash run_full_demo.sh
 | `--no-vacuum` | No suction; test run only. |
 | `--confirm` | Ask before each bin pick: Enter to pick, `r` to try another grasp. |
 | `--no-label-vacuum-check` | Do not check the label cup; go on as if a label was picked up. |
+| `--no-label-suction` | Never turn on the label cup and do not check it. Arm 2 still makes all its moves. |
 | `--no-pnp-vacuum-test` | Do not check the pick cup; go on as if the item was picked up. |
+| `--pnp-release-s S` | How long arm 1 waits with its cup off when it drops an item, before moving away (default 0.4). Arm 2 is not affected. |
+| `--ik-alternatives N` | If the arm cannot safely reach the planned grasp, try the next best grasp, up to N times (default 4; 0 = give up at once). |
 | `--pick-retries N` | If a pick misses, try a new grasp up to N times before asking you on the dashboard (default 2; 0 = ask at once). |
 | `--pnp-vacuum-min N` | Raw vacuum reading that counts as holding an item (default 800). Open air reads about 600, a good seal over 1000. |
 | `--skip-item-setup` | Skip the item window; use `test_item`, expiring in 7 days. |

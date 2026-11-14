@@ -25,9 +25,9 @@ via the ZED, collision-checked IK, RFID registration through /inventory/add_item
 (degrades to a warning if absent).
 
 Two items in one zone (arm 1 lifted two out of the bin): perception counts the
-items in a zone and the label goes on the top one. Arm 1 then picks that one at
-its centroid rather than at the taught zone position, and looks at the zone
-again after every zone pick (/scan_label_zones): an item still there sends the
+items in a zone and the label goes on the top one. Arm 1 picks every labelled
+item at the centroid of the top mask (one item or a pile) rather than at the
+taught zone position, and looks at the zone again after every zone pick (/scan_label_zones): an item still there sends the
 zone back to NEEDS_LABEL; none left after two were seen opens arm 1's recovery
 window (it is probably carrying both). --no-zone-rescan turns the look off.
 
@@ -93,8 +93,8 @@ LABEL_PLACE_CORRECTION_Z = 0.00  # To prevent excessive interference with the ob
 # ── ITEMS IN A LABEL ZONE ────────────────────────────────────────────────────────
 # Perception counts the items in each zone (label_seg_node.py) and gives the top item's
 # pick point (its centroid, at the measured height) in the label arm's base frame. Arm 1
-# picks there, straight down, when a zone holds two or more items or an item arm 1 did
-# not put down itself; a single item it dropped is picked at the taught zone position.
+# always picks there, straight down (one item or a pile); only when perception gave no
+# pick point for a single item does it fall back to the taught zone position.
 # CELL_FILE has the label arm's base in arm 1's frame, to carry the point across.
 CELL_FILE = "../orio_logging/config/cell.yaml"
 # A pick point farther than this (m, XY) from the taught zone position is refused: it is
@@ -116,6 +116,10 @@ VAC_THRESHOLD_LOW = 800
 # with the cup off, 585-615 sucking open air (a real miss), 640-880 an item held by an
 # imperfect seal, 1000-1500 a good seal.
 PNP_PICK_RAW_MIN = 800
+
+# How long arm 1 holds still over the drop with its cup off (zone A, zone B, output) before it
+# moves away (--pnp-release-s). Was 1.0 s; the label cup keeps its own 1.0 s.
+DEFAULT_PNP_RELEASE_S = 0.4
 
 # ── MOTION SPEED ─────────────────────────────────────────────────────────────────
 # Every move's duration in the code is its 1x time; _move divides it by --speed. A move is
@@ -140,6 +144,13 @@ DROPPED_SKILL_MARGIN_S = 0.75
 DROPPED_SKILL_TOL_RAD = 0.05
 
 # Same safe workspace box FetchInput has always enforced on the incoming grasp pose (world).
+# When the arm has no safe pose for the planned grasp, the suction planner is asked again with
+# that spot left out (it writes each accepted grasp's pixel to LAST_GRASP_PX_PARAM and skips
+# 5 cm round every pixel in GRASP_EXCLUDE_PX_PARAM), up to --ik-alternatives times per scan.
+GRASP_EXCLUDE_PX_PARAM = "/orio/grasp_exclude_px"
+LAST_GRASP_PX_PARAM = "/orio/last_grasp_px"
+DEFAULT_IK_ALTERNATIVES = 4
+
 PICK_BOUNDS = {'x_min': -0.2, 'x_max': 0.55, 'y_min': -0.8, 'y_max': -0.1,
                'z_min': 0.0, 'z_max': 0.5}
 
@@ -483,10 +494,12 @@ pause_ctl = PauseControl()
 arm_status = ArmStatus()
 
 no_label_vacuum_check = False  # Set from --no-label-vacuum-check: skip the label cup's sensor checks
+no_label_suction = False       # Set from --no-label-suction: never switch the label cup, skip its checks
 no_pnp_vacuum_test = False     # Set from --no-pnp-vacuum-test: skip the pick cup's sensor checks
 pnp_pick_raw_min = PNP_PICK_RAW_MIN   # Set from --pnp-vacuum-min (see PNP_PICK_RAW_MIN)
 motion_speed = DEFAULT_SPEED          # Set from --speed (see DEFAULT_SPEED)
 settle_s = DEFAULT_SETTLE_S           # Set from --settle-s (see DEFAULT_SETTLE_S)
+pnp_release_s = DEFAULT_PNP_RELEASE_S # Set from --pnp-release-s (see DEFAULT_PNP_RELEASE_S)
 
 # When True, vacuum service calls and sensor asserts are skipped (dry-run
 # without pneumatics). Set in main() from --no-vacuum / ORIO_DISABLE_PNEUMATICS.
@@ -595,11 +608,31 @@ def _is_vacuum_service(service_name):
 _service_messages = {}   # service name -> the message of its last response (call_trigger_service)
 
 
+def _get_param(name):
+    """A ROS parameter, or None when it is not set or the master cannot be reached."""
+    try:
+        return rospy.get_param(name, None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _delete_param(name):
+    """Remove a ROS parameter if it is set (no error when it is not)."""
+    try:
+        if rospy.has_param(name):
+            rospy.delete_param(name)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def call_trigger_service(service_name):
     """Call a ROS Trigger service. With disable_pneumatics, vacuum cup services
     are skipped (no-op, returns True); vision services are unaffected. The response's
     message is kept in _service_messages[service_name]."""
     _service_messages.pop(service_name, None)
+    if no_label_suction and service_name.startswith('/orio/lbl_cup/'):
+        log.info("[Vacuum] label suction off (--no-label-suction) — skipping %s", service_name)
+        return True
     for prefix, arm in (('/orio/pnp_cup/', 'arm1'), ('/orio/lbl_cup/', 'arm2')):
         if service_name.startswith(prefix):   # commanded cup state, for the dashboard
             arm_status.set(arm, cup=service_name.endswith('/on'))
@@ -1008,10 +1041,10 @@ class RobotHardware:
     def assert_vacuum(self, cup, expected_state, timeout=1.0):
         """Poll the vacuum sensor for `cup` ('pnp'|'lbl') until it matches
         `expected_state`; raise RuntimeError if it doesn't within `timeout` s."""
-        global disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test, pnp_pick_raw_min
+        global disable_pneumatics, no_label_vacuum_check, no_label_suction, no_pnp_vacuum_test, pnp_pick_raw_min
         if disable_pneumatics:
             return
-        if cup == 'lbl' and no_label_vacuum_check:
+        if cup == 'lbl' and (no_label_vacuum_check or no_label_suction):
             return
         if cup == 'pnp' and no_pnp_vacuum_test:
             return
@@ -1878,6 +1911,9 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
             if disable_pneumatics:
                 log.info("[Recovery GUI] vacuum disabled — skipping %s", service_name)
                 return
+            if no_label_suction and service_name.startswith('/orio/lbl_cup/'):
+                log.info("[Recovery GUI] label suction off (--no-label-suction) — skipping %s", service_name)
+                return
             try:
                 rospy.wait_for_service(service_name, timeout=5.0)
                 proxy = rospy.ServiceProxy(service_name, Trigger)
@@ -2490,42 +2526,69 @@ class FetchInput(smach.State):
         arm_status.set('arm1', activity="Planning a grasp", target='bin')
 
         epoch = pause_ctl.epoch   # a pause after this point invalidates the grasp
-        grasp = hardware.request_grasp()
-        if grasp is None:
-            return self._decline("No grasp found")
-        task_pos, target_ori = grasp
+        excluded = []   # pixels of grasps the arm had no safe pose for; the planner skips them
+        try:
+            while True:
+                _delete_param(LAST_GRASP_PX_PARAM)   # so a stale pixel is never excluded
+                grasp = hardware.request_grasp()
+                if grasp is None:
+                    if excluded:
+                        return self._decline("No safe arm pose for %d grasp(s) and no other "
+                                             "grasp" % len(excluded))
+                    return self._decline("No grasp found")
+                task_pos, target_ori = grasp
 
-        if opts.confirm:
-            choice = self._confirm_pick(task_pos)
-            events.emit('operator', choice, pick=_pick_n, pos=list(task_pos))
-            if choice == 'abort':
-                log.info("[FetchInput] Aborted by operator")
-                events.emit('shutdown', 'operator_abort', picks=_pick_n,
-                            placed=_items_placed_output)
-                shutdown_event.set()
-                return 'no_grasp'
-            if choice == 'regenerate':
-                log.info("[FetchInput] Regenerating grasp — re-scanning…")
-                return 'no_grasp'
+                if opts.confirm:
+                    choice = self._confirm_pick(task_pos)
+                    events.emit('operator', choice, pick=_pick_n, pos=list(task_pos))
+                    if choice == 'abort':
+                        log.info("[FetchInput] Aborted by operator")
+                        events.emit('shutdown', 'operator_abort', picks=_pick_n,
+                                    placed=_items_placed_output)
+                        shutdown_event.set()
+                        return 'no_grasp'
+                    if choice == 'regenerate':
+                        log.info("[FetchInput] Regenerating grasp — re-scanning…")
+                        return 'no_grasp'
 
-        hardware.current_fetch_depth = float(task_pos[2])   # the item's surface, not the push
-        userdata.item_depth = hardware.current_fetch_depth
-        # Go PICK_PUSH_DISTANCE past the grasp point, along the cup axis (tool Z, into the item).
-        approach = (VERTICAL_ORI if target_ori is None else np.asarray(target_ori))[:, 2]
-        task_pos = list(np.asarray(task_pos, dtype=float) + PICK_PUSH_DISTANCE * approach)
+                hardware.current_fetch_depth = float(task_pos[2])   # the item's surface, not the push
+                userdata.item_depth = hardware.current_fetch_depth
+                # Go PICK_PUSH_DISTANCE past the grasp point, along the cup axis (tool Z, into the item).
+                approach = (VERTICAL_ORI if target_ori is None else np.asarray(target_ori))[:, 2]
+                task_pos = list(np.asarray(task_pos, dtype=float) + PICK_PUSH_DISTANCE * approach)
 
-        if opts.flat_pick:
-            joints = hardware.compute_flat_pick_joints(task_pos, target_ori=target_ori)
-            if joints is None:
+                if not opts.flat_pick:
+                    joints = hardware.compute_pick_joints(task_pos, target_ori=target_ori)
+                    break
+                joints = hardware.compute_flat_pick_joints(task_pos, target_ori=target_ori)
+                if joints is not None:
+                    break
                 # No arm shape reaches this grasp safely (e.g. a steep tilt close to the
                 # base folds the arm onto a joint limit): reject it, as ikpy's twisted
-                # fallback set off the self-collision reflex.
+                # fallback set off the self-collision reflex. Then plan again without that
+                # spot, so the next best grasp in the bin gets its chance.
                 _grasp_verdict(False, "no safe arm pose for this grasp")
                 events.emit('grasp', 'declined', reason='no_safe_ik', pos=list(task_pos),
                             ok=False)
-                return self._decline("No safe arm pose for the grasp")
-        else:
-            joints = hardware.compute_pick_joints(task_pos, target_ori=target_ori)
+                px = _get_param(LAST_GRASP_PX_PARAM)
+                if (len(excluded) >= opts.ik_alternatives or not px
+                        or any(np.hypot(px[0] - e[0], px[1] - e[1]) < 2.0 for e in excluded)):
+                    if px and excluded and len(excluded) < opts.ik_alternatives:
+                        log.warning("[FetchInput] The planner gave an excluded spot again "
+                                    "(is the suction planner up to date?)")
+                    return self._decline("No safe arm pose for the grasp" + (
+                        " or %d next best" % len(excluded) if excluded else ""))
+                excluded.append([float(px[0]), float(px[1])])
+                rospy.set_param(GRASP_EXCLUDE_PX_PARAM, excluded)
+                log.warning("[FetchInput] No safe arm pose for the grasp at px (%.0f, %.0f): "
+                            "planning the next best grasp (%d/%d)", px[0], px[1],
+                            len(excluded), opts.ik_alternatives)
+                arm_status.set('arm1', activity="No safe arm pose: trying the next best grasp "
+                               "(%d/%d)" % (len(excluded), opts.ik_alternatives), target='bin')
+                events.emit('grasp', 'next_best', n=len(excluded), px=list(px))
+        finally:
+            if excluded:
+                _delete_param(GRASP_EXCLUDE_PX_PARAM)
         _declines = 0  # a grasp the arm can reach; reset the streak
         hardware.pick_up_pre_joints, hardware.pick_up_final_joints = joints
         log.info("[FetchInput] IK pre_joints:   %s", np.round(hardware.pick_up_pre_joints, 4))
@@ -2635,7 +2698,7 @@ class DropToZone(smach.State):
                 hardware._move('arm1', arm1.goto_joints, place_joints, duration=3, desc="place in zone A")
                 hardware.assert_vacuum('pnp', True)
                 call_trigger_service('/orio/pnp_cup/off')
-                rospy.sleep(1.0)
+                rospy.sleep(pnp_release_s)
 
                 hardware._move('arm1', arm1.reset_joints, duration=2, desc="reset after drop A",
                                pausable=False)
@@ -2649,7 +2712,7 @@ class DropToZone(smach.State):
                 hardware._move('arm1', arm1.goto_joints, place_joints, duration=3, desc="place in zone B")
                 hardware.assert_vacuum('pnp', True)
                 call_trigger_service('/orio/pnp_cup/off')
-                rospy.sleep(1.0)
+                rospy.sleep(pnp_release_s)
                 hardware._move('arm1', arm1.reset_joints, duration=2, desc="reset after drop B",
                                pausable=False)
             arm_status.set('arm1', target=None)
@@ -2675,10 +2738,11 @@ class DropToZone(smach.State):
 class RetrieveFromZone(smach.State):
     """Pick the labelled item out of a zone, then look at the zone again.
 
-    Where: a single item arm 1 dropped is picked at the taught zone position. With two or
-    more items in the zone (a double pick), or an item a pick left behind, it is the top
-    item's centroid as perception measured it, straight down, so the cup does not come
-    down on both items again.
+    Where: the top item's centroid as perception measured it, straight down, whether the
+    zone holds one item or a pile (a double pick, or an item a pick left behind), so the
+    cup lands in the middle of the item it labelled. Only a single item with no pick point
+    from perception (no depth there, or no look at the zone) is picked at the taught zone
+    position; a pile without one stops for help.
 
     After the pick the zone is scanned (unless --no-zone-rescan): an item still there
     sends the zone back to NEEDS_LABEL; none after two or more were seen means arm 1 is
@@ -2692,12 +2756,16 @@ class RetrieveFromZone(smach.State):
     def _pick_point(self, zone, depth_taught):
         """(xy or None for the taught position, pick height) for this zone's pick."""
         n_items, top = manager.n_items[zone], manager.top_pick[zone]
-        if n_items < 2 and not manager.leftover[zone]:
-            return None, depth_taught
-        why = "%d items in the zone" % n_items if n_items >= 2 else "an item left by the last pick"
+        pile = n_items >= 2 or manager.leftover[zone]
+        why = ("%d items in the zone" % n_items if n_items >= 2 else
+               "an item left by the last pick" if manager.leftover[zone] else "one item in the zone")
         if top is None:
-            raise RuntimeError("Zone %s has %s, but perception gave no pick point for the top "
-                               "item (no depth there?)" % (zone, why))
+            if pile:
+                raise RuntimeError("Zone %s has %s, but perception gave no pick point for the top "
+                                   "item (no depth there?)" % (zone, why))
+            log.warning("[RetrieveFromZone] Zone %s: no pick point from perception, picking at "
+                        "the taught zone position", zone)
+            return None, depth_taught
         with open(TARGET_POSES_FILE) as f:
             tx, ty, _ = json.load(f)[ZONE_TAG[zone]]["translation"]
         off = float(np.hypot(top[0] - tx, top[1] - ty))
@@ -2858,7 +2926,7 @@ class PlaceOutput(smach.State):
         hardware._move('arm1', arm1.goto_joints, drop_joints, duration=3, desc="goto output")
         hardware.assert_vacuum('pnp', True)
         call_trigger_service('/orio/pnp_cup/off')
-        rospy.sleep(1.0)
+        rospy.sleep(pnp_release_s)
 
         hardware._move('arm1', arm1.reset_joints, duration=3, desc="reset after output",
                        pausable=False)
@@ -3056,6 +3124,9 @@ def _parse_args():
     parser.add_argument('--no-label-vacuum-check', action='store_true',
                         help="Testing without labels: skip the label cup's vacuum checks, "
                              "so the run carries on as if a label had been picked up.")
+    parser.add_argument('--no-label-suction', action='store_true',
+                        help="Never switch the label cup on or off and skip its vacuum checks; "
+                             "arm 2 still makes every move (dispenser, label pose, press).")
     parser.add_argument('--no-pnp-vacuum-test', action='store_true',
                         help="Skip the pick cup's vacuum checks (e.g. while its sensor is "
                              "broken), so the run carries on as if the item had been picked up.")
@@ -3067,6 +3138,14 @@ def _parse_args():
                         help="Run every arm move X times faster than its base time (default "
                              "%.1f; 1 = the old speeds). Long moves stay slow enough that no "
                              "joint peaks above %.1f rad/s." % (DEFAULT_SPEED, MAX_PEAK_JOINT_SPEED))
+    parser.add_argument('--ik-alternatives', type=int, default=DEFAULT_IK_ALTERNATIVES, metavar='N',
+                        help="When the arm has no safe pose for the planned grasp, plan again "
+                             "without that spot up to N times per scan before it counts as a "
+                             "decline (default %d; 0 = decline at once)." % DEFAULT_IK_ALTERNATIVES)
+    parser.add_argument('--pnp-release-s', type=float, default=DEFAULT_PNP_RELEASE_S, metavar='S',
+                        help="Seconds arm 1 holds still with its cup off when it drops an item "
+                             "(label zones, output) before moving away (default %.1f). The label "
+                             "cup is not affected." % DEFAULT_PNP_RELEASE_S)
     parser.add_argument('--settle-s', type=float, default=DEFAULT_SETTLE_S, metavar='S',
                         help="Seconds to wait after each arm move finishes before the next "
                              "command, so the arm has stopped (default %.1f; 0 = no wait)."
@@ -3264,10 +3343,11 @@ def _check_only():
 
 
 def main():
-    global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_vacuum_check, no_pnp_vacuum_test, pnp_pick_raw_min, motion_speed, settle_s, opts, console
+    global hardware, _item_name, _item_expiry, disable_pneumatics, no_label_vacuum_check, no_label_suction, no_pnp_vacuum_test, pnp_pick_raw_min, motion_speed, settle_s, pnp_release_s, opts, console
     global _run_started
     opts = _parse_args()
     rospy.init_node('full_sequence_fsm')
+    _delete_param(GRASP_EXCLUDE_PX_PARAM)   # a run that died mid-pick may have left one
 
     if opts.check_only:
         return _check_only()
@@ -3283,12 +3363,18 @@ def main():
     no_label_vacuum_check = opts.no_label_vacuum_check
     if no_label_vacuum_check:
         log.warning("[Main] NO LABEL VACUUM CHECK — the label cup's vacuum checks are skipped.")
+    no_label_suction = opts.no_label_suction
+    if no_label_suction:
+        log.warning("[Main] NO LABEL SUCTION — the label cup is never switched and its vacuum "
+                    "checks are skipped; arm 2 still makes every move.")
     no_pnp_vacuum_test = opts.no_pnp_vacuum_test
     if no_pnp_vacuum_test:
         log.warning("[Main] NO PNP VACUUM TEST — the pick cup's vacuum checks are skipped.")
     pnp_pick_raw_min = opts.pnp_vacuum_min
     motion_speed = max(0.25, min(float(opts.speed), 3.0))
     settle_s = max(0.0, float(opts.settle_s))
+    pnp_release_s = max(0.0, float(opts.pnp_release_s))
+    log.info("[Main] Arm 1 holds %.1f s with its cup off at each drop", pnp_release_s)
     log.info("[Main] Motion speed %.2fx (moves no shorter than %.1f s, joints peak <= %.1f rad/s), "
              "%.2f s settle after each move", motion_speed, MIN_MOVE_S, MAX_PEAK_JOINT_SPEED, settle_s)
 
@@ -3311,7 +3397,7 @@ def main():
                 no_vacuum=disable_pneumatics, straight_down=opts.straight_down,
                 confirm=opts.confirm, max_tilt_deg=opts.max_tilt_deg,
                 max_declines=opts.max_declines,
-                no_label_vacuum_check=no_label_vacuum_check,
+                no_label_vacuum_check=no_label_vacuum_check, no_label_suction=no_label_suction,
                 no_pnp_vacuum_test=no_pnp_vacuum_test, skip_item_setup=opts.skip_item_setup,
                 zero_item_depth=opts.zero_item_depth,
                 offset_x=opts.offset_x, offset_y=opts.offset_y)

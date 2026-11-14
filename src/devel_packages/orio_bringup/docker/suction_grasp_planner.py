@@ -47,6 +47,14 @@ ROT180 = np.diag([-1.0, -1.0, 1.0, 1.0])
 # 0.2 is the floor: lower finds junk masks. See SuctionGraspPlanner._plan_with_retries.
 SEG_RETRIES = ((True, None), (False, 0.3), (True, 0.3), (False, 0.2), (True, 0.2))
 
+# Grasp spots the caller wants skipped (full_sequence.py: the arm found no safe pose for
+# them). A list of [u, v] request-image pixels; every map cell within EXCLUDE_RADIUS_M of
+# the cell under each pixel is left out of the argmax, so the next best spot comes out.
+# The planner writes each accepted grasp's pixel to LAST_GRASP_PX_PARAM for that purpose.
+EXCLUDE_PX_PARAM = "/orio/grasp_exclude_px"
+LAST_GRASP_PX_PARAM = "/orio/last_grasp_px"
+EXCLUDE_RADIUS_M = 0.05
+
 
 def align_hires(img, x0, y0, shape):
     """The part of a 1280x1024 Xtion colour frame on the 640x480 grid at twice its
@@ -219,19 +227,43 @@ class SuctionModel(object):
         return (np.ascontiguousarray(full[::-1, ::-1] if self.rot180 else full),
                 [r["score"] for r in records], dropped)
 
+    def _excluded_cells(self, hm, K, exclude_px):
+        """(rows, cols) bool: the map cells within EXCLUDE_RADIUS_M (world XY) of the cell
+        whose surface point projects nearest to each of the request-image pixels."""
+        rows, cols = self.grid.shape
+        out = np.zeros((rows, cols), bool)
+        if not exclude_px:
+            return out
+        rr, cc = np.mgrid[0:rows, 0:cols]
+        xy = self.grid.cell_to_world(np.stack([rr, cc], axis=-1).astype(np.float64))
+        z = self.table_z + np.nan_to_num(np.asarray(hm["height"], dtype=np.float64))
+        pts = np.concatenate([xy, z[..., None], np.ones((rows, cols, 1))], axis=-1)
+        cam = pts @ self.T_cam_world.T
+        with np.errstate(divide="ignore", invalid="ignore"):
+            u = K[0, 0] * cam[..., 0] / cam[..., 2] + K[0, 2]
+            v = K[1, 1] * cam[..., 1] / cam[..., 2] + K[1, 2]
+        for px in exclude_px:
+            d2 = np.nan_to_num((u - float(px[0])) ** 2 + (v - float(px[1])) ** 2, nan=np.inf)
+            r0, c0 = np.unravel_index(int(np.argmin(d2)), d2.shape)
+            out |= np.hypot(xy[..., 0] - xy[r0, c0, 0], xy[..., 1] - xy[r0, c0, 1]) <= EXCLUDE_RADIUS_M
+        return out
+
     def project(self, xyz_world, K):
         """World point to (u, v, z) in the request image."""
         p = self.T_cam_world.dot(np.append(np.asarray(xyz_world, dtype=np.float64), 1.0))
         return K[0, 0] * p[0] / p[2] + K[0, 2], K[1, 1] * p[1] / p[2] + K[1, 2], p[2]
 
-    def plan(self, depth_m, K, color=None, color_hires=None, seg_threshold=None, seg_mirror=False):
+    def plan(self, depth_m, K, color=None, color_hires=None, seg_threshold=None, seg_mirror=False,
+             exclude_px=()):
         """Best grasp for one depth image (metres; NaN or <= 0 invalid) and its 3x3 K, plus
         the registered RGB image when the checkpoint reads segmentation masks.
 
         Returns a dict: score, seal, hold, access, angle_deg, cell (row, col), world_xyz,
         normal_world, cup_line_world, position_cam, rotation_cam, center_px, depth_cam,
         tilt_deg, n_masks (None without segmentation), and the maps (heightmap, prediction,
-        instances) for the diagnostic panel.
+        instances) for the diagnostic panel. exclude_px: request-image pixels whose spots
+        (EXCLUDE_RADIUS_M around the cell under each) are not chosen; n_excluded_cells says
+        how many cells that left out.
         """
         depth = np.asarray(depth_m, dtype=np.float32)
         depth = np.where(np.isfinite(depth) & (depth > 0), depth, 0.0).astype(np.float32)
@@ -258,7 +290,9 @@ class SuctionModel(object):
         hm = self._build_heightmap(depth, K, self.T_world_cam, self.table_z, self.grid, self.cfg.heightmap,
                                    instances=instances)
         p = self._predict(self.model, self._network_input(hm, self.channels), self.device)
-        a, r, c = np.unravel_index(int(np.argmax(p["score"])), p["score"].shape)
+        excluded = self._excluded_cells(hm, K, exclude_px)
+        score = p["score"] if not excluded.any() else np.where(excluded[None], -1.0, p["score"])
+        a, r, c = np.unravel_index(int(np.argmax(score)), score.shape)
 
         x, y = self.grid.cell_to_world(np.array([r, c], dtype=np.float64))
         world = np.array([x, y, self.table_z + float(hm["height"][r, c])])
@@ -293,6 +327,7 @@ class SuctionModel(object):
             "depth_cam": float(position_cam[2]),
             "tilt_deg": float(np.degrees(np.arccos(np.clip(normal[2], -1.0, 1.0)))),
             "n_masks": None if instances is None else int(instances.max()),
+            "n_excluded_cells": int(excluded.sum()),
             "heightmap": hm,
             "prediction": p,
             "instances": instances,
@@ -558,14 +593,14 @@ class SuctionGraspPlanner(object):
         with open(path, "w") as f:
             json.dump(meta, f, indent=1)
 
-    def _plan_with_retries(self, depth, K, color, color_hires):
+    def _plan_with_retries(self, depth, K, color, color_hires, exclude_px=()):
         """Plan; if the frame has an item but no grasp good enough, plan the SAME frame
         again with a different segmentation (SEG_RETRIES) and keep the first good one.
         The models are deterministic, so a new camera frame of the same scene gives the
         same answer: a lower mask threshold or a mirrored input is what changes it (e.g.
         a box lying on another, missed at 0.5). A frame with no item at all is not
         retried, so an empty bin still reads as empty."""
-        g = self._model.plan(depth, K, color, color_hires)
+        g = self._model.plan(depth, K, color, color_hires, exclude_px=exclude_px)
         good = lambda r: r["n_masks"] != 0 and r["score"] >= self._min_score  # noqa: E731
         if (good(g) or not self._seg_retries or self._model.seg is None or not g["n_masks"]):
             return g
@@ -574,7 +609,7 @@ class SuctionGraspPlanner(object):
         best = g
         for n, (mirror, threshold) in enumerate(SEG_RETRIES, start=2):
             r = self._model.plan(depth, K, color, color_hires, seg_threshold=threshold,
-                                 seg_mirror=mirror)
+                                 seg_mirror=mirror, exclude_px=exclude_px)
             tries.append({"threshold": threshold or self._model.seg_threshold, "mirror": mirror,
                           "score": r["score"], "n_masks": r["n_masks"]})
             r["seg_try"] = "seg retry %d/%d (%smask threshold %.2f)" % (
@@ -616,9 +651,10 @@ class SuctionGraspPlanner(object):
                 rospy.logwarn("Could not save grasp inputs: %s", exc)
                 base = None
 
+        exclude_px = [list(px)[:2] for px in (rospy.get_param(EXCLUDE_PX_PARAM, None) or [])]
         start = time.time()
         try:
-            g = self._plan_with_retries(depth, K, color, color_hires)
+            g = self._plan_with_retries(depth, K, color, color_hires, exclude_px)
         except ValueError as exc:
             if base:
                 try:
@@ -654,6 +690,8 @@ class SuctionGraspPlanner(object):
             summary += ", %d masks" % g["n_masks"]
         if g.get("seg_try"):
             summary += ", %s" % g["seg_try"]
+        if exclude_px:
+            summary += ", %d spot(s) excluded (%d cells)" % (len(exclude_px), g["n_excluded_cells"])
 
         if base:
             try:
@@ -665,6 +703,7 @@ class SuctionGraspPlanner(object):
                     "dropped_masks": g["dropped_masks"], "reject_reason": g["reject_reason"],
                     "seg_input": "1280x960" if color_hires is not None else "640x480",
                     "seg_try": g.get("seg_try"), "seg_tries": g.get("seg_tries"),
+                    "exclude_px": exclude_px, "n_excluded_cells": g["n_excluded_cells"],
                     "plan_time_s": elapsed})
             except Exception as exc:  # noqa: BLE001
                 rospy.logwarn("Could not save grasp result: %s", exc)
@@ -699,6 +738,7 @@ class SuctionGraspPlanner(object):
                 msg, False, "score %.4f below threshold %.3f" % (g["score"], self._min_score))
         rospy.loginfo("Planned suction grasp %s at px (%.0f, %.0f) in %.3fs",
                       summary, msg.center_px[0], msg.center_px[1], elapsed)
+        rospy.set_param(LAST_GRASP_PX_PARAM, [float(msg.center_px[0]), float(msg.center_px[1])])
         # On success the message names the panel, if one was written (grasp_test.py prints it).
         return PlanDexnetGraspResponse(msg, True, panel and "panel: " + panel)
 

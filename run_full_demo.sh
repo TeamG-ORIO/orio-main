@@ -27,8 +27,12 @@
 #                                           #   (Enter = execute, r = regenerate, q = abort)
 #   bash run_full_demo.sh --no-label-vacuum-check # test without labels: skip the label
 #                                           #   cup's vacuum check, carry on as if one was picked
+#   bash run_full_demo.sh --no-label-suction # never switch the label cup on (arm 2 still
+#                                           #   makes every move) and skip its checks
 #   bash run_full_demo.sh --no-pnp-vacuum-test # skip the pick cup's vacuum check, carry
 #                                           #   on as if the item was picked (broken sensor)
+#   bash run_full_demo.sh --ik-alternatives 4 # no safe arm pose for a grasp: plan the next
+#                                           #   best spot, up to N times per scan (default 4)
 #   bash run_full_demo.sh --pick-retries 2  # missed picks retried automatically (new grasp)
 #                                           #   before the recovery window opens (0 = never)
 #   bash run_full_demo.sh --pnp-vacuum-min 800 # raw reading that counts as a pick (default
@@ -38,6 +42,8 @@
 #   bash run_full_demo.sh --speed 2       # every arm move 2x faster than its base time
 #                                           #   (default 1 = the base speeds)
 #   bash run_full_demo.sh --settle-s 0.3  # wait after each move before the next (default 0)
+#   bash run_full_demo.sh --pnp-release-s 0.2 # arm 1 holds this long with its cup off at
+#                                           #   each drop before moving away (default 0.4)
 #   bash run_full_demo.sh --no-flat-pick  # bin pick: ikpy's arm shape as before, not the
 #                                           #   one with joints 3 and 5 nearest 0
 #   bash run_full_demo.sh --no-zed        # skip the ZED: labelling poses will time out
@@ -88,6 +94,7 @@ LOGGING_REQUESTED="$ORIO_LOGGING"
 
 # ── Args ────────────────────────────────────────────────────────────────────
 USE_VACUUM=1
+LABEL_SUCTION=1
 CONFIRM=0
 AFFORDANCE=1
 USE_ZED=1
@@ -114,11 +121,14 @@ while [ $# -gt 0 ]; do
         --pick-retries)  SM_EXTRA+=(--pick-retries "${1:?--pick-retries needs a count}"); shift ;;
         --zero-item-depth) SM_EXTRA+=(--zero-item-depth) ;;
         --no-label-vacuum-check) SM_EXTRA+=(--no-label-vacuum-check) ;;
+        --no-label-suction) LABEL_SUCTION=0; SM_EXTRA+=(--no-label-suction) ;;
         --no-pnp-vacuum-test) SM_EXTRA+=(--no-pnp-vacuum-test) ;;
         --pnp-vacuum-min) SM_EXTRA+=(--pnp-vacuum-min "${1:?--pnp-vacuum-min needs a raw value}"); shift ;;
         --no-flat-pick)  SM_EXTRA+=(--no-flat-pick) ;;
         --speed)         SM_EXTRA+=(--speed "${1:?--speed needs a factor}"); shift ;;
         --settle-s)      SM_EXTRA+=(--settle-s "${1:?--settle-s needs seconds}"); shift ;;
+        --pnp-release-s) SM_EXTRA+=(--pnp-release-s "${1:?--pnp-release-s needs seconds}"); shift ;;
+        --ik-alternatives) SM_EXTRA+=(--ik-alternatives "${1:?--ik-alternatives needs a count}"); shift ;;
         --skip-item-setup) SKIP_ITEM_SETUP=1; SM_EXTRA+=(--skip-item-setup) ;;
         --no-zed)        USE_ZED=0; SM_EXTRA+=(--no-zone-rescan) ;;
         --no-zone-rescan) SM_EXTRA+=(--no-zone-rescan) ;;
@@ -313,7 +323,11 @@ fi
 
 # Pneumatics (both cups), run-scoped.
 if [ "$USE_VACUUM" -eq 1 ]; then
-    log "starting pneumatics (pnp + lbl cups)…"
+    if [ "$LABEL_SUCTION" -eq 1 ]; then
+        log "starting pneumatics (pnp + lbl cups)…"
+    else
+        log "starting pneumatics (pnp cup only: --no-label-suction, the label cup is never switched)…"
+    fi
     pneumatics_start
 else
     log "pneumatics DISABLED (dry-run): move the cups by hand."
@@ -332,7 +346,11 @@ if [ "$USE_ZED" -eq 1 ]; then
         || log "NOTE: /scan_label_zones not up (yet) — arm 1 cannot check a zone after a pick until it is."
 fi
 if [ "$USE_VACUUM" -eq 1 ]; then
-    pneumatics_wait pnp_cup lbl_cup || exit 1
+    if [ "$LABEL_SUCTION" -eq 1 ]; then
+        pneumatics_wait pnp_cup lbl_cup || exit 1
+    else
+        pneumatics_wait pnp_cup || exit 1
+    fi
 fi
 
 # The dashboard's LOCK / UNLOCK & PRIME buttons: it runs in the container, which cannot
