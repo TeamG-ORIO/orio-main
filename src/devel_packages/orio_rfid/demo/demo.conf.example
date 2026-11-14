@@ -1,0 +1,39 @@
+# demo.conf.example - copy to demo.conf (not in git: it holds this site's addresses) and fill in ROBOT_HOST and PC_HOST.
+# demo.conf: one place for the addresses and the site of the scan demo. KEY=VALUE, no spaces around "=".
+# Read by run_scan_demo.sh (bash) and scan_dashboard.py (Python). Lines starting with # are ignored.
+
+# --- the two machines -------------------------------------------------------------------------------------
+# Today (trial on abuela): Tailscale addresses. On the team router (TeamG_ORIO_5G, no internet) change these
+# two to the 192.168.50.x addresses the router gives the machines.
+ROBOT_HOST=ROBOT_ADDRESS
+ROBOT_USER=hello-robot
+PC_HOST=PC_ADDRESS
+# the address of this PC as the ROBOT reaches it (the robot posts its reads there)
+
+ROBOT_REPO=~/orio-main
+AGENT_PORT=8123
+RECEIVER_PORT=8000
+# python on the PC: needs tkinter; with ENGINE=pc also torch, numpy, pandas, scipy
+PYTHON=python3
+
+# --- inventory on the PC ----------------------------------------------------------------------------------
+# SQLite file with the medical_supplies table. If it does not exist, a test copy is built from the seed
+# inventory plus every item tag in RFID/tag_registry.csv. Point this at the real master database on demo day.
+DB=~/orio_scan/master.db
+
+# --- item localiser ---------------------------------------------------------------------------------------
+# ENGINE: pc = the robot sends its reads, this PC computes; robot = the robot computes and sends results; off
+# METHOD: one of F1 F2 F3 F4 (F4 = shelf boxes + other items, the most accurate on run 2)
+ENGINE=pc
+METHOD=F4
+# CELLS: all = the whole room grid, exactly as the offline method (default; needs the GPU).
+#        shelf = only the cells in or near the shelf boxes, for F3 / F4: several times quicker (see loc/README.md, "Delay").
+#        On run 2 it gives F4 the same position for all 132 items to the millimetre, and F3 for 131 of 132.
+CELLS=all
+
+# --- site (paths on the ROBOT) ----------------------------------------------------------------------------
+MAP=hospital_corridor_v2
+RUN_DIR=~/orio/datasets/hospital_corridor_v2/orbslam/ir-rgbd_map
+WAYPOINTS=~/orio/config/waypoints_hospital_corridor_v2.yaml
+LAPS=2
+START_AT=1
