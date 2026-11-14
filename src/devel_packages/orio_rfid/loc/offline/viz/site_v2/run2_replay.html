@@ -1,0 +1,373 @@
+<title>Corridor Run 2 Replay</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&family=IBM+Plex+Sans:wght@400;500&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: full-bleed 3D stage with a slim instrument rail on the right (stacks below on phones); transport bar under the stage. Single dark look, like a control-room monitor. */
+:root {
+  --bg: #0a0d12; --panel: #121821; --panel-2: #18202b; --ink: #e6ebf2; --muted: #8b97a8; --rule: #253041;
+  --robot: #7fd3ff; --gt: #ffffff; --warn: #ffb35c; --stage: #06080c;
+  --f-display: "Barlow Condensed", "Arial Narrow", Arial, sans-serif;
+  --f-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { background: var(--bg); color: var(--ink); }
+body { font-family: var(--f-body); font-size: 14px; line-height: 1.45; }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px 20px; display: grid; gap: 12px; max-width: 1600px; margin: 0 auto; }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+h1 { font-family: var(--f-display); font-weight: 700; font-size: 1.9rem; letter-spacing: 0.01em; margin: 0; line-height: 1; }
+.sub { color: var(--muted); max-width: 70ch; margin: 0; }
+.main { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
+.stage { position: relative; background: var(--stage); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; height: min(72vh, 760px); min-height: 360px; }
+#c { width: 100%; height: 100%; display: block; }
+.hud { position: absolute; left: 10px; top: 10px; display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none; max-width: calc(100% - 20px); }
+.hud span { font-family: var(--f-mono); font-size: 12px; background: rgba(10, 13, 18, 0.78); border: 1px solid var(--rule); padding: 3px 8px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.hud b { color: var(--robot); font-weight: 500; }
+#tip { position: absolute; pointer-events: none; font-family: var(--f-mono); font-size: 12px; background: rgba(10, 13, 18, 0.92); border: 1px solid var(--rule); padding: 6px 8px; border-radius: 4px; white-space: nowrap; }
+#status { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--f-mono); color: var(--muted); }
+.rail { display: grid; gap: 12px; align-content: start; min-width: 0; }
+.box { background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 12px; display: grid; gap: 8px; min-width: 0; }
+.k { font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.shelves { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 6px; }
+.shelf { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 3px 6px; border-radius: 4px; cursor: pointer; border: 1px solid transparent; background: none; color: var(--ink); font: inherit; text-align: left; }
+.shelf:hover { background: var(--panel-2); }
+.shelf[aria-pressed="false"] { opacity: 0.38; }
+.shelf .ramp { height: 12px; border-radius: 2px; }
+.shelf .n { font-family: var(--f-mono); font-size: 12px; color: var(--muted); }
+.shelf b { font-family: var(--f-display); font-size: 1.05rem; font-weight: 700; }
+.toggles { display: grid; gap: 6px; }
+.toggles label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+select { width: 100%; background: var(--panel-2); color: var(--ink); border: 1px solid var(--rule); border-radius: 4px; padding: 6px; font: inherit; }
+#focusInfo { font-family: var(--f-mono); font-size: 12px; color: var(--muted); white-space: pre-wrap; min-height: 3.5em; }
+.transport { display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--rule); border-radius: 6px; padding: 8px 12px; }
+button.play { width: 40px; height: 32px; border-radius: 4px; border: 1px solid var(--rule); background: var(--panel-2); color: var(--ink); font-size: 15px; cursor: pointer; }
+#clock { font-family: var(--f-mono); font-variant-numeric: tabular-nums; min-width: 8.5em; }
+input[type=range] { width: 100%; accent-color: var(--robot); }
+.speed { display: flex; flex-wrap: wrap; gap: 4px; }
+.speed button { font-family: var(--f-mono); font-size: 12px; border: 1px solid var(--rule); background: var(--panel-2); color: var(--muted); border-radius: 4px; padding: 4px 7px; cursor: pointer; }
+.speed button[aria-pressed="true"] { color: var(--bg); background: var(--robot); border-color: var(--robot); }
+#bset { display: grid; grid-template-columns: 1fr 1fr; }
+#bset button { text-align: left; line-height: 1.25; }
+#bset button b { display: block; font-family: var(--f-display); font-size: 1.1rem; font-weight: 700; }
+button:focus-visible, select:focus-visible, input:focus-visible, .shelf:focus-visible { outline: 2px solid var(--robot); outline-offset: 2px; }
+.lvlnote { color: var(--muted); font-size: 12px; }
+.notes { color: var(--muted); font-size: 13px; display: grid; gap: 4px; max-width: 110ch; }
+.notes b { color: var(--ink); font-weight: 500; }
+@media (max-width: 900px) {
+  .main { grid-template-columns: minmax(0, 1fr); }
+  .stage { height: 58vh; }
+  .transport { grid-template-columns: auto auto minmax(0, 1fr); }
+  .transport .speed { grid-column: 1 / -1; justify-content: center; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Corridor Run 2 Replay</h1>
+    <p class="sub">Recording corridor_v2_rfid_2laps_run2, 7 Nov 2026: two laps past 11 shelves with the antenna moving up and down on the lift. Each dot is where one method places a tag, given only what was recorded up to that moment; the ellipsoid around it is where the tag could be. Switch between the four final methods. The diamond is the true position.</p>
+  </header>
+  <div class="main">
+    <div class="stage">
+      <canvas id="c" aria-label="3D view of the shelves, robot and tag beliefs"></canvas>
+      <div class="hud" aria-live="polite"><span id="hTime">t 0:00</span><span id="hLift">antenna –</span><span id="hTags">tags with a belief –</span><span id="hErr">median error now –</span></div>
+      <div id="tip" hidden></div>
+      <div id="status">Loading scene…</div>
+    </div>
+    <aside class="rail">
+      <div class="box">
+        <div class="k">Method</div>
+        <div class="speed" id="bset" role="group" aria-label="Localization method">
+          <button data-b="F1" aria-pressed="false"><b>F1</b>no map, no reference tags</button>
+          <button data-b="F2" aria-pressed="false"><b>F2</b>reference tags</button>
+          <button data-b="F3" aria-pressed="false"><b>F3</b>shelf boxes</button>
+          <button data-b="F4" aria-pressed="true"><b>F4</b>boxes + other items</button>
+        </div>
+        <div class="lvlnote" id="bsetNote"></div>
+      </div>
+      <div class="box">
+        <div class="k">Belief region</div>
+        <div class="speed" id="level" role="group" aria-label="Belief region size">
+          <button data-l="0" aria-pressed="true">50% region</button><button data-l="1" aria-pressed="false">90% region</button>
+        </div>
+        <div class="lvlnote" id="lvlNote"></div>
+        <details class="lvlnote"><summary>What the dots and ellipsoids are</summary>
+          <p>The dot is the method's own position estimate, the one the reported errors are measured from. F1 takes the most likely cell and averages the belief within 30 cm of it. F2 to F4 take the place with the most probability nearby (the belief blurred by 20 cm) and average within 20 cm.</p>
+          <p>Each ellipsoid stands for one connected blob of the tag's 50% or 90% most likely region. Up to 3 blobs per tag; a blob is drawn only if it holds at least about 3% (50% region) or 5% (90% region) of the probability. Centre and orientation come from the blob's weighted mean and covariance; the volume equals the blob's volume, then each axis is capped at the blob's 95th-percentile extent.</p>
+          <p>They are not Gaussian σ-ellipses. Before the regions are cut, each belief is widened by a factor chosen once per method on the dev items so that 90% regions hold the truth about 90% of the time at the end of the run. Mid-run coverage was not checked.</p>
+        </details>
+      </div>
+      <div class="box">
+        <div class="k">Shelves · click to show or hide</div>
+        <div class="shelves" id="shelves"></div>
+      </div>
+      <div class="box">
+        <div class="k">Show</div>
+        <div class="toggles">
+          <label><input type="checkbox" id="tGT" checked> True positions + error lines</label>
+          <label><input type="checkbox" id="tRef"> Corner tags (true positions)</label>
+          <label><input type="checkbox" id="tPts" checked> Scene point cloud</label>
+          <label><input type="checkbox" id="tCloud" checked> Shelf outlines</label>
+          <label><input type="checkbox" id="tTrail" checked> Robot path so far</label>
+          <label><input type="checkbox" id="tFollow"> Follow the robot</label>
+        </div>
+      </div>
+      <div class="box">
+        <div class="k">Focus on a tag</div>
+        <select id="focus" aria-label="Focus on a tag"><option value="">All tags</option></select>
+        <div id="focusInfo">Pick a tag to dim the others and follow its belief.</div>
+      </div>
+    </aside>
+  </div>
+  <div class="transport">
+    <button class="play" id="play" aria-label="Play">▶</button>
+    <span id="clock">0:00 / 0:00</span>
+    <input type="range" id="slider" min="0" max="1000" step="0.1" value="0" aria-label="Time in the run">
+    <div class="speed" id="speed" role="group" aria-label="Playback speed">
+      <button data-s="1" aria-pressed="false">1×</button><button data-s="5" aria-pressed="true">5×</button><button data-s="20" aria-pressed="false">20×</button>
+    </div>
+  </div>
+  <div class="notes">
+    <div><b>Evidence, all four methods:</b> the learned read/RSSI model (reads and non-reads), phase within each channel dwell kept per height because the antenna moves, and a learned end-to-end network. Each tag's models never saw that part of the room. Tags attached to the same object share their evidence in F1 to F3.</div>
+    <div><b>Causal replay:</b> every term is rebuilt from the data recorded up to the shown moment, in 2 s steps. The end-to-end network was trained on whole passes, so its output in the middle of a pass is rougher than at the end. A tag gets a belief once it has 5 reads. The shelf outlines are drawn for orientation in every method; only F3 and F4 use them.</div>
+    <div><b>Scene point cloud:</b> from the camera run that built the robot's map on 6 Nov, the evening before this recording, so items may sit differently in it. It is shown for orientation and no method uses it.</div>
+    <div><b>Shelf map (F3, F4):</b> boxes from the corner tags and the measured item depths plus 10 cm, built without the tag's own object and without the locked test items. A small share of probability stays off the shelves, shown as P(not on any shelf) when you focus a tag. No item was off the shelves in this run, so that branch is untested.</div>
+    <div><b>Frame:</b> room coordinates in metres. Height is measured from the floor. Each shelf has its own colour and each tag on it its own shade. Drag to orbit, scroll to zoom, right-drag to pan.</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(async function () {
+  const status = document.getElementById('status');
+  if (!window.THREE || !THREE.OrbitControls) { status.textContent = 'The 3D library did not load. Reload the page to try again.'; return; }
+  const get = (u, kind) => fetch(u).then(r => { if (!r.ok) throw new Error(u + ' ' + r.status); return kind === 'json' ? r.json() : r.text(); });
+  const f32 = s => { const b = atob(s.trim()), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Float32Array(a.buffer); };
+  let meta, pathF, estF;
+  try { [meta, pathF, estF] = await Promise.all([get('meta.json', 'json'), get('path.b64.txt').then(f32), get('est.b64.txt').then(f32)]); }
+  catch (e) { status.textContent = 'Could not load the run data (' + e.message + '). Reload the page to try again.'; return; }
+
+  // ---------- colours: one hue per shelf, a shade per tag ----------
+  const tags = meta.tags, byShelf = {}, MS = meta.methods, NT = tags.length, NS = meta.snaps.length;
+  tags.forEach((t, i) => { (byShelf[t.shelf] = byShelf[t.shelf] || []).push(i); });
+  const shelfIds = Object.keys(byShelf).map(Number).sort((a, b) => a - b), BASE = {};
+  shelfIds.forEach((s, j) => { BASE[s] = new THREE.Color().setHSL(((275 - j * 360 / shelfIds.length + 360) % 360) / 360, 0.78, 0.58); });
+  shelfIds.forEach(s => {
+    const ids = byShelf[s], hsl = {}; BASE[s].getHSL(hsl);
+    ids.forEach((ti, j) => { const f = ids.length > 1 ? j / (ids.length - 1) : 0.5; tags[ti].color = new THREE.Color().setHSL(hsl.h, hsl.s, 0.36 + 0.4 * f); });
+  });
+
+  // ---------- scene ----------
+  const canvas = document.getElementById('c');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const scene = new THREE.Scene(); scene.background = new THREE.Color(0x06080c);
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 100); camera.up.set(0, 0, 1);
+  let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+  for (let i = 0; i < meta.npath; i++) { const x = pathF[5 * i + 1], y = pathF[5 * i + 2]; mnx = Math.min(mnx, x); mxx = Math.max(mxx, x); mny = Math.min(mny, y); mxy = Math.max(mxy, y); }
+  tags.forEach(t => { mnx = Math.min(mnx, t.gt[0]); mxx = Math.max(mxx, t.gt[0]); mny = Math.min(mny, t.gt[1]); mxy = Math.max(mxy, t.gt[1]); });
+  const cx = (mnx + mxx) / 2, cy = (mny + mxy) / 2, span = Math.max(mxx - mnx, mxy - mny) + 1.5;
+  camera.position.set(cx - 0.25 * span, cy - 0.85 * span, 1.0 * span);
+  const controls = new THREE.OrbitControls(camera, canvas); controls.target.set(cx, cy, 0.5); controls.enableDamping = true; controls.update();
+  scene.add(new THREE.HemisphereLight(0xdfe8ff, 0x20242c, 0.9)); const dl = new THREE.DirectionalLight(0xffffff, 0.6); dl.position.set(3, -4, 8); scene.add(dl);
+
+  // floor grid (1 m) and shelf outlines from the site map
+  const gridN = Math.ceil(span) + 2, grid = new THREE.GridHelper(gridN, gridN, 0x253041, 0x161d28); grid.rotation.x = Math.PI / 2; grid.position.set(Math.round(cx), Math.round(cy), 0); scene.add(grid);
+  const shelfGroup = new THREE.Group(), shelfObj = {}; scene.add(shelfGroup);
+  meta.shelves.forEach(s => {
+    const P = (al, dp, z) => new THREE.Vector3(s.a[0] + al * s.u[0] - dp * s.nrm[0], s.a[1] + al * s.u[1] - dp * s.nrm[1], z);
+    const z0 = s.z0, z1 = s.z0 + s.H, c = [P(0, 0, z0), P(s.W, 0, z0), P(s.W, s.depth, z0), P(0, s.depth, z0), P(0, 0, z1), P(s.W, 0, z1), P(s.W, s.depth, z1), P(0, s.depth, z1)];
+    const E = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]], pts = []; E.forEach(([a, b]) => pts.push(c[a], c[b]));
+    const g = new THREE.Group();
+    g.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: BASE[s.id], transparent: true, opacity: 0.55 })));
+    const fg = new THREE.BufferGeometry().setFromPoints([c[3], c[2], c[6], c[3], c[6], c[7], c[0], c[1], c[2], c[0], c[2], c[3]]);   // back wall + base, faint
+    g.add(new THREE.Mesh(fg, new THREE.MeshBasicMaterial({ color: BASE[s.id], transparent: true, opacity: 0.07, side: THREE.DoubleSide, depthWrite: false })));
+    shelfGroup.add(g); shelfObj[s.id] = g;
+  });
+
+  // scene point cloud (optional file): x, y, z, grey
+  let cloud = null;
+  get('cloud.b64.txt').then(f32).then(Cf => {
+    const nC = Cf.length / 4, pos = new Float32Array(nC * 3), col = new Float32Array(nC * 3);
+    for (let i = 0; i < nC; i++) { pos[3 * i] = Cf[4 * i]; pos[3 * i + 1] = Cf[4 * i + 1]; pos[3 * i + 2] = Cf[4 * i + 2]; const g = 0.14 + 0.6 * Cf[4 * i + 3]; col[3 * i] = g * 0.92; col[3 * i + 1] = g * 0.96; col[3 * i + 2] = g * 1.08; }
+    const cg = new THREE.BufferGeometry(); cg.setAttribute('position', new THREE.BufferAttribute(pos, 3)); cg.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    cloud = new THREE.Points(cg, new THREE.PointsMaterial({ size: 0.04, vertexColors: true, sizeAttenuation: true, transparent: true, opacity: 0.85, depthWrite: false }));
+    cloud.visible = ui.pts; scene.add(cloud);
+  }).catch(() => {});
+
+  // path (t, x, y, yaw, antenna z) at 10 Hz
+  const NP = meta.npath, PT = (i, k) => pathF[5 * i + k];
+  const trailPos = new Float32Array(NP * 3); for (let i = 0; i < NP; i++) { trailPos[3 * i] = PT(i, 1); trailPos[3 * i + 1] = PT(i, 2); trailPos[3 * i + 2] = 0.01; }
+  const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.BufferAttribute(trailPos, 3)); tg.setDrawRange(0, 1);
+  const trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: 0x7fd3ff, transparent: true, opacity: 0.55 })); scene.add(trail);
+
+  // robot: base, heading, mast, antenna panel on the lift, boresight
+  const robot = new THREE.Group(); scene.add(robot);
+  const rcol = 0x7fd3ff;
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.25, 28), new THREE.MeshLambertMaterial({ color: 0x2b3e52 })); base.rotation.x = Math.PI / 2; base.position.z = 0.125; robot.add(base);
+  const head = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.18, 16), new THREE.MeshBasicMaterial({ color: rcol })); head.rotation.z = -Math.PI / 2; head.position.set(0.22, 0, 0.26); robot.add(head);
+  const ax = meta.antenna_offset;
+  const mast = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.04, 1.6), new THREE.MeshLambertMaterial({ color: 0x46566b })); mast.position.set(ax[0], 0, 0.8); robot.add(mast);
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.025, 0.3), new THREE.MeshLambertMaterial({ color: rcol, emissive: 0x16384a })); robot.add(panel);
+  const bore = new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), 0.6, rcol, 0.12, 0.07); robot.add(bore);
+
+  // tags: true-position diamond, error line, estimate dot, up to 3 region ellipsoids
+  const sph = new THREE.SphereGeometry(1, 24, 16), oct = new THREE.OctahedronGeometry(0.03), dotG = new THREE.SphereGeometry(0.035, 12, 8);
+  const T = tags.map((t, i) => {
+    const gt = new THREE.Mesh(oct, new THREE.MeshBasicMaterial({ color: t.color })); gt.position.set(...t.gt); gt.userData = { ti: i, kind: 'gt' }; scene.add(gt);
+    const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+    const line = new THREE.Line(lg, new THREE.LineBasicMaterial({ color: t.color, transparent: true, opacity: 0.8 })); line.visible = false; scene.add(line);
+    const ells = [0, 1, 2].map(() => { const m = new THREE.Mesh(sph, new THREE.MeshPhongMaterial({ color: t.color, transparent: true, opacity: 0.3, depthWrite: false, shininess: 20 })); m.visible = false; scene.add(m); return m; });
+    const dot = new THREE.Mesh(dotG, new THREE.MeshBasicMaterial({ color: t.color, transparent: true })); dot.visible = false; dot.userData = { ti: i, kind: 'est' }; scene.add(dot);
+    return { gt, line, ells, dot, modes: [], est: null };
+  });
+
+  // ellipsoid records per method, loaded when first shown: [snap, tag, level (0 = 50 %, 1 = 90 %), cx, cy, cz, qx, qy, qz, qw, rx, ry, rz, mass]
+  const REC = 14, SETS = {};
+  function loadSet(m) {
+    if (SETS[m]) return;
+    SETS[m] = { ready: false };
+    get('ell_' + m + '.b64.txt').then(f32).then(F => {
+      const by = [0, 1].map(() => Array.from({ length: NS }, () => [])); for (let r = 0; r < F.length / REC; r++) by[F[REC * r + 2]][F[REC * r]].push(r);
+      SETS[m] = { ready: true, f: F, by }; curSnap = -2;
+    }).catch(() => { delete SETS[m]; });
+  }
+  const EST = (mi, si, ti) => { const o = ((mi * NS + si) * NT + ti) * 3; return isNaN(estF[o]) ? null : [estF[o], estF[o + 1], estF[o + 2]]; };
+  const NOTE = meta.notes || {};
+
+  // ---------- UI state ----------
+  const shelfOn = {}; shelfIds.forEach(s => shelfOn[s] = true);
+  const ui = { gt: true, ref: false, pts: true, cloud: true, trail: true, follow: false, focus: -1, level: 0, bset: 'F4' };
+  const setNotes = () => { document.getElementById('bsetNote').textContent = (NOTE[ui.bset] || {}).model || '';
+    document.getElementById('lvlNote').textContent = (NOTE[ui.bset] || {}).coverage || ''; };
+  setNotes(); loadSet(ui.bset);
+  document.querySelectorAll('#bset button').forEach(b => b.addEventListener('click', () => {
+    ui.bset = b.dataset.b; document.querySelectorAll('#bset button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); setNotes(); loadSet(ui.bset); curSnap = -2;
+  }));
+  const shelvesEl = document.getElementById('shelves');
+  shelfIds.forEach(s => {
+    const ids = byShelf[s], ramp = ids.map(i => '#' + tags[i].color.getHexString());
+    const b = document.createElement('button'); b.className = 'shelf'; b.setAttribute('aria-pressed', 'true');
+    b.innerHTML = `<b>S${s}</b><span class="ramp" style="background:linear-gradient(90deg,${ramp.join(',')})"></span><span class="n">${ids.filter(i => !tags[i].ref).length}</span>`;
+    b.title = `Shelf ${s}: ${ids.filter(i => !tags[i].ref).length} item tags`;
+    b.addEventListener('click', () => { shelfOn[s] = !shelfOn[s]; b.setAttribute('aria-pressed', String(shelfOn[s])); refresh(); });
+    shelvesEl.appendChild(b);
+  });
+  const focusSel = document.getElementById('focus');
+  tags.forEach((t, i) => { const o = document.createElement('option'); o.value = i; o.textContent = `S${t.shelf} · ${t.name}${t.test ? ' · locked test' : ''}${t.ref ? ' · corner tag' : t.read ? '' : ' · too few reads'}`; focusSel.appendChild(o); });
+  document.querySelectorAll('#level button').forEach(b => b.addEventListener('click', () => {
+    ui.level = +b.dataset.l; document.querySelectorAll('#level button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); curSnap = -2;
+  }));
+  focusSel.addEventListener('change', () => { ui.focus = focusSel.value === '' ? -1 : +focusSel.value; refresh(); });
+  [['tGT', 'gt'], ['tRef', 'ref'], ['tPts', 'pts'], ['tCloud', 'cloud'], ['tTrail', 'trail'], ['tFollow', 'follow']].forEach(([id, k]) => {
+    const el = document.getElementById(id); ui[k] = el.checked; el.addEventListener('change', () => { ui[k] = el.checked; refresh(); });
+  });
+
+  // ---------- time ----------
+  let t = 0, playing = false, speed = 5, curSnap = -2;
+  const dur = meta.duration, slider = document.getElementById('slider'); slider.max = dur.toFixed(1);
+  const fmt = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+  const playBtn = document.getElementById('play');
+  const setPlay = p => { playing = p; playBtn.textContent = p ? '❚❚' : '▶'; playBtn.setAttribute('aria-label', p ? 'Pause' : 'Play'); };
+  playBtn.addEventListener('click', () => { if (!playing && t >= dur - 0.05) t = 0; setPlay(!playing); });
+  slider.addEventListener('input', () => { t = +slider.value; });
+  document.querySelectorAll('#speed button').forEach(b => b.addEventListener('click', () => {
+    speed = +b.dataset.s; document.querySelectorAll('#speed button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+
+  function visible(ti) { const tg_ = tags[ti]; return shelfOn[tg_.shelf] && (ui.ref || !tg_.ref); }
+  function snapIndex(tt) { let lo = -1, hi = NS - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (meta.snaps[m] <= tt) lo = m; else hi = m - 1; } return lo; }
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  function applySnap(si) {
+    const mi = MS.indexOf(ui.bset), S = SETS[ui.bset];
+    T.forEach((o, ti) => { o.modes = []; o.est = si >= 0 ? EST(mi, si, ti) : null; });
+    if (si >= 0 && S && S.ready) for (const r of S.by[ui.level][si]) {
+      const F = S.f, o = REC * r, ti = F[o + 1];
+      T[ti].modes.push({ c: [F[o + 3], F[o + 4], F[o + 5]], q: [F[o + 6], F[o + 7], F[o + 8], F[o + 9]], r: [F[o + 10], F[o + 11], F[o + 12]], m: F[o + 13] });
+    }
+    T.forEach(o => o.modes.sort((a, b) => b.m - a.m));
+  }
+
+  function refresh() {
+    if (cloud) cloud.visible = ui.pts; shelfGroup.visible = ui.cloud; shelfIds.forEach(s => { if (shelfObj[s]) shelfObj[s].visible = shelfOn[s]; }); trail.visible = ui.trail;
+    let have = 0, nItems = 0; const errs = [];
+    T.forEach((o, ti) => {
+      const on = visible(ti), dim = ui.focus >= 0 && ui.focus !== ti, tg_ = tags[ti];
+      o.ells.forEach((m, j) => {
+        const md = o.modes[j]; m.visible = on && !!md;
+        if (md) { m.position.set(...md.c); m.quaternion.set(...md.q); m.scale.set(...md.r); m.material.opacity = dim ? 0.02 : 0.06 + 0.16 * Math.min(1, md.m / (ui.level ? 0.9 : 0.5)); }
+      });
+      o.gt.visible = on && ui.gt; o.gt.material.opacity = dim ? 0.15 : 1; o.gt.material.transparent = dim;
+      o.dot.visible = on && !!o.est; o.line.visible = false;
+      if (!tg_.ref) nItems++;
+      if (o.est) {
+        o.dot.position.set(...o.est); o.dot.material.opacity = dim ? 0.12 : 1;
+        if (!tg_.ref) { have++; errs.push(dist(o.est, tg_.gt)); }
+        const a = o.line.geometry.attributes.position.array; a.set([...tg_.gt, ...o.est]); o.line.geometry.attributes.position.needsUpdate = true;
+        o.line.visible = on && ui.gt && !dim;
+      }
+    });
+    errs.sort((a, b) => a - b);
+    const med = errs.length ? (errs.length % 2 ? errs[errs.length >> 1] : (errs[errs.length / 2 - 1] + errs[errs.length / 2]) / 2) : null;
+    document.getElementById('hTags').textContent = `items with a belief ${have} / ${nItems}`;
+    document.getElementById('hErr').textContent = med != null ? `${ui.bset} median 3D error now ${(med * 100).toFixed(0)} cm` : 'median 3D error now –';
+    const fi = document.getElementById('focusInfo');
+    if (ui.focus >= 0) {
+      const tg_ = tags[ui.focus], o = T[ui.focus];
+      const lines = [`${tg_.name} · shelf ${tg_.shelf} · ${tg_.type}${tg_.ref ? ' · corner tag' : ''}${tg_.test ? ' · locked test tag' : ''}`];
+      if (tg_.object && tg_.object !== tg_.name) lines.push(`on the same object as ${tg_.object}`);
+      lines.push(`true  ${tg_.gt.map(v => v.toFixed(2)).join(', ')} m`);
+      const sNow = snapIndex(t), pl = sNow >= 0 && tg_.plost[ui.bset] ? tg_.plost[ui.bset][sNow] : null, ms = sNow >= 0 && tg_.mshelf[ui.bset] ? tg_.mshelf[ui.bset][sNow] : null;
+      if (!o.est) lines.push(tg_.ref ? 'corner tag: position is known, not estimated here' : tg_.read ? 'no belief yet (fewer than 5 reads)' : 'fewer than 5 reads in the whole run');
+      else lines.push(`${ui.bset}    ${o.est.map(v => v.toFixed(2)).join(', ')} m · ${(dist(o.est, tg_.gt) * 100).toFixed(0)} cm from truth`);
+      if (pl != null) lines.push(`most likely S${ms[0]} (${(ms[1] * 100).toFixed(0)}%) · P(not on any shelf) ${(pl * 100).toFixed(1)}%`);
+      o.modes.forEach((md, j) => lines.push(`region ${j + 1}: ${(md.m * 100).toFixed(0)}% · centre ${md.c.map(v => v.toFixed(2)).join(', ')}`));
+      fi.textContent = lines.join('\n');
+    } else fi.textContent = 'Pick a tag to dim the others and follow its belief.';
+  }
+
+  function placeRobot(tt) {
+    const f = Math.min(NP - 1.001, Math.max(0, tt / 0.1)), i = Math.floor(f), w = f - i;
+    const Lr = (k) => PT(i, k) * (1 - w) + PT(i + 1, k) * w;
+    const x = Lr(1), y = Lr(2), yaw = Lr(3), az = Lr(4);
+    robot.position.set(x, y, 0); robot.rotation.set(0, 0, yaw);
+    panel.position.set(ax[0], ax[1], az); bore.position.set(ax[0], ax[1] + 0.02, az);
+    tg.setDrawRange(0, i + 1);
+    document.getElementById('hLift').innerHTML = `antenna <b>${az.toFixed(2)} m</b>`;
+    if (ui.follow) { const d = new THREE.Vector3(x, y, 0.5).sub(controls.target); controls.target.add(d); camera.position.add(d); }
+  }
+
+  // hover tooltips
+  const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(), tip = document.getElementById('tip');
+  canvas.addEventListener('pointermove', e => {
+    const r = canvas.getBoundingClientRect(); mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(mouse, camera);
+    const objs = []; T.forEach(o => { if (o.dot.visible) objs.push(o.dot); if (o.gt.visible) objs.push(o.gt); });
+    const hit = ray.intersectObjects(objs)[0];
+    if (!hit) { tip.hidden = true; return; }
+    const ti = hit.object.userData.ti, tg_ = tags[ti], fe = tg_.final_err[ui.bset];
+    tip.textContent = `${tg_.name} · S${tg_.shelf}${hit.object.userData.kind === 'gt' ? ' · true position' : ' · ' + ui.bset + ' estimate'}${fe != null ? ` · end-of-run error ${(fe * 100).toFixed(0)} cm` : ''}`;
+    tip.style.left = Math.max(0, Math.min(e.clientX - r.left + 12, r.width - 300)) + 'px'; tip.style.top = (e.clientY - r.top + 12) + 'px'; tip.hidden = false;
+  });
+  canvas.addEventListener('pointerleave', () => tip.hidden = true);
+
+  function resize() { const s = canvas.parentElement.getBoundingClientRect(); renderer.setSize(s.width, s.height, false); camera.aspect = s.width / s.height; camera.updateProjectionMatrix(); }
+  new ResizeObserver(resize).observe(canvas.parentElement); resize();
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    if (playing) { t += dt * speed; if (t >= dur) { t = dur; setPlay(false); } slider.value = t.toFixed(1); }
+    const si = snapIndex(t); if (si !== curSnap) { curSnap = si; applySnap(si); refresh(); }
+    placeRobot(t);
+    document.getElementById('clock').textContent = `${fmt(t)} / ${fmt(dur)}`; document.getElementById('hTime').textContent = `t ${fmt(t)}`;
+    controls.update(); renderer.render(scene, camera); requestAnimationFrame(frame);
+  }
+  // open on the end-of-run beliefs
+  status.remove(); t = dur; slider.value = t; requestAnimationFrame(frame);
+})();
+</script>

@@ -75,3 +75,17 @@ research/prm/
 
 # --- Claude Code worktree copies (never commit) ---
 .claude/worktrees/
+
+# --- orio_rfid item localiser: the trained models and the demo map's point cloud are needed to run it ---
+!src/devel_packages/orio_rfid/loc/models/*.pt
+!src/devel_packages/orio_rfid/loc/site/*.npy
+
+# --- orio_rfid: kept on the machines only (this repo is public) ---
+# addresses of the robot and the PC (copy demo.conf.example), the reader's recovery note with its login
+src/devel_packages/orio_rfid/demo/demo.conf
+src/devel_packages/orio_rfid/RFID/RFID_RECOVER_FROM_RESET.md
+# reader test recordings, tag registry backups, the vendor's PDF
+src/devel_packages/orio_rfid/RFID/pass_logs/
+src/devel_packages/orio_rfid/RFID/t2_logs/
+src/devel_packages/orio_rfid/RFID/tag_registry.csv.bak_*
+src/devel_packages/orio_rfid/RFID/docs/

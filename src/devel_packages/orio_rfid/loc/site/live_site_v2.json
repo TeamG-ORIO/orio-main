@@ -1,0 +1,98 @@
+{
+ "_about": "Fixed inputs of the live item localiser (loc/live/engine.py) for the corridor site, map hospital_corridor_v2. Made 2026-11-13 from run 2 (corridor_v2_rfid_2laps_run2, 2026-11-07) as processed on abuela (~/rfid_db, commit a2168f4).",
+ "map": "hospital_corridor_v2",
+ "map_to_room": {
+  "R": [
+   [
+    -0.03919406862309805,
+    -0.9992316172863865
+   ],
+   [
+    0.9992316172863865,
+    -0.039194068623098
+   ]
+  ],
+  "t": [
+   0.8511957686500473,
+   -2.9891747664666086
+  ],
+  "_note": "room_xy = R @ map_xy + t. Fitted on abuela from run 2 corner-tag estimates (dwell_table.py). The same fit on run1b and auto gave yaw 93.1 and 94.2 deg instead of 92.2 and t differing by up to 0.35 m, so a run can sit a few tens of cm off this tie; the offline pipeline refits it per run, the live one cannot."
+ },
+ "grid": {
+  "lo": [
+   -1.8327378013864373,
+   -4.87820891136206
+  ],
+  "hi": [
+   5.127428671921008,
+   3.8502446076417858
+  ],
+  "step": 0.05,
+  "zstep": 0.1,
+  "zmax": 1.6,
+  "_note": "room-frame belief grid, the one of the run-2 replay (path of run 2 +- 1.8 m): 140 x 175 x 17 cells"
+ },
+ "hop_table_mhz": [
+  914.25,
+  903.75,
+  920.75,
+  904.75,
+  924.25,
+  915.75,
+  916.75,
+  912.75,
+  918.75,
+  905.25,
+  925.25,
+  911.75,
+  907.75,
+  904.25,
+  927.25,
+  924.75,
+  925.75,
+  906.75,
+  908.75,
+  921.75,
+  919.75,
+  907.25,
+  909.75,
+  918.25,
+  913.75,
+  917.25,
+  911.25,
+  916.25,
+  926.75,
+  902.75,
+  906.25,
+  919.25,
+  912.25,
+  921.25,
+  923.75,
+  926.25,
+  923.25,
+  913.25,
+  915.25,
+  914.75,
+  917.75,
+  910.25,
+  909.25,
+  905.75,
+  920.25,
+  903.25,
+  922.25,
+  922.75,
+  908.25,
+  910.75
+ ],
+ "antenna_offset": [
+  -0.2371,
+  0.2232,
+  0.5588
+ ],
+ "ground_truth": "ground_truth_v2.csv",
+ "shelves": "site_v2.json",
+ "testset": "testset_locked_v2.csv",
+ "read_model": "relmodel_r2cv",
+ "e2e_model": "e2e_r2cvL",
+ "scene": "scene_v2.json"
+}
