@@ -1,0 +1,13 @@
+# RFMAX panel antenna pose on Stretch RE1 (orio), measured 2026-10-20 with a tape measure, checked against a URDF render.
+# Frames: base_link = x forward, y left, z up, origin on the floor between the drive wheels.
+# Calibrated point = centre of the panel's BACK face (UP-arrow side, toward the mast). Antenna x = boresight = base +y (robot's LEFT).
+# Inputs (inches, from that point, lift at its bottom stop): floor 22; sideways to the mast's left face 2.5;
+# behind the mast's front face 7.2; mast section 1.5 x 1.45 (taken as 1.5 square); mast axis from the calibrated URDF (base x -0.0733, y 0.1406).
+base_link_to_antenna_back_centre:
+  xyz_m: [-0.2371, 0.2232, 0.5588]      # z is for lift = 0; add the lift position (m) to z
+  rpy_rad: [0.0, 0.0, 1.5708]                              # yaw +90 deg: antenna x along base +y
+  quaternion_xyzw: [0.0, 0.0, 0.7071, 0.7071]
+panel_face_centre_offset_m: 0.019                          # radome front face is 0.75 in further along the boresight
+link_lift_to_antenna:                                      # fixed child of link_lift: follows the lift automatically (see rfid_antenna.urdf.snippet)
+  xyz_m: [0.0942, 0.1208, 0.3654]
+  boresight_in_link_lift: [0.999, -0.033, -0.012]

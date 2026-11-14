@@ -1,0 +1,14 @@
+  <!-- RFMAX panel antenna, 12 x 12 x 0.75 in white box. The calibrated point (tape-measured 2026-10-20) is the centre
+       of the BACK face (the side with the UP arrow, toward the mast); the box centre sits half a thickness out along the boresight. -->
+  <link name="rfid_antenna">
+    <visual>
+      <origin xyz="0.00952 0 0" rpy="0 0 0"/>
+      <geometry><box size="0.01905 0.30480 0.30480"/></geometry>
+      <material name="antenna_white"><color rgba="0.95 0.95 0.93 1"/></material>
+    </visual>
+  </link>
+  <joint name="joint_rfid_antenna" type="fixed">
+    <parent link="link_lift"/>
+    <child link="rfid_antenna"/>
+    <origin xyz="0.0942 0.1208 0.3654" rpy="0 0.0121 -0.0325"/>
+  </joint>

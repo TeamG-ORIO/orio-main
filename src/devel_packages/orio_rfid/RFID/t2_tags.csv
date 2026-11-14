@@ -1,0 +1,15 @@
+# T2 tag list. One item per line: epc,name,category,distance_m
+# category: dry (non liquid/metal) | liquid | metal.   distance_m = measured distance from the mobile base.
+epc,name,category,distance_m
+E28011B0A50500726AC868D8,item 01,dry,
+E28011B0A50500726AC8F468,item 02,dry,
+E28011B0A50500726AC86888,item 03,dry,
+E28011B0A50500726AC8F4D8,item 04,dry,
+E28011B0A50500726AC868A8,item 07,dry,
+E28011B0A50500726AC868C8,item 08,dry,
+E28011B0A50500726AC8F408,item 09,dry,
+E28011B0A50500726AC768A9,item 10,dry,
+# items 05 and 06 were given with a typo (23 / 25 characters); these are the two matching tags that
+# answered together with the other eight in the 10 dBm close-range scan on 2026-10-05:
+E28011B0A50500726AC86898,item 05,dry,
+E28011B0A50500726AC73A09,item 06,dry,
