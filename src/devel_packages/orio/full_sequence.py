@@ -1445,7 +1445,7 @@ class RobotHardware:
 
         raise RuntimeError(f"NaN values in labelling pose for zone {zone_number} after {max_attempts} attempts")
 
-    def _label_ik(self, task_pos, target_ori, zone_number, q_now=None, q_safe=None):
+    def _label_ik(self, task_pos, target_ori, zone_number, q_now=None, q_safe=None, wide=True):
         """(pre_joints, final_joints) for the label pose, solved like arm 1's input pick
         (compute_flat_pick_joints): the label joints from _flat_ik (joints 3 and 5 pulled
         to 0, the arm untwisted) from a few starts, and the pre-label joints backed
@@ -1463,7 +1463,9 @@ class RobotHardware:
         and each solution's twin with J7 half a turn round.
 
         q_now: arm 2's joints now (default: read from the arm, else LABELLING_SAFE);
-        q_safe: LABELLING_SAFE's joints (default: pose_to_joints)."""
+        q_safe: LABELLING_SAFE's joints (default: pose_to_joints); wide: also try the wide
+        starts when the usual ones find nothing usable (label_ik_or_straight leaves them
+        out for a tilted press, so its straight-down fallback comes sooner)."""
         if q_safe is None:
             q_safe = np.asarray(self.pose_to_joints("LABELLING_SAFE"), dtype=float)
         if q_now is None:
@@ -1475,8 +1477,10 @@ class RobotHardware:
         q_now, q_safe = np.asarray(q_now, dtype=float), np.asarray(q_safe, dtype=float)
         task_pos = np.asarray(task_pos, dtype=float)
         best, cands, tried, why = None, [], 0, {}
-        for ori, wide in ((target_ori, False), (target_ori @ LABEL_TOOL_FLIP, False),
-                          (target_ori, True), (target_ori @ LABEL_TOOL_FLIP, True)):
+        stages = [(target_ori, False), (target_ori @ LABEL_TOOL_FLIP, False)]
+        if wide:
+            stages += [(target_ori, True), (target_ori @ LABEL_TOOL_FLIP, True)]
+        for ori, wide in stages:
             if wide:
                 best = best or self._first_clear_label(cands, q_now, q_safe, why)
                 if best is not None:
@@ -1536,12 +1540,14 @@ class RobotHardware:
         """(pre_joints, final_joints, tilted): _label_ik for the label pose; when that finds
         nothing for a tilted press (perception tilts it toward a sloped surface), the same
         label pressed straight down (the tool axis turned back to vertical, the label's
-        direction kept) instead, as before the press tilt."""
+        direction kept) instead, as before the press tilt. A tilted press is tried from the
+        usual starts only (no wide starts), so the fallback comes after ~2 s, not 8-30 s."""
+        tilt = _tilt_deg(target_ori)
         try:
-            pre, final = self._label_ik(task_pos, target_ori, zone_number, q_now=q_now, q_safe=q_safe)
-            return pre, final, _tilt_deg(target_ori) > 0.5
+            pre, final = self._label_ik(task_pos, target_ori, zone_number, q_now=q_now, q_safe=q_safe,
+                                        wide=tilt <= 0.5)
+            return pre, final, tilt > 0.5
         except RuntimeError as exc:
-            tilt = _tilt_deg(target_ori)
             if tilt <= 0.5:
                 raise
             log.warning("[IK] %s; pressing straight down instead of tilted %.0f deg", exc, tilt)
