@@ -956,6 +956,22 @@ affordance_panels_setup() {
     fi
 }
 
+# At the end of a run: point current.affordance / current.labels at between_runs.* folders,
+# so grasp panels and label looks made between runs (a test call, another tool) do not land
+# in this run's folders. Only a link that still points at this run is moved (another run
+# may have started meanwhile and pointed it at its own folders).
+release_run_links() {
+    [ -n "${LABELS_LINK:-}" ] && [ -n "${RUN_STAMP:-}" ] || return 0
+    local link kind
+    for link in "$AFFORDANCE_LINK" "$LABELS_LINK"; do
+        kind="${link##*.}"                                    # affordance | labels
+        if [ "$(readlink "$link" 2>/dev/null)" = "$RUN_STAMP.$kind" ]; then
+            mkdir -p "$LOG_DIR/between_runs.$kind"
+            ln -sfn "between_runs.$kind" "$link"
+        fi
+    done
+}
+
 unlock_robot() {  # $1 = robot number; open the brakes via Desk (the arm moves slightly)
     log "unlocking robot $1 brakes (arm moves slightly)…"
     python3 "$BRINGUP_DIR/lock_arms.py" --unlock "$1" 2>&1 | prefix desk

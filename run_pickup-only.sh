@@ -152,6 +152,7 @@ cleanup() {
     [ "$USE_VACUUM" -eq 1 ] && cups=(pnp_cup)
     stop_run_in_container 'dexnet_pnp\.py|pneumatic_control_recovery\.py' "${cups[@]}"
     kill_bg
+    release_run_links   # looks made after this run do not land in its folders
     log "done. Full log saved to: $LOG_FILE"
     [ "$ORIO_LOGGING" != "0" ] && [ -f "$ORIO_RUN_DIR/recorder.rrd" ] && \
         log "rerun recording: $ORIO_RUN_DIR (view: rerun $ORIO_RUN_DIR/recorder.rrd)"
