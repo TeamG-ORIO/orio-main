@@ -1032,7 +1032,8 @@ class CombinedPerceptionNode:
         rospy.loginfo("[FFS] %s", resp.message)
         key, deadline = None, time.time() + 10.0
         while key is None:
-            new = [k for k in self.ffs_depths if k not in seen and k in self.ffs_lefts and k in self.ffs_infos]
+            # list() first: the subscriber threads add and drop frames while this loops
+            new = [k for k in list(self.ffs_depths) if k not in seen and k in self.ffs_lefts and k in self.ffs_infos]
             if new:
                 key = max(new)
             elif time.time() > deadline:
