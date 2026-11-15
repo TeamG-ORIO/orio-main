@@ -978,11 +978,26 @@ run_in_container() {  # $1 = command
 
 # Stop a run's processes inside the main container, which stays up: killing a `docker
 # exec` client does not stop what it started. $1 = pkill pattern, rest = cups to switch
-# off first. Returns pkill's status (0 = something was stopped).
+# off. Returns the last pkill's status (0 = something was stopped).
+# Order matters: first everything in the pattern that can command a cup (the sequence,
+# its dashboard, ...), so nothing switches a cup back on; then the cups off, while the
+# pneumatics node (the only thing that can switch them) is still alive; then the rest.
 stop_run_in_container() {
     local pat="$1"; shift
     container_up "$CONTAINER" || return 1
-    [ $# -gt 0 ] && vacuum_off "$@"
+    if [ $# -gt 0 ]; then
+        local commanders
+        commanders="$(printf '%s' "$pat" | tr '|' '\n' | grep -v '^pneumatic_control_recovery' | paste -sd'|' -)"
+        if [ -n "$commanders" ]; then
+            docker exec "$CONTAINER" pkill -f "$commanders" >/dev/null 2>&1
+            local i
+            for i in 1 2 3 4 5 6 7 8 9 10; do   # up to 2 s for them to exit
+                docker exec "$CONTAINER" pgrep -f "$commanders" >/dev/null 2>&1 || break
+                sleep 0.2
+            done
+        fi
+        vacuum_off "$@"
+    fi
     docker exec "$CONTAINER" pkill -f "$pat" >/dev/null 2>&1
 }
 
@@ -994,7 +1009,9 @@ _CLEANED=0
 _cleanup_once() {
     [ "$_CLEANED" -eq 1 ] && return
     _CLEANED=1
-    trap '' INT TERM HUP
+    # PIPE too: the console filter (log_filter_start) dies with a closed terminal window,
+    # and the first echo below would then kill the launcher before the cups are off.
+    trap '' INT TERM HUP PIPE
     cleanup
 }
 install_cleanup_traps() {
