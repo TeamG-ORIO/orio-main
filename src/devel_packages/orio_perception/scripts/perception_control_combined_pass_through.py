@@ -144,6 +144,9 @@ LBL_SEG_TIMEOUT_S = 15.0
 # What is in each zone after the last /compute_grasps_labelling or /scan_label_zones, as
 # JSON (see _zones_state): the item count and where the top item can be picked.
 LBL_ITEMS_TOPIC = "/label_zones/items"
+# The zone arm 2 is labelling, set by full_sequence.py around each /compute_grasps_labelling
+# call: the labelling debug picture draws only that zone's masks and label placement.
+LBL_ZONE_PARAM  = "/orio/label_zone"
 LBL_TF_YAML     = os.path.join(_REPO_ROOT, "src/devel_packages/manipulation/config/zed_to_label_tf.yaml")
 # Arm 1's zone pick, drawn on the label picture: it picks the top item at its pick point,
 # straight down, with the cups turned as in its taught zone pose (cup line = tool Y);
@@ -1135,28 +1138,32 @@ class CombinedPerceptionNode:
         return debug
 
     @staticmethod
-    def _draw_items(color_base, inst_crop, seg):
+    def _draw_items(color_base, inst_crop, seg, only_zone=None):
         """The crop with every item shaded and outlined in its own colour, its number and
-        confidence beside it, and a cross on the top item's pick point. Returns (picture,
-        masks, boxes, phrases, scores) for the recorders."""
+        confidence beside it, and a cross on the top item's pick point. With only_zone,
+        only that zone's items are shaded and outlined; the pick crosses are drawn in
+        every zone. Returns (picture, masks, boxes, phrases, scores) for the recorders,
+        always for every item."""
         import cv2
         palette = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255), (255, 0, 255)]
         debug = color_base.copy()
         masks, boxes, phrases, scores = [], [], [], []
-        for zone in seg["zones"].values():
+        for zname, zone in seg["zones"].items():
+            shown = only_zone is None or str(zname) == str(only_zone)
             for k, it in enumerate(zone["items"]):
                 mask = inst_crop == it["id"]
                 if not mask.any():
                     continue
                 col = palette[len(masks) % len(palette)]
-                debug[mask] = (0.5 * debug[mask] + 0.5 * np.array(col)).astype(np.uint8)
-                cs, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                cv2.drawContours(debug, cs, -1, col, 2)
                 ys, xs = np.nonzero(mask)
                 top = it["top"] and zone["n_items"] > 1
                 phrase = "top item" if top else "item"
-                cv2.putText(debug, "%s %.2f" % (phrase, it["score"]), (int(xs.min()), max(int(ys.min()) - 6, 12)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
+                if shown:
+                    debug[mask] = (0.5 * debug[mask] + 0.5 * np.array(col)).astype(np.uint8)
+                    cs, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                    cv2.drawContours(debug, cs, -1, col, 2)
+                    cv2.putText(debug, "%s %.2f" % (phrase, it["score"]), (int(xs.min()), max(int(ys.min()) - 6, 12)),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, col, 1)
                 if it["top"]:
                     u, v = it["pick_px"]
                     cv2.drawMarker(debug, (int(u) - LBL_CROP_X1, int(v) - LBL_CROP_Y1), (255, 255, 255),
@@ -1282,8 +1289,19 @@ class CombinedPerceptionNode:
 
         color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
         inst_crop = instances[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
-        debug_lbl, best_masks, boxes_xyxy, phrases, logits = self._draw_items(color_base, inst_crop, seg)
+        # The zone arm 2 is labelling (full_sequence.py sets it around the call): only its
+        # masks and label placement are drawn; arm 1's pick is drawn in both zones. Unset
+        # (any other caller), both zones are drawn.
+        only_zone = rospy.get_param(LBL_ZONE_PARAM, None)
+        if only_zone not in (1, 2):
+            only_zone = None
+        debug_lbl, best_masks, boxes_xyxy, phrases, logits = self._draw_items(
+            color_base, inst_crop, seg, only_zone=only_zone)
         self._draw_arm1_picks(debug_lbl, state, info)
+        if only_zone is not None:
+            for colour, width in (((0, 0, 0), 4), ((255, 255, 255), 1)):
+                cv2.putText(debug_lbl, "labelling zone %d" % only_zone, (8, 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, width)
 
         # The label goes on the top item of each zone, placed within that item's own mask
         # (never across two items lying on each other).
@@ -1313,13 +1331,14 @@ class CombinedPerceptionNode:
             zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
                                'depth': float(z_cam) if z_cam is not None else 0.0,
                                'px_full': [u, v], 'depth_px': n, 'n_items': n_items}
-            box = self._label_footprint(opt_x, opt_y, ang_deg)
-            cv2.polylines(debug_lbl, [box], isClosed=True, color=dot, thickness=2)
-            cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 4, dot, -1)
-            cv2.putText(debug_lbl, f"Z{zone} {ang_deg:.1f}deg "
-                        + (f"{z_cam:.3f}m" if z_cam is not None else "NO DEPTH"),
-                        (int(box[:, 0, 0].max()) + 8, int(opt_y) + 5),   # right of the box
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
+            if only_zone is None or zone == only_zone:
+                box = self._label_footprint(opt_x, opt_y, ang_deg)
+                cv2.polylines(debug_lbl, [box], isClosed=True, color=dot, thickness=2)
+                cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 4, dot, -1)
+                cv2.putText(debug_lbl, f"Z{zone} {ang_deg:.1f}deg "
+                            + (f"{z_cam:.3f}m" if z_cam is not None else "NO DEPTH"),
+                            (int(box[:, 0, 0].max()) + 8, int(opt_y) + 5),   # right of the box
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
             if z_cam is None:
                 rospy.logerr(f"No valid depth within {LBL_DEPTH_WINDOW} px of the Zone {zone} "
                              f"pixel ({u}, {v}). Aborting zone {zone}.")
