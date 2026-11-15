@@ -1188,6 +1188,20 @@ class CombinedPerceptionNode:
         return float(np.median(vals)), int(vals.size)
 
     @staticmethod
+    def _footprint_depth(depth_crop, box):
+        """(median depth under the label footprint `box` (crop pixels, as _label_footprint
+        gives), number of valid pixels used): the surface the label is pressed onto, less
+        thrown by a few bad stereo pixels than a small window at its centre."""
+        import cv2
+        fp = np.zeros(depth_crop.shape[:2], np.uint8)
+        cv2.fillPoly(fp, [box], 1)
+        vals = depth_crop[fp > 0]
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            return None, 0
+        return float(np.median(vals)), int(vals.size)
+
+    @staticmethod
     def _normalise_label_angle(angle_deg):
         """The angle in (-90, 90]. A label is the same rectangle turned by 180 deg, and
         get_object_orientation's `angle % 180` jumps between ~0 and ~180 for a nearly
@@ -1349,16 +1363,17 @@ class CombinedPerceptionNode:
                 continue
             opt_x, opt_y, ang_deg = placements[zone]
             u, v = int(opt_x) + LBL_CROP_X1, int(opt_y) + LBL_CROP_Y1
-            z_cam, n = self._sample_depth(depth_full, u, v)
+            box = self._label_footprint(opt_x, opt_y, ang_deg, *label_px[zone])
+            z_cam, n = self._footprint_depth(depth_crop, box)
             zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
                                'depth': float(z_cam) if z_cam is not None else 0.0,
+                               'depth_from': 'median over the label footprint',
                                'px_full': [u, v], 'depth_px': n, 'n_items': n_items,
                                'label_mm': [LABEL_W_MM, LABEL_H_MM],
                                'label_margin_mm': LABEL_EDGE_MARGIN_MM,
                                'label_choice': 'farthest from outline, printing <= cleanest + %g' % LABEL_EDGE_SLACK,
                                'label_px': [round(float(v_px), 1) for v_px in label_px[zone]]}
             if only_zone is None or zone == only_zone:
-                box = self._label_footprint(opt_x, opt_y, ang_deg, *label_px[zone])
                 cv2.polylines(debug_lbl, [box], isClosed=True, color=dot, thickness=2)
                 cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 4, dot, -1)
                 cv2.putText(debug_lbl, f"Z{zone} {ang_deg:.1f}deg "
@@ -1366,8 +1381,8 @@ class CombinedPerceptionNode:
                             (int(box[:, 0, 0].max()) + 8, int(opt_y) + 5),   # right of the box
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
             if z_cam is None:
-                rospy.logerr(f"No valid depth within {LBL_DEPTH_WINDOW} px of the Zone {zone} "
-                             f"pixel ({u}, {v}). Aborting zone {zone}.")
+                rospy.logerr(f"No valid depth under the Zone {zone} label footprint (centre pixel "
+                             f"({u}, {v})). Aborting zone {zone}.")
                 parts.append(f"Zone{zone}=FAIL (no depth)")
                 continue
 
