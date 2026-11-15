@@ -1,0 +1,971 @@
+{
+ "checkpoint": "/home/orio/orio-grasping/runs/label_zone/rgbd_v6_real/checkpoint_best_total.pth",
+ "zones": [
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0008_201910",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0009_201913",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_132851.labels/label_0001_183115",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_133547.labels/label_0004_183907",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_133547.labels/label_0005_183909",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0001_201616",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0001_201616",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0002_201655",
+   "zone": 1,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0002_201655",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    1,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0003_201659",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    1,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0004_201743",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0005_201746",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0005_201746",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0006_201824",
+   "zone": 1,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0006_201824",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0010_201954",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0011_202001",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0011_202001",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0012_202035",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0012_202035",
+   "zone": 2,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0013_202038",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261111_151135.labels/label_0013_202038",
+   "zone": 2,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_132851.labels/label_0001_183115",
+   "zone": 2,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_132851.labels/label_0002_183155",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_132851.labels/label_0002_183155",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_132851.labels/label_0003_183158",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_132851.labels/label_0003_183158",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0001_212034",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0001_212034",
+   "zone": 2,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0002_212115",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0003_212118",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0005_212121",
+   "zone": 1,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0005_212121",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0006_212122",
+   "zone": 1,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0006_212122",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0007_212205",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0007_212205",
+   "zone": 2,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0008_212205",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0008_212205",
+   "zone": 2,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0009_212249",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0010_212251",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0011_212332",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/demo/20261114_161746.labels/label_0012_212341",
+   "zone": 2,
+   "truth": 0,
+   "found": 0,
+   "votes": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/BiogelSurgeons/setup_08",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/BiogelSurgeons/setup_08",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/BiogelSurgeons/setup_09",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/BiogelSurgeons/setup_09",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/BiogelSurgeons/setup_10",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/BiogelSurgeons/setup_10",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/InterlinkSystem/setup_08",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/InterlinkSystem/setup_08",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/InterlinkSystem/setup_09",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/InterlinkSystem/setup_09",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/InterlinkSystem/setup_10",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/InterlinkSystem/setup_10",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/powerLot/setup_08",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/powerLot/setup_08",
+   "zone": 2,
+   "truth": 2,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/powerLot/setup_09",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/powerLot/setup_09",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/powerLot/setup_10",
+   "zone": 1,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/double/powerLot/setup_10",
+   "zone": 2,
+   "truth": 2,
+   "found": 2,
+   "votes": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_18",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_19",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_19",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_20",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_20",
+   "zone": 2,
+   "truth": 1,
+   "found": 2,
+   "votes": [
+    1,
+    2,
+    2,
+    1,
+    1,
+    2
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_21",
+   "zone": 1,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_21",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  },
+  {
+   "record": "/home/orio/orio-main/logging/label_zones/single/setup_22",
+   "zone": 2,
+   "truth": 1,
+   "found": 1,
+   "votes": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1
+   ]
+  }
+ ]
+}

@@ -7,9 +7,10 @@
 # with. A ROS master must be up.
 #
 # Env:
-#   ORIO_LABEL_SEG_CHECKPOINT  RGB-D segmentation weights (default: orio_grasping/runs/seg/
-#                              rgbd_v3_deformables/checkpoint_best_total.pth, the one the
-#                              label zones were tested with)
+#   ORIO_LABEL_SEG_CHECKPOINT  RGB-D segmentation weights (default: orio_grasping/runs/label_zone/
+#                              rgbd_v6_real/checkpoint_best_total.pth, rgbd_v3_deformables
+#                              fine-tuned for the label zones on sim stacks and hand-labelled
+#                              real ZED zones; the bin planner keeps its own model)
 #   ORIO_LABEL_SEG_MODEL       RF-DETR size it was trained as (default RFDETRSegLarge)
 #   ORIO_GRASPING              orio_grasping checkout (default: the repo's)
 #   ORIO_LABEL_SEG_IMAGE (default orio/suction:latest), ORIO_LABEL_SEG_CONTAINER
@@ -21,7 +22,7 @@ SCRIPTS="$REPO/src/devel_packages/orio_perception/scripts"
 NAME="${ORIO_LABEL_SEG_CONTAINER:-orio_label_seg}"
 IMAGE="${ORIO_LABEL_SEG_IMAGE:-orio/suction:latest}"
 GRASPING="${ORIO_GRASPING:-$REPO/src/devel_packages/orio_grasping}"
-CKPT="${ORIO_LABEL_SEG_CHECKPOINT:-$GRASPING/runs/seg/rgbd_v3_deformables/checkpoint_best_total.pth}"
+CKPT="${ORIO_LABEL_SEG_CHECKPOINT:-$GRASPING/runs/label_zone/rgbd_v6_real/checkpoint_best_total.pth}"
 
 if [ ! -f "$GRASPING/orio_grasping/rgbd_seg.py" ]; then
     echo "orio_grasping not found at $GRASPING (set ORIO_GRASPING)." >&2

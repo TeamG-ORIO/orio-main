@@ -1,0 +1,99 @@
+{
+ "args": {
+  "dataset": "data/coco/label_zone_ft_real_v1",
+  "tag": "rgbd_v6_real",
+  "out": "runs/label_zone/rgbd_v6_real",
+  "model": "large",
+  "init": "runs/label_zone/rgbd_v5_labelzone/checkpoint_best_total.pth",
+  "epochs": 5,
+  "batch_size": 8,
+  "grad_accum": 2,
+  "lr": 2.5e-05,
+  "lr_encoder": 3.75e-05,
+  "depth_lr": 3.75e-05,
+  "depth_dropout": 0.3,
+  "no_height_aug": false,
+  "lr_scheduler": "cosine",
+  "warmup_epochs": 0.5,
+  "resolution": null,
+  "num_workers": 6,
+  "eval_interval": 1,
+  "patience": null,
+  "resume": null,
+  "seed": 0
+ },
+ "model_class": "RFDETRSegLarge",
+ "input": {
+  "channels": [
+   "r",
+   "g",
+   "b",
+   "height_above_table",
+   "valid_depth"
+  ],
+  "height_range_m": [
+   -0.05,
+   0.45
+  ],
+  "mean": [
+   0.485,
+   0.456,
+   0.406,
+   0.25,
+   0.5
+  ],
+  "std": [
+   0.229,
+   0.224,
+   0.225,
+   0.25,
+   0.5
+  ],
+  "depth_dropout": 0.3,
+  "height_aug": {
+   "holes_p": 0.5,
+   "holes_count": [
+    1,
+    4
+   ],
+   "hole_area_px": [
+    50.0,
+    2000.0
+   ],
+   "hole_on_object_p": 0.8,
+   "tilt_p": 0.5,
+   "tilt_mm": 8.0,
+   "warp_mm": 3.0,
+   "speckle_p": 0.5,
+   "speckle_mm": 1.5
+  }
+ },
+ "rfdetr_version": "unknown",
+ "dataset": {
+  "train": {
+   "images": 6508,
+   "masks": 14092,
+   "classes": [
+    "object"
+   ]
+  },
+  "valid": {
+   "images": 447,
+   "masks": 1927,
+   "classes": [
+    "object"
+   ]
+  },
+  "test": {
+   "images": 69,
+   "masks": 84,
+   "classes": [
+    "object"
+   ]
+  }
+ },
+ "git_commit": "0f7759720e0373a72fcc9cb892d0a467616ca1af+dirty",
+ "started": "2026-11-14T18:54:15",
+ "finished": "2026-11-14T19:24:11",
+ "train_seconds": 1795.2
+}

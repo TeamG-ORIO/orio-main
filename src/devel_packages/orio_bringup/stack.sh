@@ -795,7 +795,7 @@ ffs_bringup() {
 # labelling and scan services. It answers on a topic (its image has no std_srvs), which it
 # advertises once its model is loaded.
 label_seg_bringup() {
-    local conf="ckpt=${ORIO_LABEL_SEG_CHECKPOINT:-rgbd_v3_deformables} six_pass"
+    local conf="ckpt=${ORIO_LABEL_SEG_CHECKPOINT:-rgbd_v6_real} six_pass"
     stack_service label_seg "$LABEL_SEG_CONTAINER" "$conf" \
         bash -lc "bash '$DOCKER_DIR/run_label_seg.sh' && docker logs -f $LABEL_SEG_CONTAINER"
     if [ "$SERVICE_REUSED" -eq 1 ]; then

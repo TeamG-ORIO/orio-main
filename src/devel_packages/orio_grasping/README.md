@@ -26,5 +26,9 @@ Weights (git-ignored, copy them by hand onto a new machine):
 - `runs/2026-11-07_174545_seg_v3_tilt45/best.pt` (with its `run.json`): OrioNet seg_v3_tilt45,
   seg_v2_deformables' data relabelled with access up to 45 deg of tilt (flat to 30 deg); best
   validation top-1 0.966 at epoch 51. The default of `grasp_test.sh`
+- `runs/label_zone/rgbd_v6_real/checkpoint_best_total.pth` (with its `run.json` and `real_test.json`):
+  the label-zone segmentation (`run_label_seg.sh`'s default), rgbd_v3_deformables fine-tuned on
+  sim label-zone stacks and on hand-labelled real ZED zones; 67/69 right on held-out real zones
+  (rgbd_v3: 62/69). Trained in orio-grasping's `runs/label_zone/`, not used by the bin planner
 
 To update, copy the same files from a newer orio-grasping commit and change the commit above.
