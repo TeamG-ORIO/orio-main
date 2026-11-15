@@ -613,6 +613,22 @@ def _is_vacuum_service(service_name):
 _service_messages = {}   # service name -> the message of its last response (call_trigger_service)
 
 
+def _label_look_miss(called, message, zone_number):
+    """(miss, empty) from one /compute_grasps_labelling call for a zone: (None, False) when a
+    label pose is coming. Perception's per-zone verdicts in the message are read first: it
+    answers success=False whenever neither zone got a placement, so "no item in this zone"
+    (empty=True) must not be mistaken for a failed service."""
+    message = message or ''
+    if "Zone%d=FAIL (no item)" % zone_number in message:
+        return "perception found no item in zone %d" % zone_number, True
+    if "Zone%d=FAIL" % zone_number in message:
+        # no placement in this zone: no pose is coming, don't wait for it
+        return "perception found no label placement in zone %d" % zone_number, False
+    if not called:
+        return "service /compute_grasps_labelling failed", False
+    return None, False
+
+
 def _get_param(name):
     """A ROS parameter, or None when it is not set or the master cannot be reached."""
     try:
@@ -1336,15 +1352,9 @@ class RobotHardware:
                     rospy.delete_param(LABEL_ZONE_PARAM)
                 except KeyError:
                     pass
-            if not called:
-                miss = "service /compute_grasps_labelling failed"
-            elif "Zone%d=FAIL (no item)" % zone_number in _service_messages.get('/compute_grasps_labelling', ''):
-                miss = "perception found no item in zone %d" % zone_number
-                empty = True
-            elif "Zone%d=FAIL" % zone_number in _service_messages.get('/compute_grasps_labelling', ''):
-                # perception found no placement in this zone: no pose is coming, don't wait for it
-                miss = "perception found no label placement in zone %d" % zone_number
-            else:
+            miss, empty = _label_look_miss(called, _service_messages.get('/compute_grasps_labelling', ''),
+                                           zone_number)
+            if miss is None:
                 deadline = rospy.Time.now() + rospy.Duration(5.0)
                 while rospy.Time.now() < deadline:
                     msg = self.latest_label_pose_z1 if zone_number == 1 else self.latest_label_pose_z2
