@@ -34,7 +34,7 @@ docker rm -f "$NAME" >/dev/null 2>&1 || true
 if [ -n "${ORIO_NO_TTY:-}" ]; then TTY_FLAGS=""; else TTY_FLAGS="-it"; fi
 exec docker run --rm $TTY_FLAGS --name "$NAME" \
     --gpus all --ipc=host --net=host \
-    --env="DISPLAY=$DISPLAY" \
+    --env="DISPLAY=${DISPLAY:-}" \
     --env="QT_X11_NO_MITSHM=1" \
     --env="XAUTHORITY=${XAUTH:-}" \
     --env="ROS_MASTER_URI=${ROS_MASTER_URI:-http://localhost:11311}" \

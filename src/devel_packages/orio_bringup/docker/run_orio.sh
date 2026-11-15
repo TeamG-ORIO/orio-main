@@ -30,12 +30,12 @@ fi
 
 docker run --privileged --rm $RUN_FLAGS \
     --name="${ORIO_CONTAINER:-orio_docker_container}" \
-    --env="DISPLAY=$DISPLAY" \
+    --env="DISPLAY=${DISPLAY:-}" \
     --env="QT_X11_NO_MITSHM=1" \
     --env="NVIDIA_DRIVER_CAPABILITIES=all" \
     --env="ORIO_LOGGING=${ORIO_LOGGING:-1}" \
     --volume="/tmp/.X11-unix:/tmp/.X11-unix:rw" \
-    --volume="$XAUTH:$XAUTH" \
+    ${XAUTH:+--volume="$XAUTH:$XAUTH"} \
     --network host \
     -v "$REPO/src/devel_packages:/home/ros_ws/src/devel_packages" \
     -v "$REPO/data:/home/ros_ws/data" \
