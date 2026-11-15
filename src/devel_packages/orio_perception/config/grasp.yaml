@@ -72,8 +72,7 @@ suction:
   service: /suction_grasp_planner/plan_grasp
   service_timeout: 30.0        # s to wait for the planner at startup
 
-  # The network's training labels give zero access beyond 35 deg of tilt.
-  max_tilt_deg: 35.0
+  max_tilt_deg: 45.0
 
   # The network already uses a plane fitted over a 16 mm disc of the height map, and
   # its seal/hold scores assume that normal, so the raw-depth plane fit is off by default.
