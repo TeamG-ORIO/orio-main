@@ -58,9 +58,16 @@
 #   bash run_full_demo.sh --no-logging    # skip the rerun recorder for this run
 #   bash run_full_demo.sh --live          # also stream to a running `rerun` viewer
 #   bash run_full_demo.sh --no-affordance # skip the per-grasp affordance panels
-#   bash run_full_demo.sh --offset-x 0.00 --offset-y -0.015
+#   bash run_full_demo.sh --offset-x 0.01 --offset-y -0.075
 #                                           # world-frame XY correction (metres) added to
-#                                           #   every grasp before the arm moves
+#                                           #   every input-bin grasp before the arm moves
+#                                           #   (default x 0.01, y -0.075)
+#   bash run_full_demo.sh --label-offset-x 0.0 --label-offset-y 0.0
+#                                           # same, for arm 2's label placement (arm 2's frame)
+#                                           #   (default 0, 0)
+#   bash run_full_demo.sh --zone-pick-offset-x -0.01 --zone-pick-offset-y -0.01
+#                                           # same, for arm 1's pick in a label zone (arm 1's frame)
+#                                           #   (default x -0.01, y -0.01)
 #   bash run_full_demo.sh --min-q 0.2     # lowest planner score accepted (default 0.10)
 #   bash run_full_demo.sh --max-tilt-deg 30
 #   bash run_full_demo.sh --planner dexnet
@@ -74,7 +81,7 @@
 #
 # Env: ORIO_CONTAINER, ORIO_ROS1_CONTAINER, ORIO_CTRL_PC_USER/HOST/FI_PATH/ROBOT_IP,
 #      ORIO_LUISA_HOST/ROBOT_NUM/IP, ORIO_MASTER_IP, ORIO_CAM_ATTEMPTS,
-#      ORIO_PNP_OFFSET_X/Y, ORIO_GRASPING, SUCTION_CHECKPOINT,
+#      ORIO_PNP_OFFSET_X/Y, ORIO_LABEL_OFFSET_X/Y, ORIO_ZONE_PICK_OFFSET_X/Y, ORIO_GRASPING, SUCTION_CHECKPOINT,
 #      ORIO_FFS_DIR/CHECKPOINT/SCALE/ITERS (see run_ffs.sh).
 #
 # The bring-up steps live in src/devel_packages/orio_bringup/stack.sh.
@@ -102,8 +109,13 @@ USE_RFID=1
 INVENTORY_WINDOW=1
 RFID_ARGS=
 UNLOCK=1
-PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.0}"
-PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:-0.0}"
+# XY corrections (metres) tuned on the cell; the flags or ORIO_* env vars override them.
+PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.01}"
+PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:--0.075}"
+LABEL_OFFSET_X="${ORIO_LABEL_OFFSET_X:-0.0}"
+LABEL_OFFSET_Y="${ORIO_LABEL_OFFSET_Y:-0.0}"
+ZONE_PICK_OFFSET_X="${ORIO_ZONE_PICK_OFFSET_X:--0.01}"
+ZONE_PICK_OFFSET_Y="${ORIO_ZONE_PICK_OFFSET_Y:--0.01}"
 PLANNER="${ORIO_PLANNER:-suction}"
 SUCTION_CKPT="${SUCTION_CHECKPOINT:-}"
 MIN_Q=""
@@ -146,6 +158,14 @@ while [ $# -gt 0 ]; do
         --offset-y)      PNP_OFFSET_Y="${1:?--offset-y needs metres}"; shift ;;
         --offset-x=*)    PNP_OFFSET_X="${arg#*=}" ;;
         --offset-y=*)    PNP_OFFSET_Y="${arg#*=}" ;;
+        --label-offset-x)  LABEL_OFFSET_X="${1:?--label-offset-x needs metres}"; shift ;;
+        --label-offset-y)  LABEL_OFFSET_Y="${1:?--label-offset-y needs metres}"; shift ;;
+        --label-offset-x=*) LABEL_OFFSET_X="${arg#*=}" ;;
+        --label-offset-y=*) LABEL_OFFSET_Y="${arg#*=}" ;;
+        --zone-pick-offset-x)  ZONE_PICK_OFFSET_X="${1:?--zone-pick-offset-x needs metres}"; shift ;;
+        --zone-pick-offset-y)  ZONE_PICK_OFFSET_Y="${1:?--zone-pick-offset-y needs metres}"; shift ;;
+        --zone-pick-offset-x=*) ZONE_PICK_OFFSET_X="${arg#*=}" ;;
+        --zone-pick-offset-y=*) ZONE_PICK_OFFSET_Y="${arg#*=}" ;;
         --min-q)         MIN_Q="${1:?--min-q needs a value in 0..1}"; shift ;;
         --min-q=*)       MIN_Q="${arg#*=}" ;;
         --planner)       PLANNER="${1:?--planner needs suction or dexnet}"; shift ;;
@@ -153,19 +173,22 @@ while [ $# -gt 0 ]; do
         --checkpoint)    SUCTION_CKPT="${1:?--checkpoint needs a run tag or a path}"; shift ;;
         --checkpoint=*)  SUCTION_CKPT="${arg#*=}" ;;
         --fresh)         FRESH=1 ;;
-        -h|--help) sed -n '2,66p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,74p' "$0"; exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 2 ;;
     esac
 done
 [ "$USE_VACUUM" -eq 0 ] && SM_EXTRA+=(--no-vacuum)
 [ "$CONFIRM" -eq 1 ]    && SM_EXTRA+=(--confirm)
-for v in "$PNP_OFFSET_X" "$PNP_OFFSET_Y"; do
+for v in "$PNP_OFFSET_X" "$PNP_OFFSET_Y" "$LABEL_OFFSET_X" "$LABEL_OFFSET_Y" \
+         "$ZONE_PICK_OFFSET_X" "$ZONE_PICK_OFFSET_Y"; do
     if ! [[ "$v" =~ ^[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?$ ]]; then
         echo "offset must be a number in metres, got '$v'" >&2; exit 2
     fi
 done
 # Always passed, so the "[launcher] sm flags:" line records the correction in the run log.
-SM_EXTRA+=(--offset-x "$PNP_OFFSET_X" --offset-y "$PNP_OFFSET_Y")
+SM_EXTRA+=(--offset-x "$PNP_OFFSET_X" --offset-y "$PNP_OFFSET_Y"
+          --label-offset-x "$LABEL_OFFSET_X" --label-offset-y "$LABEL_OFFSET_Y"
+          --zone-pick-offset-x "$ZONE_PICK_OFFSET_X" --zone-pick-offset-y "$ZONE_PICK_OFFSET_Y")
 planner_resolve || exit 2
 
 # ── This run's files, and the output filter ──────────────────────────────────

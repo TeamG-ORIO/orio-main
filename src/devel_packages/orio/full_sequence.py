@@ -10,7 +10,9 @@ at start — with the pick path upgraded to everything dexnet_pnp.py learned:
                    (the perception node's suction/dexnet backend publishes it)
     orientation  : tilted approach along the grasp normal, refused above
                    --max-tilt-deg; --straight-down forces vertical
-    correction   : --offset-x/--offset-y world-frame metres, applied here only
+    correction   : --offset-x/--offset-y world-frame metres, input-bin picks only;
+                   the label zones have their own: --label-offset-x/y (arm 2's
+                   label placement) and --zone-pick-offset-x/y (arm 1's zone pick)
     declines     : --max-declines planner rejections in a row = empty bin →
                    keep emptying the zones; the dashboard's ITEMS ADDED (or
                    INTERVENE → FETCH_INPUT) picks again
@@ -24,12 +26,13 @@ Arm 2 (labelling): label from the dispenser, pose from /compute_grasps_labelling
 via the ZED, collision-checked IK, RFID registration through /inventory/add_item
 (degrades to a warning if absent).
 
-Two items in one zone (arm 1 lifted two out of the bin): perception counts the
-items in a zone and the label goes on the top one. Arm 1 picks every labelled
-item at the centroid of the top mask (one item or a pile) rather than at the
-taught zone position, and looks at the zone again after every zone pick (/scan_label_zones): an item still there sends the
-zone back to NEEDS_LABEL; none left after two were seen opens arm 1's recovery
-window (it is probably carrying both). --no-zone-rescan turns the look off.
+Two items in one zone (arm 1 lifted two out of the bin): the label goes on the top
+item perception finds, and arm 1 picks every labelled item at the centroid of the
+top mask rather than at the taught zone position. Whether another item is in the
+zone is decided only by the look at the zone after every zone pick
+(/scan_label_zones): an item seen there sends the zone back to NEEDS_LABEL, none
+leaves it EMPTY. The count from before the pick is logged, never acted on.
+--no-zone-rescan turns the look off.
 
 Runs INSIDE the main docker container (needs its ROS + frankapy + smach + X11
 for the GUIs), from this directory:
@@ -89,12 +92,14 @@ INPUT_RETRACT_DISTANCE = 0.15  # m arm 1 backs out of the input bin after a pick
 PICK_UP_ZONE_GROUND_Z = 0.09
 LABEL_ZONE_GROUND_Z = 0.055
 LABEL_PLACE_CORRECTION_Z = 0.00  # To prevent excessive interference with the object while placing the label
+LABEL_ZONE_PARAM = "/orio/label_zone"  # the zone being labelled, read by perception's debug picture
 
 # ── ITEMS IN A LABEL ZONE ────────────────────────────────────────────────────────
 # Perception counts the items in each zone (label_seg_node.py) and gives the top item's
 # pick point (its centroid, at the measured height) in the label arm's base frame. Arm 1
-# always picks there, straight down (one item or a pile); only when perception gave no
-# pick point for a single item does it fall back to the taught zone position.
+# always picks there, straight down; without a pick point it falls back to the taught zone
+# position, except for an item a pick left behind (it was not put there by arm 1). Whether
+# another item is left is decided only by the look after the pick (RetrieveFromZone).
 # CELL_FILE has the label arm's base in arm 1's frame, to carry the point across.
 CELL_FILE = "../orio_logging/config/cell.yaml"
 # A pick point farther than this (m, XY) from the taught zone position is refused: it is
@@ -682,7 +687,8 @@ class RobotHardware:
     """Wrapper holding Franka interfaces, IK, Vision, and poses."""
 
     def __init__(self, use_grasp_orientation=True, max_tilt_deg=45.0,
-                 grasp_offset=(0.0, 0.0), zero_item_depth=False,
+                 grasp_offset=(0.0, 0.0), label_offset=(0.0, 0.0),
+                 zone_pick_offset=(0.0, 0.0), zero_item_depth=False,
                  motion_timeout_margin=8.0):
         log.info("[Hardware] Initializing Robot Hardware...")
         # Pick-behaviour settings (ported from dexnet_pnp.py)
@@ -695,6 +701,17 @@ class RobotHardware:
         if np.any(self.grasp_offset != 0.0):
             log.info("[Grasp] world XY offset applied after the planner: (%+.3f, %+.3f) m",
                      self.grasp_offset[0], self.grasp_offset[1])
+        # The label zones' XY corrections, separate from the input bin's: added to
+        # arm 2's label pose (arm 2's base frame) and to arm 1's zone pick point
+        # from perception (arm 1's frame). The taught zone positions are not moved.
+        self.label_offset = np.array([float(label_offset[0]), float(label_offset[1]), 0.0])
+        self.zone_pick_offset = np.array([float(zone_pick_offset[0]), float(zone_pick_offset[1])])
+        if np.any(self.label_offset != 0.0):
+            log.info("[Label] arm 2 label pose XY offset: (%+.3f, %+.3f) m",
+                     self.label_offset[0], self.label_offset[1])
+        if np.any(self.zone_pick_offset != 0.0):
+            log.info("[RetrieveFromZone] arm 1 zone pick XY offset: (%+.3f, %+.3f) m",
+                     self.zone_pick_offset[0], self.zone_pick_offset[1])
         # When set, PlaceOutput reaches into the output box by the fixed margin
         # alone, so every item is released at the same height.
         self.zero_item_depth = bool(zero_item_depth)
@@ -1309,7 +1326,17 @@ class RobotHardware:
             miss = None
             empty = False
             self.label_zone_items = None
-            if not call_trigger_service('/compute_grasps_labelling'):
+            # Tell perception which zone this is, so its debug picture draws only this
+            # zone's masks and label placement (arm 1's pick is drawn in both).
+            rospy.set_param(LABEL_ZONE_PARAM, int(zone_number))
+            try:
+                called = call_trigger_service('/compute_grasps_labelling')
+            finally:
+                try:
+                    rospy.delete_param(LABEL_ZONE_PARAM)
+                except KeyError:
+                    pass
+            if not called:
                 miss = "service /compute_grasps_labelling failed"
             elif "Zone%d=FAIL (no item)" % zone_number in _service_messages.get('/compute_grasps_labelling', ''):
                 miss = "perception found no item in zone %d" % zone_number
@@ -1340,7 +1367,12 @@ class RobotHardware:
                 continue
 
             p = msg.poses[0]
-            task_pos = [p.position.x, p.position.y, p.position.z + LABEL_PLACE_CORRECTION_Z]
+            raw_pos = [p.position.x, p.position.y, p.position.z + LABEL_PLACE_CORRECTION_Z]
+            task_pos = [float(v) for v in np.asarray(raw_pos) + self.label_offset]
+            if np.any(self.label_offset != 0.0):
+                log.info("[compute_label_joints] Zone %d label pose (%.3f, %.3f) + offset "
+                         "(%+.3f, %+.3f) -> (%.3f, %.3f)", zone_number, raw_pos[0], raw_pos[1],
+                         self.label_offset[0], self.label_offset[1], task_pos[0], task_pos[1])
             task_ori = [p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w]
 
             if any(np.isnan(v) for v in task_pos + task_ori):
@@ -2738,15 +2770,15 @@ class DropToZone(smach.State):
 class RetrieveFromZone(smach.State):
     """Pick the labelled item out of a zone, then look at the zone again.
 
-    Where: the top item's centroid as perception measured it, straight down, whether the
-    zone holds one item or a pile (a double pick, or an item a pick left behind), so the
-    cup lands in the middle of the item it labelled. Only a single item with no pick point
-    from perception (no depth there, or no look at the zone) is picked at the taught zone
-    position; a pile without one stops for help.
+    Where: the top item's centroid as perception measured it, straight down, so the cup
+    lands in the middle of the item it labelled. Without a pick point from perception (no
+    depth there, or no look at the zone) it is the taught zone position, except for an
+    item a pick left behind, which arm 1 did not put there: that stops for help.
 
-    After the pick the zone is scanned (unless --no-zone-rescan): an item still there
-    sends the zone back to NEEDS_LABEL; none after two or more were seen means arm 1 is
-    probably carrying both, and the recovery window opens with the item still held."""
+    After the pick the zone is scanned (unless --no-zone-rescan), and only that look
+    decides whether another item is there: one seen sends the zone back to NEEDS_LABEL,
+    none leaves it EMPTY. The item count from before the pick (perception's look when
+    the label was placed) is logged but never acted on."""
 
     def __init__(self):
         smach.State.__init__(self, outcomes=['picked', 'no_items', 'failed'],
@@ -2756,16 +2788,20 @@ class RetrieveFromZone(smach.State):
     def _pick_point(self, zone, depth_taught):
         """(xy or None for the taught position, pick height) for this zone's pick."""
         n_items, top = manager.n_items[zone], manager.top_pick[zone]
-        pile = n_items >= 2 or manager.leftover[zone]
-        why = ("%d items in the zone" % n_items if n_items >= 2 else
-               "an item left by the last pick" if manager.leftover[zone] else "one item in the zone")
+        why = "an item left by the last pick" if manager.leftover[zone] else "the labelled item"
         if top is None:
-            if pile:
-                raise RuntimeError("Zone %s has %s, but perception gave no pick point for the top "
-                                   "item (no depth there?)" % (zone, why))
+            if manager.leftover[zone]:
+                raise RuntimeError("Zone %s has %s, but perception gave no pick point for it (no "
+                                   "depth there?), and arm 1 did not put it there" % (zone, why))
             log.warning("[RetrieveFromZone] Zone %s: no pick point from perception, picking at "
                         "the taught zone position", zone)
             return None, depth_taught
+        if np.any(hardware.zone_pick_offset != 0.0):
+            shifted = [top[0] + hardware.zone_pick_offset[0], top[1] + hardware.zone_pick_offset[1], top[2]]
+            log.info("[RetrieveFromZone] Zone %s pick point (%.3f, %.3f) + offset (%+.3f, %+.3f) "
+                     "-> (%.3f, %.3f)", zone, top[0], top[1], hardware.zone_pick_offset[0],
+                     hardware.zone_pick_offset[1], shifted[0], shifted[1])
+            top = shifted
         with open(TARGET_POSES_FILE) as f:
             tx, ty, _ = json.load(f)[ZONE_TAG[zone]]["translation"]
         off = float(np.hypot(top[0] - tx, top[1] - ty))
@@ -2781,8 +2817,9 @@ class RetrieveFromZone(smach.State):
         return (top[0], top[1]), top[2]
 
     def _after_pick(self, zone, n_before):
-        """Scan the zone arm 1 just picked from and set its state. Raises when two or more
-        items were seen before the pick and nothing is left (both lifted?)."""
+        """Scan the zone arm 1 just picked from and set its state from that look alone:
+        an item seen goes back to be labelled, none leaves the zone EMPTY. n_before (the
+        count when the label was placed) is only logged."""
         left = 0
         if opts.no_zone_rescan:
             log.info("[RetrieveFromZone] Zone %s not looked at after the pick (--no-zone-rescan)", zone)
@@ -2791,19 +2828,6 @@ class RetrieveFromZone(smach.State):
             scan = hardware.scan_zones()
             entry = ((scan or {}).get('zones') or {}).get(str(ZONE_NUMBER[zone]))
             if entry is None:
-                if n_before >= 2:
-                    with manager.lock:
-                        manager.items[zone] = None
-                        manager.measured_z[zone] = None
-                        manager.reset_items(zone)
-                        manager.set_state(zone, 'EMPTY')
-                        manager.busy[zone] = False
-                    raise RuntimeError(
-                        "Zone %s held %d items before this pick and could not be looked at "
-                        "afterwards (the scan failed). An unlabelled item may be left in the "
-                        "zone or attached to the held one. The zone is set EMPTY: set it to "
-                        "NEEDS_LABEL if an item is still there, then resume with PLACE_OUTPUT."
-                        % (zone, n_before))
                 log.warning("[RetrieveFromZone] Zone %s could not be looked at after the pick "
                             "(the scan failed); taking it as empty", zone)
             else:
@@ -2822,11 +2846,9 @@ class RetrieveFromZone(smach.State):
             else:
                 manager.set_state(zone, 'EMPTY')
             manager.busy[zone] = False
-        if left == 0 and n_before >= 2 and not opts.no_zone_rescan:
-            raise RuntimeError(
-                "Zone %s held %d items before this pick and is empty after it: arm 1 is "
-                "probably carrying both, and only one has a label. Take the unlabelled item "
-                "off the cup, then resume with PLACE_OUTPUT." % (zone, n_before))
+        if left == 0 and n_before >= 2:
+            log.info("[RetrieveFromZone] Zone %s is empty after the pick (%d items were counted "
+                     "when the label was placed; only the look after the pick counts)", zone, n_before)
 
     def _run(self, userdata):
         log.info("[RetrieveFromZone] Entering state")
@@ -3121,6 +3143,17 @@ def _parse_args():
                              "position after the planner returns it, before the arm moves.")
     parser.add_argument('--offset-y', type=float, default=0.0, metavar='M',
                         help="World-frame Y correction (metres), as --offset-x.")
+    parser.add_argument('--label-offset-x', type=float, default=0.0, metavar='M',
+                        help="X correction (metres, arm 2's base frame) added to arm 2's "
+                             "label placement pose. Input-bin picks are not affected.")
+    parser.add_argument('--label-offset-y', type=float, default=0.0, metavar='M',
+                        help="Y correction (metres), as --label-offset-x.")
+    parser.add_argument('--zone-pick-offset-x', type=float, default=0.0, metavar='M',
+                        help="X correction (metres, arm 1's frame) added to arm 1's pick "
+                             "point in a label zone (the top item from perception; the "
+                             "taught zone position is not moved).")
+    parser.add_argument('--zone-pick-offset-y', type=float, default=0.0, metavar='M',
+                        help="Y correction (metres), as --zone-pick-offset-x.")
     parser.add_argument('--no-label-vacuum-check', action='store_true',
                         help="Testing without labels: skip the label cup's vacuum checks, "
                              "so the run carries on as if a label had been picked up.")
@@ -3400,7 +3433,10 @@ def main():
                 no_label_vacuum_check=no_label_vacuum_check, no_label_suction=no_label_suction,
                 no_pnp_vacuum_test=no_pnp_vacuum_test, skip_item_setup=opts.skip_item_setup,
                 zero_item_depth=opts.zero_item_depth,
-                offset_x=opts.offset_x, offset_y=opts.offset_y)
+                offset_x=opts.offset_x, offset_y=opts.offset_y,
+                label_offset_x=opts.label_offset_x, label_offset_y=opts.label_offset_y,
+                zone_pick_offset_x=opts.zone_pick_offset_x,
+                zone_pick_offset_y=opts.zone_pick_offset_y)
 
     console = Console()
     print("\n[ORIO] Type 'q' + Enter to stop cleanly.")
@@ -3416,6 +3452,8 @@ def main():
         use_grasp_orientation=not opts.straight_down,
         max_tilt_deg=opts.max_tilt_deg,
         grasp_offset=(opts.offset_x, opts.offset_y),
+        label_offset=(opts.label_offset_x, opts.label_offset_y),
+        zone_pick_offset=(opts.zone_pick_offset_x, opts.zone_pick_offset_y),
         zero_item_depth=opts.zero_item_depth)
     _install_sigint_handler()   # after the FrankaArms: they install their own
 

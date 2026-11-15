@@ -72,12 +72,10 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
 - Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2). It unlocks both arms
   at the start (they move slightly); `--no-unlock` skips this.
 - Uses the ZED for label placement. If it won't start, replug it or use `--no-zed`.
-- Counts the items in each label zone. With two items in a zone (arm 1 lifted two), the
-  top one gets the label and arm 1 picks that one; the other is then labelled too. Arm 1
-  always picks a labelled item at the middle of the top item, also when it is alone. After
-  every zone pick arm 1 waits about half a second while the zone is looked at again. If a
-  zone held two items and is empty after the pick, arm 1 stops and asks for help: it is
-  probably carrying both.
+- Puts the label on the top item in a zone, and arm 1 picks a labelled item at the middle
+  of that top item. After every zone pick arm 1 waits about half a second while the zone is
+  looked at again: only that look decides if another item is there. If one is, the zone goes
+  back to be labelled; if not, the zone is empty.
 - Measures how high to put the label with Fast-FoundationStereo on the ZED's two images
   (the ZED's own depth is off). Build its image once:
   `docker build -t orio/ffs-ros:latest - < src/devel_packages/orio_bringup/docker/Dockerfile.ffs`
@@ -132,7 +130,9 @@ bash run_full_demo.sh
 | `--speed X` | Run every arm move X times faster (default 1). Long moves are kept slow enough to stay safe. |
 | `--settle-s S` | Wait this long after each arm move before the next one (default 0 = no wait). |
 | `--no-flat-pick` | Pick from the bin with the old arm positions. By default arm 1 keeps joints 3 and 5 near 0 (less twisted) and turns the wrist as little as it can. A grasp it can't reach that way is skipped and the bin scanned again. |
-| `--offset-x M`, `--offset-y M` | Move every pick by this many metres. |
+| `--offset-x M`, `--offset-y M` | Move every pick from the input bin by this many metres (default x 0.01, y -0.075). |
+| `--label-offset-x M`, `--label-offset-y M` | Move where arm 2 puts the label by this many metres (arm 2's directions; default 0). |
+| `--zone-pick-offset-x M`, `--zone-pick-offset-y M` | Move where arm 1 picks in a label zone by this many metres (arm 1's directions, like `--offset-x/y`; default x -0.01, y -0.01). |
 | `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.10 (DexNet: 0.30). |
 | `--planner NAME` | `suction` (default) or `dexnet` (see `docs/DEXNET.md`). |
 | `--checkpoint TAG` | Which grasp network to use (a run tag or a file path). |
