@@ -1204,22 +1204,26 @@ class CombinedPerceptionNode:
 
     # ── Labelling service ─────────────────────────────────────────────────────
 
-    def _label_record_start(self, color, depth, info):
+    def _label_record_start(self, color, depth, info, kind="label"):
         """Start this call's record in LABEL_DIR, laid out like the grasp planner's:
-        label_NNNN_hhmmss/ with the raw inputs (color.npy: ZED left RGB, depth.npy: the
+        <kind>_NNNN_hhmmss/ with the raw inputs (color.npy: ZED left RGB, depth.npy: the
         Fast-FoundationStereo depth in metres, NaN invalid, K.npy, meta.json) and, once
-        drawn, label_NNNN_hhmmss.png. Returns the base path, or None (not saving)."""
+        drawn, <kind>_NNNN_hhmmss.png. kind is "label" for arm 2's labelling look
+        (/compute_grasps_labelling, what the dashboard's LABEL PLACEMENT panel shows) and
+        "scan" for the look after arm 1's zone pick (/scan_label_zones). NNNN counts both
+        kinds, so the numbers give the order of the looks. Returns the base path, or None."""
         if not LABEL_DIR:
             return None
         try:
             os.makedirs(LABEL_DIR, exist_ok=True)
-            n = 1 + sum(1 for e in os.listdir(LABEL_DIR) if e.startswith("label_") and e.endswith(".png"))
-            base = os.path.join(LABEL_DIR, "label_%04d_%s" % (n, time.strftime("%H%M%S")))
+            n = 1 + sum(1 for e in os.listdir(LABEL_DIR)
+                        if e.startswith(("label_", "scan_")) and e.endswith(".png"))
+            base = os.path.join(LABEL_DIR, "%s_%04d_%s" % (kind, n, time.strftime("%H%M%S")))
             os.makedirs(base)
             np.save(os.path.join(base, "color.npy"), color)
             np.save(os.path.join(base, "depth.npy"), depth)
             np.save(os.path.join(base, "K.npy"), np.array(info.K, dtype=np.float64).reshape(3, 3))
-            meta = {"call": n, "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            meta = {"call": n, "kind": kind, "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
                     "frame_id": info.header.frame_id, "stamp": info.header.stamp.to_sec(),
                     "crop_xyxy": [LBL_CROP_X1, LBL_CROP_Y1, LBL_CROP_X2, LBL_CROP_Y2],
                     "depth_window_px": LBL_DEPTH_WINDOW}
@@ -1258,12 +1262,16 @@ class CombinedPerceptionNode:
                 rospy.logerr("[Label] scan: %s", exc)
                 res.success, res.message = False, str(exc)
                 return res
-            record = self._label_record_start(color_full, depth_full, info)
+            record = self._label_record_start(color_full, depth_full, info, kind="scan")
             state = self._zones_state(seg, depth_full, info, "scan")
             color_base = color_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
             debug, _masks, _boxes, _phrases, _scores = self._draw_items(
                 color_base, instances[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2], seg)
             self._draw_arm1_picks(debug, state, info)
+            import cv2
+            for colour, width in (((0, 0, 0), 4), ((255, 255, 255), 1)):   # not a labelling look
+                cv2.putText(debug, "zone check after arm 1's pick (not labelling)", (8, 22),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, width)
             self.lbl_items_pub.publish(String(data=json.dumps(state)))
             self._label_record_finish(record, debug, {"success": True, "scan_only": True, "items": state["zones"]})
             res.success, res.message = True, json.dumps(state)
