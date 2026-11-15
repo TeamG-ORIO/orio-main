@@ -141,7 +141,8 @@ def is_safe_oriented_placement(edge_mask, object_mask, center_x, center_y, angle
     else:
         return False, edge_ratio, "Too much text/clutter", box    
 
-def get_candidate_locs(im, im_mask, alpha=0.2, visualize=False):
+def get_candidate_locs(im, im_mask, alpha=0.2, visualize=False, max_pts=50):
+    """max_pts None: every peak, strongest first, without ANMS."""
 
     # Compute gradient magnitude and threshold it
     im_grad, im_grad_thresh = compute_grad_mag(im)
@@ -161,7 +162,10 @@ def get_candidate_locs(im, im_mask, alpha=0.2, visualize=False):
     candidate_pts = peak_local_max(blended_edt, min_distance=10)
     if len(candidate_pts) == 0:
         return im_grad, im_grad_thresh, None
-    best_pts, best_rads = compute_ANMS(candidate_pts, blended_edt, c_rob=0.9)
+    if max_pts is None:
+        best_pts = candidate_pts
+    else:
+        best_pts, best_rads = compute_ANMS(candidate_pts, blended_edt, c_rob=0.9)
 
     if visualize:
         # plt.imshow(mask_edt, cmap='gray')
@@ -177,9 +181,30 @@ def get_candidate_locs(im, im_mask, alpha=0.2, visualize=False):
         # print(len(candidate_pts))
         # print(len(best_pts))
 
-    return im_grad, im_grad_thresh, best_pts[:50]
+    return im_grad, im_grad_thresh, best_pts if max_pts is None else best_pts[:max_pts]
 
-def opt_label_loc(im, im_mask, label_zone_num, alpha=0.2, visualize=False):
+
+def _outline_clearance(item_edt, box):
+    """Smallest distance (px) from the label footprint `box` (4 corners) to the item's
+    outline: the minimum of the item's distance transform over the footprint."""
+    x0, y0 = np.maximum(box.min(axis=0), 0)
+    x1, y1 = np.minimum(box.max(axis=0) + 1, item_edt.shape[::-1])
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    fp = np.zeros((y1 - y0, x1 - x0), np.uint8)
+    cv2.fillPoly(fp, [box - np.array([x0, y0])], 1)
+    vals = item_edt[y0:y1, x0:x1][fp > 0]
+    return float(vals.min()) if vals.size else 0.0
+
+def opt_label_loc(im, im_mask, label_zone_num, alpha=0.2, visualize=False, label_w=120, label_h=40,
+                  margin_px=0.0, farthest=False, edge_slack=0.02):
+    """label_w, label_h: the label's footprint in pixels (long side, short side).
+    margin_px: the label keeps at least this far inside the item's outline. The search runs
+    on the mask shrunk by it: the candidate points, both distance maps (to the outline and
+    to printed edges) and the fits-inside test all see the shrunk outline.
+    farthest: test every candidate point (not the first that fits in ANMS order) and take,
+    of the placements that fit, the one farthest from the item's outline, among those whose
+    share of edge pixels is at most edge_slack above the cleanest fitting placement's."""
     H, W = im.shape[:2]
 
     if label_zone_num == 1:
@@ -215,7 +240,16 @@ def opt_label_loc(im, im_mask, label_zone_num, alpha=0.2, visualize=False):
         # Ultimate fallback if mask is totally empty
         default_x, default_y = slice_W // 2, slice_H // 2
 
-    im_grad, im_grad_thresh, best_pts = get_candidate_locs(im, im_mask, visualize=visualize)
+    # The mask the label must fit inside: the item shrunk by margin_px (pixels whose distance
+    # to the outside is more than margin_px). Orientation and the centroid fallback above
+    # come from the whole item.
+    if margin_px > 0:
+        fit_mask = (distance_transform_edt(im_mask) > margin_px).astype(np.uint8)
+    else:
+        fit_mask = im_mask
+
+    im_grad, im_grad_thresh, best_pts = get_candidate_locs(im, fit_mask, visualize=visualize,
+                                                           max_pts=None if farthest else 50)
 
     if best_pts is None or len(best_pts) == 0:
         print("No candidate points found in Zone: ", label_zone_num)
@@ -231,6 +265,24 @@ def opt_label_loc(im, im_mask, label_zone_num, alpha=0.2, visualize=False):
     final_msg = "No safe placement found (Using Centroid Fallback)"
     found_safe = False
 
+    if farthest:
+        # Every placement that fits: (edge share, clearance to the outline, x, y, angle, box)
+        item_edt = distance_transform_edt(im_mask)
+        fits = []
+        for y, x in check_pts:
+            for check_angle in angles_to_check:
+                is_safe, ratio, msg, box = is_safe_oriented_placement(
+                    im_grad_thresh, fit_mask, float(x), float(y), float(check_angle),
+                    label_w=label_w, label_h=label_h)
+                if is_safe:
+                    fits.append((ratio, _outline_clearance(item_edt, box), x, y, check_angle, box))
+        if fits:
+            cleanest = min(f[0] for f in fits)
+            ok = [f for f in fits if f[0] <= cleanest + edge_slack]
+            ratio, _clear, opt_x, opt_y, opt_ang, final_box = max(ok, key=lambda f: (f[1], -f[0]))
+            final_msg, found_safe = "Safe for placement (farthest from the outline)", True
+        check_pts = []   # skip the first-fit loop below
+
     # The Search Loop
     for y, x in check_pts:
         candidates = []
@@ -238,8 +290,9 @@ def opt_label_loc(im, im_mask, label_zone_num, alpha=0.2, visualize=False):
         # Iterate directly over the two axis-aligned angles
         for check_angle in angles_to_check: 
             is_safe, ratio, msg, box = is_safe_oriented_placement(
-                im_grad_thresh, im_mask, float(x), float(y), float(check_angle)
-            )            
+                im_grad_thresh, fit_mask, float(x), float(y), float(check_angle),
+                label_w=label_w, label_h=label_h
+            )
             
             if is_safe:
                 candidates.append((ratio, check_angle, box, msg))

@@ -33,14 +33,17 @@ import groundingdino.datasets.transforms as T
 # Custom modules
 from grasp_solver import optimize_grasp_pose
 import dexnet_geometry
-from opt_label_location import opt_label_loc, is_safe_oriented_placement
+from opt_label_location import opt_label_loc
 import label_zone_seg
 
-# The label footprint opt_label_loc tests a placement with (pixels in the crop): the
-# defaults of is_safe_oriented_placement, so the debug drawing matches the check.
-_FOOTPRINT_PARAMS = __import__('inspect').signature(is_safe_oriented_placement).parameters
-LABEL_W_PX = _FOOTPRINT_PARAMS['label_w'].default
-LABEL_H_PX = _FOOTPRINT_PARAMS['label_h'].default
+# The label's footprint, which opt_label_loc must fit on the top item: turned into pixels at
+# the item's measured range on each look (ZED_RANGE_M when the item has no depth), and
+# drawn on the debug picture at the same size.
+LABEL_W_MM, LABEL_H_MM = 72.0, 18.0
+LABEL_EDGE_MARGIN_MM = 3.0   # the label keeps at least this far inside the item's outline
+# Of the placements that fit, take the one farthest from the item's outline, among those with
+# at most this much more of the label on printing (share of edge pixels) than the cleanest.
+LABEL_EDGE_SLACK = 0.02
 from rerun_writer import PerceptionLog
 
 # ==============================================================================
@@ -1194,12 +1197,13 @@ class CombinedPerceptionNode:
         return a - 180.0 if a > 90.0 else a
 
     @staticmethod
-    def _label_footprint(x, y, angle_deg):
-        """Corners of the label's footprint at crop pixel (x, y), for cv2.polylines.
-        opt_label_loc returns the footprint's angle + 90, so take the 90 back off to draw
-        the box it actually checked (a 180 deg turn from normalising draws the same box)."""
+    def _label_footprint(x, y, angle_deg, w_px, h_px):
+        """Corners of the label's footprint (w_px x h_px) at crop pixel (x, y), for
+        cv2.polylines. opt_label_loc returns the footprint's angle + 90, so take the 90
+        back off to draw the box it actually checked (a 180 deg turn from normalising
+        draws the same box)."""
         import cv2
-        rect = ((float(x), float(y)), (float(LABEL_W_PX), float(LABEL_H_PX)), float(angle_deg) - 90.0)
+        rect = ((float(x), float(y)), (float(w_px), float(h_px)), float(angle_deg) - 90.0)
         return np.int32(cv2.boxPoints(rect)).reshape(-1, 1, 2)
 
     # ── Labelling service ─────────────────────────────────────────────────────
@@ -1314,14 +1318,23 @@ class CombinedPerceptionNode:
 
         # The label goes on the top item of each zone, placed within that item's own mask
         # (never across two items lying on each other).
-        placements = {}
+        placements, label_px = {}, {}
+        depth_crop = depth_full[LBL_CROP_Y1:LBL_CROP_Y2, LBL_CROP_X1:LBL_CROP_X2]
         for zone in (1, 2):
             top = state["zones"][str(zone)]["top"]
             if top is None:
                 placements[zone] = None
                 continue
             top_mask = (inst_crop == top["id"]).astype(np.uint8)
-            opt_x, opt_y, opt_ang = opt_label_loc(color_base, top_mask, label_zone_num=zone, visualize=False)
+            z_item = depth_crop[top_mask > 0]
+            z_item = z_item[np.isfinite(z_item)]
+            z_item = float(np.median(z_item)) if z_item.size else label_zone_seg.ZED_RANGE_M
+            w_px, h_px, margin_px = (mm / 1000.0 * fx / z_item
+                                     for mm in (LABEL_W_MM, LABEL_H_MM, LABEL_EDGE_MARGIN_MM))
+            label_px[zone] = (w_px, h_px)
+            opt_x, opt_y, opt_ang = opt_label_loc(color_base, top_mask, label_zone_num=zone, visualize=False,
+                                                  label_w=w_px, label_h=h_px, margin_px=margin_px,
+                                                  farthest=True, edge_slack=LABEL_EDGE_SLACK)
             placements[zone] = (None if opt_x is None
                                 else (opt_x, opt_y, self._normalise_label_angle(opt_ang)))
 
@@ -1339,9 +1352,13 @@ class CombinedPerceptionNode:
             z_cam, n = self._sample_depth(depth_full, u, v)
             zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
                                'depth': float(z_cam) if z_cam is not None else 0.0,
-                               'px_full': [u, v], 'depth_px': n, 'n_items': n_items}
+                               'px_full': [u, v], 'depth_px': n, 'n_items': n_items,
+                               'label_mm': [LABEL_W_MM, LABEL_H_MM],
+                               'label_margin_mm': LABEL_EDGE_MARGIN_MM,
+                               'label_choice': 'farthest from outline, printing <= cleanest + %g' % LABEL_EDGE_SLACK,
+                               'label_px': [round(float(v_px), 1) for v_px in label_px[zone]]}
             if only_zone is None or zone == only_zone:
-                box = self._label_footprint(opt_x, opt_y, ang_deg)
+                box = self._label_footprint(opt_x, opt_y, ang_deg, *label_px[zone])
                 cv2.polylines(debug_lbl, [box], isClosed=True, color=dot, thickness=2)
                 cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 4, dot, -1)
                 cv2.putText(debug_lbl, f"Z{zone} {ang_deg:.1f}deg "
