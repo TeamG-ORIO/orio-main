@@ -78,3 +78,7 @@ research/prm/
 
 # --- Claude Code worktree copies (never commit) ---
 .claude/worktrees/
+
+# Local review images and temporary test scripts (never commit)
+rgbd_v4_labelzone_review/
+src/devel_packages/orio/tmp_*.py
