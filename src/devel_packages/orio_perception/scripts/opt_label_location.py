@@ -44,7 +44,9 @@ def get_object_orientation(im_mask):
     return angle_deg
     
 def compute_grad_mag(im, thresh=100):
-    
+    # The perception node passes RGB but this converts as if BGR (red and blue weights
+    # swapped). Kept on purpose: the label placement settings were checked against it on the
+    # recorded demo zones, and converting as RGB moved some labels nearer the item's edge.
     gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
     dx = cv2.Sobel(gray, cv2.CV_64F, 1, 0)
     dy = cv2.Sobel(gray, cv2.CV_64F, 0, 1)
@@ -197,14 +199,17 @@ def _outline_clearance(item_edt, box):
     return float(vals.min()) if vals.size else 0.0
 
 def opt_label_loc(im, im_mask, label_zone_num, alpha=0.2, visualize=False, label_w=120, label_h=40,
-                  margin_px=0.0, farthest=False, edge_slack=0.02):
+                  margin_px=0.0, farthest=False, edge_slack=0.02, max_edge_ratio=0.05):
     """label_w, label_h: the label's footprint in pixels (long side, short side).
     margin_px: the label keeps at least this far inside the item's outline. The search runs
     on the mask shrunk by it: the candidate points, both distance maps (to the outline and
     to printed edges) and the fits-inside test all see the shrunk outline.
     farthest: test every candidate point (not the first that fits in ANMS order) and take,
     of the placements that fit, the one farthest from the item's outline, among those whose
-    share of edge pixels is at most edge_slack above the cleanest fitting placement's."""
+    share of edge pixels is at most edge_slack above the cleanest fitting placement's. When
+    none fits (every placement inside the item has more than max_edge_ratio of edges), the
+    same choice is made among the placements inside the item, whatever their edges; only
+    when no candidate lies inside the item does it fall back to the centroid."""
     H, W = im.shape[:2]
 
     if label_zone_num == 1:
@@ -266,21 +271,28 @@ def opt_label_loc(im, im_mask, label_zone_num, alpha=0.2, visualize=False, label
     found_safe = False
 
     if farthest:
-        # Every placement that fits: (edge share, clearance to the outline, x, y, angle, box)
+        # Every placement inside the item (the shrunk mask), whatever its edges:
+        # (edge share, clearance to the outline, x, y, angle, box)
         item_edt = distance_transform_edt(im_mask)
-        fits = []
+        inside = []
         for y, x in check_pts:
             for check_angle in angles_to_check:
-                is_safe, ratio, msg, box = is_safe_oriented_placement(
+                is_in, ratio, msg, box = is_safe_oriented_placement(
                     im_grad_thresh, fit_mask, float(x), float(y), float(check_angle),
-                    label_w=label_w, label_h=label_h)
-                if is_safe:
-                    fits.append((ratio, _outline_clearance(item_edt, box), x, y, check_angle, box))
-        if fits:
-            cleanest = min(f[0] for f in fits)
-            ok = [f for f in fits if f[0] <= cleanest + edge_slack]
+                    label_w=label_w, label_h=label_h, max_edge_ratio=1.0)
+                if is_in:
+                    inside.append((ratio, _outline_clearance(item_edt, box), x, y, check_angle, box))
+        fits = [f for f in inside if f[0] <= max_edge_ratio]
+        pool = fits or inside   # nothing clear enough of edges: the cleanest inside the item
+        if pool:
+            cleanest = min(f[0] for f in pool)
+            ok = [f for f in pool if f[0] <= cleanest + edge_slack]
             ratio, _clear, opt_x, opt_y, opt_ang, final_box = max(ok, key=lambda f: (f[1], -f[0]))
-            final_msg, found_safe = "Safe for placement (farthest from the outline)", True
+            found_safe = bool(fits)
+            final_msg = ("Safe for placement (farthest from the outline)" if fits else
+                         "No placement under %.0f%% edges: least edges inside the item (%.1f%%)"
+                         % (100 * max_edge_ratio, 100 * ratio))
+            print(final_msg)
         check_pts = []   # skip the first-fit loop below
 
     # The Search Loop
