@@ -211,11 +211,11 @@ LABEL_POSE_RETRY_S = 1.0
 # nothing we label is taller than ~0.35 m. Outside the box the pose is refused unmoved.
 LABEL_POSE_BOUNDS = {'x_min': 0.2, 'x_max': 0.7, 'y_min': -0.6, 'y_max': 0.6,
                      'z_min': -0.01, 'z_max': 0.40}
-# Label IK retries re-seed with this much random change (rad) per joint around the nominal
-# seed. compute_pick_joints re-seeds over the whole joint range, which can converge on a
-# configuration that reaches the zone from behind; on arm 2 that swings out over the
-# dispenser side of the cell.
-LABEL_SEED_JITTER = 0.6
+# Label IK (_label_ik): cost per rad^2 of joint motion from where arm 2 is to pre-label
+# (sum over joints), against J3^2 + J5^2 of the label pose; and the step (rad of the largest
+# joint change) at which label_path_collisions checks the label moves.
+LABEL_TRAVEL_WEIGHT = 0.05
+LABEL_PATH_STEP = 0.03
 # A label solution with the base (joint 1) or upper arm (joint 3) turned further than this
 # (rad) is that from-behind configuration, whatever seed produced it: refused.
 LABEL_MAX_BASE_TURN = 2.0
@@ -226,6 +226,22 @@ LABEL_MAX_BASE_TURN = 2.0
 LABEL_TOOL_FLIP = np.diag([-1.0, -1.0, 1.0])
 
 # ──────────────────────────────────────────────────────────────────────────────────
+
+def _tilt_deg(rot):
+    """How far the tool axis (rot's z column) is from straight down, in degrees."""
+    return float(np.degrees(np.arccos(np.clip(-np.asarray(rot)[2, 2], -1.0, 1.0))))
+
+
+def _straight_down(rot):
+    """rot turned the least way that points its tool axis straight down."""
+    rot = np.asarray(rot, dtype=float)
+    z0, z1 = rot[:, 2], np.array([0.0, 0.0, -1.0])
+    axis = np.cross(z0, z1)
+    s = np.linalg.norm(axis)
+    if s < 1e-9:
+        return rot
+    return R.from_rotvec(axis / s * np.arctan2(s, z0 @ z1)).as_matrix() @ rot
+
 
 # Module-level logger; records go to rospy's rosout logger (terminal + /rosout, recorded per run).
 log = logging.getLogger("orio_fsm")
@@ -1424,90 +1440,146 @@ class RobotHardware:
                      task_pos[0], task_pos[1], task_pos[2],
                      rpy[0], rpy[1], rpy[2])
 
-            return self._label_ik(task_pos, task_ori_Mat, zone_number)
+            pre, final, _tilted = self.label_ik_or_straight(task_pos, task_ori_Mat, zone_number)
+            return pre, final
 
         raise RuntimeError(f"NaN values in labelling pose for zone {zone_number} after {max_attempts} attempts")
 
-    def _label_ik(self, task_pos, target_ori, zone_number, max_attempts=10):
-        """(pre_joints, final_joints) for the label pose, from whichever of the two
-        equivalent tool orientations (LABEL_TOOL_FLIP) needs the smaller joint motion from
-        where arm 2 is now."""
-        try:
-            q_now = np.asarray(self.label_arm.get_joints(), dtype=float)
-        except Exception as exc:  # noqa: BLE001 — LABELLING_SAFE is where APPLY starts from
-            log.warning("[IK] arm2 get_joints failed (%s); using LABELLING_SAFE", exc)
-            q_now = np.asarray(self.pose_to_joints("LABELLING_SAFE"), dtype=float)
-        best = None
-        for flipped in (False, True):
-            ori = target_ori @ LABEL_TOOL_FLIP if flipped else target_ori
-            name = "flipped" if flipped else "published"
+    def _label_ik(self, task_pos, target_ori, zone_number, q_now=None, q_safe=None):
+        """(pre_joints, final_joints) for the label pose, solved like arm 1's input pick
+        (compute_flat_pick_joints): the label joints from _flat_ik (joints 3 and 5 pulled
+        to 0, the arm untwisted) from a few starts, and the pre-label joints backed
+        APPROACH_DISTANCE out along the tool axis (compute_retract_joints), so pre-label
+        and label have the same arm shape and the press is a straight line along the press
+        direction, tilted or not.
+
+        A candidate is kept only if it stays FLAT_PICK_MIN_LIMIT_GAP inside the joint
+        limits, does not reach round from behind (LABEL_MAX_BASE_TURN), presses in a
+        straight line (PICK_MAX_DESCENT_*), and every move arm 2 makes with it (now ->
+        pre-label -> label -> pre-label -> LABELLING_SAFE) is clear of the arm-2 obstacles
+        all the way (label_path_collisions). Of those, the lowest J3^2 + J5^2 +
+        LABEL_TRAVEL_WEIGHT x (joint motion from now to pre-label, sum of squares) wins.
+        Both label orientations (LABEL_TOOL_FLIP: the same label turned 180 deg) are tried,
+        and each solution's twin with J7 half a turn round.
+
+        q_now: arm 2's joints now (default: read from the arm, else LABELLING_SAFE);
+        q_safe: LABELLING_SAFE's joints (default: pose_to_joints)."""
+        if q_safe is None:
+            q_safe = np.asarray(self.pose_to_joints("LABELLING_SAFE"), dtype=float)
+        if q_now is None:
             try:
-                pre, final = self._solve_label_joints(task_pos, ori, zone_number, max_attempts)
-            except RuntimeError as exc:
-                log.warning("[IK] %s orientation: %s", name, exc)
-                continue
-            travel = float(np.abs(np.asarray(pre) - q_now).sum())
-            log.info("[IK] %s orientation: joint 7 %.0f deg (%+.0f deg from now), "
-                     "total joint travel to pre %.2f rad",
-                     name, np.degrees(pre[6]), np.degrees(pre[6] - q_now[6]), travel)
-            if best is None or travel < best[0]:
-                best = (travel, pre, final, name)
+                q_now = np.asarray(self.label_arm.get_joints(), dtype=float)
+            except Exception as exc:  # noqa: BLE001 — LABELLING_SAFE is where APPLY starts from
+                log.warning("[IK] arm2 get_joints failed (%s); using LABELLING_SAFE", exc)
+                q_now = q_safe
+        q_now, q_safe = np.asarray(q_now, dtype=float), np.asarray(q_safe, dtype=float)
+        task_pos = np.asarray(task_pos, dtype=float)
+        best, cands, tried, why = None, [], 0, {}
+        for ori, wide in ((target_ori, False), (target_ori @ LABEL_TOOL_FLIP, False),
+                          (target_ori, True), (target_ori @ LABEL_TOOL_FLIP, True)):
+            if wide:
+                best = best or self._first_clear_label(cands, q_now, q_safe, why)
+                if best is not None:
+                    break   # the wide starts only when the usual ones found nothing usable
+            for seed in self.flat_pick_starts(task_pos, wide):
+                tried += 1
+                final, _ = self._flat_ik(task_pos, ori, seed=seed, quiet=True)
+                if final is None:
+                    why["no flat IK"] = why.get("no flat IK", 0) + 1
+                    continue
+                pre = self.compute_retract_joints(final, APPROACH_DISTANCE, quiet=True)
+                if pre is None:
+                    why["no pre-label along the tool axis"] = why.get("no pre-label along the tool axis", 0) + 1
+                    continue
+                good = False
+                for turn in (0.0, -np.pi, np.pi):   # J7 half a turn round: the label turned 180 deg
+                    p, f = pre.copy(), final.copy()
+                    p[6] += turn
+                    f[6] += turn
+                    cand = self.score_label_joints(p, f, q_now)
+                    if isinstance(cand, str):
+                        why[cand] = why.get(cand, 0) + 1
+                        continue
+                    good = good or f[2] ** 2 + f[4] ** 2 < 0.05
+                    cands.append((cand[0], p, f, cand[1], cand[2]))
+                if good:
+                    break   # this orientation: an untwisted arm found, more starts add nothing
+        best = best or self._first_clear_label(cands, q_now, q_safe, why)
         if best is None:
-            raise RuntimeError(f"[IK] no collision-free label solution for {np.round(task_pos, 4)} "
-                               f"in either tool orientation")
-        travel, pre, final, name = best
-        log.info("[IK] using the %s orientation (travel %.2f rad)", name, travel)
+            raise RuntimeError("[IK] no label solution for %s (%d starts: %s)" % (
+                np.round(task_pos, 4), tried, ", ".join("%s %d" % kv for kv in sorted(why.items()))))
+        cost, pre, final, gap, travel = best
+        log.info("[IK] label: J3/J5 %+.2f/%+.2f, %.2f rad from the nearest joint limit, joint "
+                 "motion to pre-label %.2f rad (largest %.2f rad), press along the tool axis — "
+                 "pre=%s final=%s", final[2], final[4], gap, float(np.abs(pre - q_now).sum()),
+                 float(np.abs(pre - q_now).max()), np.round(pre, 4), np.round(final, 4))
+        events.emit('ik', 'arm2', target=list(task_pos), pre=list(pre), final=list(final),
+                    label_zone=zone_number, limit_gap=gap)
         return pre, final
 
-    def _solve_label_joints(self, task_pos, target_ori, zone_number, max_attempts):
-        """(pre_joints, final_joints) for one label orientation: collision-checked against
-        the arm-2 obstacles and FK-validated as compute_pick_joints does, with the cup
-        allowed to meet the table at the final pose (see _label_collisions), retries
-        re-seeded near the nominal seed and from-behind configurations refused (see
-        LABEL_SEED_JITTER / LABEL_MAX_BASE_TURN)."""
-        task_pos = np.asarray(task_pos, dtype=float)
-        pre_pos = task_pos + np.array([0.0, 0.0, APPROACH_DISTANCE])
-        for attempt in range(max_attempts):
-            seed = [0.0] * self.chain_length
-            seed[4] = -1.5   # tool pointing down
-            if attempt > 0:
-                for i in range(1, 8):
-                    lo, hi = self.ik_chain.links[i].bounds
-                    seed[i] = float(np.clip(seed[i] + random.uniform(-LABEL_SEED_JITTER, LABEL_SEED_JITTER), lo, hi))
-            pre = self.ik_chain.inverse_kinematics(
-                target_position=list(pre_pos), target_orientation=target_ori,
-                orientation_mode="all", initial_position=seed)
-            final = self.ik_chain.inverse_kinematics(
-                target_position=list(task_pos), target_orientation=target_ori,
-                orientation_mode="all", initial_position=pre)
-            if max(abs(pre[1]), abs(pre[3]), abs(final[1]), abs(final[3])) > LABEL_MAX_BASE_TURN:
-                log.warning("[IK] attempt %d/%d reaches the zone from behind (joint 1 %.2f, "
-                            "joint 3 %.2f rad), retrying with a new seed",
-                            attempt + 1, max_attempts, final[1], final[3])
-                continue
-            hits_pre = self._label_collisions(pre[1:8])
-            hits_final = self._label_collisions(final[1:8], allow_tool_on_table=True)
-            if hits_pre or hits_final:
-                log.warning("[IK] attempt %d/%d in collision (pre %s, final %s as "
-                            "(block, obstacle)), retrying with a new seed",
-                            attempt + 1, max_attempts, hits_pre, hits_final)
-                continue
-            IK_RESIDUAL_THRESHOLD = 0.02  # metres
-            pre_err = np.linalg.norm(self.ik_chain.forward_kinematics(list(pre))[:3, 3] - pre_pos)
-            final_err = np.linalg.norm(self.ik_chain.forward_kinematics(list(final))[:3, 3] - task_pos)
-            if pre_err > IK_RESIDUAL_THRESHOLD or final_err > IK_RESIDUAL_THRESHOLD:
-                log.warning("[IK] attempt %d/%d large FK residual (pre=%.4f m, final=%.4f m > %.3f m threshold) — retrying",
-                            attempt + 1, max_attempts, pre_err, final_err, IK_RESIDUAL_THRESHOLD)
-                continue
-            log.info("[IK] Arm2 label IK attempt %d/%d OK — target=(%s) pre=%s final=%s (FK err pre=%.4f m final=%.4f m)",
-                     attempt + 1, max_attempts, np.round(task_pos, 4),
-                     np.round(pre[1:8], 4), np.round(final[1:8], 4), pre_err, final_err)
-            events.emit('ik', 'arm2', target=list(task_pos), pre=pre[1:8], final=final[1:8],
-                        attempt=attempt + 1, err_pre=pre_err, err_final=final_err,
-                        label_zone=zone_number)
-            return pre[1:8], final[1:8]
-        raise RuntimeError(f"[IK] no collision-free configuration for target={np.round(task_pos, 4)} "
-                           f"after {max_attempts} attempts")
+    def _first_clear_label(self, cands, q_now, q_safe, why):
+        """The cheapest of the label candidates (cost, pre, final, gap, travel) whose moves
+        are clear of the obstacles (label_path_collisions), or None. Candidates checked are
+        taken out of `cands`; refusals are counted in `why`. Collisions are the slow check,
+        so they are checked last and only until one candidate passes."""
+        cands.sort(key=lambda c: c[0])
+        while cands:
+            cand = cands.pop(0)
+            hit = self.label_path_collisions(q_now, cand[1], cand[2], q_safe)
+            if hit is None:
+                return cand
+            key = "collides (%s)" % hit[0]
+            why[key] = why.get(key, 0) + 1
+        return None
+
+    def label_ik_or_straight(self, task_pos, target_ori, zone_number, q_now=None, q_safe=None):
+        """(pre_joints, final_joints, tilted): _label_ik for the label pose; when that finds
+        nothing for a tilted press (perception tilts it toward a sloped surface), the same
+        label pressed straight down (the tool axis turned back to vertical, the label's
+        direction kept) instead, as before the press tilt."""
+        try:
+            pre, final = self._label_ik(task_pos, target_ori, zone_number, q_now=q_now, q_safe=q_safe)
+            return pre, final, _tilt_deg(target_ori) > 0.5
+        except RuntimeError as exc:
+            tilt = _tilt_deg(target_ori)
+            if tilt <= 0.5:
+                raise
+            log.warning("[IK] %s; pressing straight down instead of tilted %.0f deg", exc, tilt)
+            pre, final = self._label_ik(task_pos, _straight_down(target_ori), zone_number,
+                                        q_now=q_now, q_safe=q_safe)
+            return pre, final, False
+
+    def score_label_joints(self, pre, final, q_now):
+        """(cost, limit gap, travel) for these label joints (see _label_ik) before the
+        collision check, or a short reason they are refused."""
+        lims = np.array([self.ik_chain.links[i].bounds for i in range(1, 8)], dtype=float)
+        gap = float(min(np.min(np.minimum(q - lims[:, 0], lims[:, 1] - q)) for q in (pre, final)))
+        if gap < FLAT_PICK_MIN_LIMIT_GAP:
+            return "near a joint limit"
+        if max(abs(pre[0]), abs(pre[2]), abs(final[0]), abs(final[2])) > LABEL_MAX_BASE_TURN:
+            return "reaches from behind"
+        if not self.straight_move_ok(pre, final, PICK_MAX_DESCENT_CHANGE, PICK_MAX_DESCENT_OFF_LINE):
+            return "press not straight"
+        travel = float(np.sum((pre - q_now) ** 2))
+        return final[2] ** 2 + final[4] ** 2 + LABEL_TRAVEL_WEIGHT * travel, gap, travel
+
+    def label_path_collisions(self, q_now, pre, final, q_safe, step=LABEL_PATH_STEP):
+        """The first collision with the arm-2 obstacles along the moves APPLY makes with
+        these joints, as (move, fraction along it, (block, obstacle) pairs), or None. The
+        goto_joints moves are checked every `step` rad of the largest joint change: now ->
+        pre-label, the press (pre-label -> label, where the cup may meet the table, as in
+        _label_collisions) and its retract (the same path back), pre-label ->
+        LABELLING_SAFE."""
+        for name, a, b, table_ok in (("to pre-label", q_now, pre, False),
+                                     ("press", pre, final, True),
+                                     ("to labelling safe", pre, q_safe, False)):
+            a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+            n = max(2, int(np.ceil(np.abs(b - a).max() / step)) + 1)
+            for t in np.linspace(0.0, 1.0, n):
+                hits = self._label_collisions(a + t * (b - a), allow_tool_on_table=table_ok)
+                if hits:
+                    return name, float(t), hits
+        return None
 
     def pose_to_joints(self, location_tag, depth_offset=0.0, flat=False, xy=None):
         """Resolve a location tag to joint angles via IK.
