@@ -44,6 +44,15 @@ LABEL_EDGE_MARGIN_MM = 3.0   # the label keeps at least this far inside the item
 # Of the placements that fit, take the one farthest from the item's outline, among those with
 # at most this much more of the label on printing (share of edge pixels) than the cleanest.
 LABEL_EDGE_SLACK = 0.02
+# Press direction: straight down (the camera's axis) unless the surface under the label is
+# tilted at least LABEL_TILT_MIN_DEG from the table (arm 2's base XY plane), as on the domed
+# dextrose bags. Then the press turns toward the surface's normal, at most LABEL_TILT_MAX_DEG.
+# The surface is a plane through the stereo points under the label (RANSAC, points within
+# LABEL_PLANE_TOL_M), used only when at least LABEL_PLANE_MIN_INLIERS of them lie on it.
+LABEL_TILT_MIN_DEG = 10.0
+LABEL_TILT_MAX_DEG = 25.0
+LABEL_PLANE_TOL_M = 0.004
+LABEL_PLANE_MIN_INLIERS = 0.85
 from rerun_writer import PerceptionLog
 
 # ==============================================================================
@@ -1202,6 +1211,78 @@ class CombinedPerceptionNode:
         return float(np.median(vals)), int(vals.size)
 
     @staticmethod
+    def _footprint_plane(depth_crop, box, K, tol=LABEL_PLANE_TOL_M, iters=200, seed=0):
+        """Plane through the stereo points under the label footprint `box` (crop pixels), in
+        the camera frame: (unit normal pointing at the camera, share of points within tol of
+        it), or None with fewer than 100 valid points. RANSAC, then least squares on the
+        inliers."""
+        import cv2
+        fp = np.zeros(depth_crop.shape[:2], np.uint8)
+        cv2.fillPoly(fp, [box], 1)
+        vv, uu = np.nonzero((fp > 0) & np.isfinite(depth_crop))
+        if len(vv) < 100:
+            return None
+        fx, fy, cx, cy = K[0], K[4], K[2], K[5]
+        z = depth_crop[vv, uu].astype(np.float64)
+        P = np.stack([(uu + LBL_CROP_X1 - cx) * z / fx, (vv + LBL_CROP_Y1 - cy) * z / fy, z], axis=1)
+        rng = np.random.default_rng(seed)
+        best, best_k = None, -1
+        for _ in range(iters):
+            a, b, c = P[rng.choice(len(P), 3, replace=False)]
+            nrm = np.cross(b - a, c - a)
+            s = np.linalg.norm(nrm)
+            if s < 1e-12:
+                continue
+            nrm /= s
+            k = int((np.abs((P - a) @ nrm) < tol).sum())
+            if k > best_k:
+                best, best_k = (nrm, a), k
+        if best is None:
+            return None
+        inl = np.abs((P - best[1]) @ best[0]) < tol
+        c = P[inl].mean(axis=0)
+        nrm = np.linalg.svd(P[inl] - c, full_matrices=False)[2][2]
+        if nrm[2] > 0:
+            nrm = -nrm                              # towards the camera
+        return nrm, float((np.abs((P - c) @ nrm) < tol).mean())
+
+    def _press_orientation(self, ang_deg, plane):
+        """The label's orientation in arm 2's base frame and why: the camera's axis turned by
+        the label angle (straight down), turned toward the surface's normal when the surface
+        is tilted at least LABEL_TILT_MIN_DEG from the table and the plane fits, by at most
+        LABEL_TILT_MAX_DEG. The turn is the smallest one, so the label keeps its direction."""
+        rot0 = self.tf_lbl[:3, :3] @ R_scipy.from_euler('z', np.radians(ang_deg)).as_matrix()
+        down = np.array([0.0, 0.0, -1.0])
+        out = {'rotation': rot0, 'surface_tilt_deg': None, 'plane_inliers': None,
+               'press_tilt_deg': round(float(np.degrees(np.arccos(np.clip(rot0[:, 2] @ down, -1, 1)))), 1),
+               'why': 'straight down (no plane)'}
+        if plane is None:
+            return out
+        n_base = self.tf_lbl[:3, :3] @ plane[0]
+        n_base = n_base if n_base[2] > 0 else -n_base     # out of the surface, up
+        tilt = float(np.degrees(np.arccos(np.clip(n_base[2], -1.0, 1.0))))
+        out['surface_tilt_deg'], out['plane_inliers'] = round(tilt, 1), round(plane[1], 3)
+        if tilt < LABEL_TILT_MIN_DEG:
+            out['why'] = 'straight down (surface %.0f deg < %.0f)' % (tilt, LABEL_TILT_MIN_DEG)
+            return out
+        if plane[1] < LABEL_PLANE_MIN_INLIERS:
+            out['why'] = 'straight down (surface %.0f deg but not flat: %.0f%% on the plane)' % (tilt, 100 * plane[1])
+            return out
+        z0, z1 = rot0[:, 2], -n_base                      # press direction now, and into the surface
+        axis = np.cross(z0, z1)
+        full = float(np.arctan2(np.linalg.norm(axis), z0 @ z1))
+        turn = min(full, np.radians(LABEL_TILT_MAX_DEG))
+        if np.linalg.norm(axis) > 1e-9:
+            rot = R_scipy.from_rotvec(axis / np.linalg.norm(axis) * turn).as_matrix() @ rot0
+        else:
+            rot = rot0
+        out['rotation'] = rot
+        out['press_tilt_deg'] = round(float(np.degrees(np.arccos(np.clip(rot[:, 2] @ down, -1, 1)))), 1)
+        out['why'] = 'tilted %.0f deg toward the surface (%.0f deg%s)' % (
+            np.degrees(turn), tilt, ', capped' if turn < full - 1e-6 else '')
+        return out
+
+    @staticmethod
     def _normalise_label_angle(angle_deg):
         """The angle in (-90, 90]. A label is the same rectangle turned by 180 deg, and
         get_object_orientation's `angle % 180` jumps between ~0 and ~180 for a nearly
@@ -1365,6 +1446,8 @@ class CombinedPerceptionNode:
             u, v = int(opt_x) + LBL_CROP_X1, int(opt_y) + LBL_CROP_Y1
             box = self._label_footprint(opt_x, opt_y, ang_deg, *label_px[zone])
             z_cam, n = self._footprint_depth(depth_crop, box)
+            plane = self._footprint_plane(depth_crop, box, info.K)
+            press = self._press_orientation(ang_deg, plane)
             zones_log[zone] = {'x': opt_x, 'y': opt_y, 'angle_deg': ang_deg,
                                'depth': float(z_cam) if z_cam is not None else 0.0,
                                'depth_from': 'median over the label footprint',
@@ -1372,7 +1455,10 @@ class CombinedPerceptionNode:
                                'label_mm': [LABEL_W_MM, LABEL_H_MM],
                                'label_margin_mm': LABEL_EDGE_MARGIN_MM,
                                'label_choice': 'farthest from outline, printing <= cleanest + %g' % LABEL_EDGE_SLACK,
-                               'label_px': [round(float(v_px), 1) for v_px in label_px[zone]]}
+                               'label_px': [round(float(v_px), 1) for v_px in label_px[zone]],
+                               'surface_tilt_deg': press['surface_tilt_deg'],
+                               'plane_inliers': press['plane_inliers'],
+                               'press_tilt_deg': press['press_tilt_deg'], 'press': press['why']}
             if only_zone is None or zone == only_zone:
                 cv2.polylines(debug_lbl, [box], isClosed=True, color=dot, thickness=2)
                 cv2.circle(debug_lbl, (int(opt_x), int(opt_y)), 4, dot, -1)
@@ -1380,15 +1466,17 @@ class CombinedPerceptionNode:
                             + (f"{z_cam:.3f}m" if z_cam is not None else "NO DEPTH"),
                             (int(box[:, 0, 0].max()) + 8, int(opt_y) + 5),   # right of the box
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
+                if press['surface_tilt_deg'] is not None:
+                    cv2.putText(debug_lbl, "surface %.0fdeg, press %.0fdeg" % (press['surface_tilt_deg'], press['press_tilt_deg']),
+                                (int(box[:, 0, 0].max()) + 8, int(opt_y) + 23),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, dot, 1)
             if z_cam is None:
                 rospy.logerr(f"No valid depth under the Zone {zone} label footprint (centre pixel "
                              f"({u}, {v})). Aborting zone {zone}.")
                 parts.append(f"Zone{zone}=FAIL (no depth)")
                 continue
 
-            quat = R_scipy.from_matrix(
-                self.tf_lbl[:3, :3] @ R_scipy.from_euler('z', np.radians(ang_deg)).as_matrix()
-            ).as_quat()
+            quat = R_scipy.from_matrix(press['rotation']).as_quat()
             cam = np.array([(u - cx) * z_cam / fx, (v - cy) * z_cam / fy, z_cam, 1.0])
             world = self.tf_lbl @ cam
 
@@ -1410,9 +1498,9 @@ class CombinedPerceptionNode:
             self.lbl_world_pubs[zone].publish(msg)
 
             rospy.loginfo("[Label] zone %d (%d item(s)): px (%d, %d) depth %.3f m (%d px) -> camera "
-                          "(%.3f, %.3f, %.3f) -> world (%.3f, %.3f, %.3f), angle %.1f deg",
+                          "(%.3f, %.3f, %.3f) -> world (%.3f, %.3f, %.3f), angle %.1f deg; %s",
                           zone, n_items, u, v, z_cam, n, cam[0], cam[1], cam[2],
-                          world[0], world[1], world[2], ang_deg)
+                          world[0], world[1], world[2], ang_deg, press['why'])
             parts.append(f"Zone{zone}=OK world ({world[0]:.3f}, {world[1]:.3f}, {world[2]:.3f})")
             zones_log[zone]['world'] = [float(w) for w in world[:3]]
 
