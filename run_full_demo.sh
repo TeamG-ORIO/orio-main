@@ -58,10 +58,10 @@
 #   bash run_full_demo.sh --no-logging    # skip the rerun recorder for this run
 #   bash run_full_demo.sh --live          # also stream to a running `rerun` viewer
 #   bash run_full_demo.sh --no-affordance # skip the per-grasp affordance panels
-#   bash run_full_demo.sh --offset-x 0.01 --offset-y -0.075
+#   bash run_full_demo.sh --offset-x 0.01 --offset-y -0.07
 #                                           # world-frame XY correction (metres) added to
 #                                           #   every input-bin grasp before the arm moves
-#                                           #   (default x 0.01, y -0.075)
+#                                           #   (default x 0.01, y -0.07)
 #   bash run_full_demo.sh --label-offset-x 0.0 --label-offset-y 0.0
 #                                           # same, for arm 2's label placement (arm 2's frame)
 #                                           #   (default 0, 0)
@@ -110,7 +110,7 @@ INVENTORY_WINDOW=1
 UNLOCK=1
 # XY corrections (metres) tuned on the cell; the flags or ORIO_* env vars override them.
 PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.01}"
-PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:--0.075}"
+PNP_OFFSET_Y="${ORIO_PNP_OFFSET_Y:--0.07}"
 LABEL_OFFSET_X="${ORIO_LABEL_OFFSET_X:-0.0}"
 LABEL_OFFSET_Y="${ORIO_LABEL_OFFSET_Y:-0.0}"
 ZONE_PICK_OFFSET_X="${ORIO_ZONE_PICK_OFFSET_X:--0.01}"

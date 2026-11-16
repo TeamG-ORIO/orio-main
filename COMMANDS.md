@@ -132,7 +132,7 @@ bash run_full_demo.sh
 | `--speed X` | Run every arm move X times faster (default 1). Long moves are kept slow enough to stay safe. |
 | `--settle-s S` | Wait this long after each arm move before the next one (default 0 = no wait). |
 | `--no-flat-pick` | Pick from the bin with the old arm positions. By default arm 1 keeps joints 3 and 5 near 0 (less twisted) and turns the wrist as little as it can. A grasp it can't reach that way is skipped and the bin scanned again. |
-| `--offset-x M`, `--offset-y M` | Move every pick from the input bin by this many metres (default x 0.01, y -0.075). |
+| `--offset-x M`, `--offset-y M` | Move every pick from the input bin by this many metres (default x 0.01, y -0.07). |
 | `--label-offset-x M`, `--label-offset-y M` | Move where arm 2 puts the label by this many metres (arm 2's directions; default 0). |
 | `--zone-pick-offset-x M`, `--zone-pick-offset-y M` | Move where arm 1 picks in a label zone by this many metres (arm 1's directions, like `--offset-x/y`; default x -0.01, y -0.01). |
 | `--min-q Q` | Lowest grasp score (0 to 1) to accept. Default 0.10 (DexNet: 0.30). |
