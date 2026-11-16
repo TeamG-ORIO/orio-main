@@ -66,6 +66,8 @@ CARDBOARD, CARDBOARD_DARK = '#c8a27a', '#9c7a56'
 ESTOP = '#d20f39'
 FORCE_QUIT_AFTER_S = 3.0   # E-STOP turns into FORCE QUIT if the run is still up after this
 
+STATS_W = 380      # run stats panel width, right of the cell map
+
 ARM_COLOR = {'arm1': BLUE, 'arm2': MAUVE}
 ARM_TITLE = {'arm1': 'ARM 1', 'arm2': 'ARM 2'}
 ARM_ROLE = {'arm1': 'Pick & place', 'arm2': 'Labelling'}
@@ -192,6 +194,21 @@ def shorten(text, font, width):
     while text and font.measure(text + '…') > width:
         text = text[:-1]
     return text + '…'
+
+
+def clock_text(seconds):
+    seconds = max(0, int(round(seconds)))
+    if seconds >= 3600:
+        return "%d:%02d:%02d" % (seconds // 3600, seconds // 60 % 60, seconds % 60)
+    return "%d:%02d" % (seconds // 60, seconds % 60)
+
+
+def rate_look(num, den):
+    """(percentage text, colour) for num/den."""
+    if not den:
+        return "–", OVERLAY
+    r = float(num) / den
+    return "%.0f%%" % (100 * r), GREEN if r >= 0.8 else (YELLOW if r >= 0.5 else RED)
 
 
 def ago(seconds):
@@ -723,6 +740,9 @@ class Dashboard:
         # Bottom: arm cards (with their brake buttons), then the newest debug images
         bot = tk.Frame(r, bg=BASE, height=330)
         bot.pack(side='bottom', fill='x', padx=16, pady=(8, 16))   # before the map, which then
+        # Run stats, right of the map (hidden with it while the recovery panel shows)
+        self.stats_c = tk.Canvas(r, bg=BASE, highlightthickness=0, width=STATS_W)
+        self.stats_c.pack(side='right', fill='y', padx=(0, 16))
         self.map.pack(fill='both', expand=True, padx=16)               # takes what is left
         bot.grid_propagate(False)   # keep its 330 px whatever its contents ask for
         bot.columnconfigure(0, weight=1, uniform='c')
@@ -995,14 +1015,20 @@ class Dashboard:
             self._draw_header(s, t)
             self._draw_banner(s)
             helping = self._helping(s)
-            if bool(helping) != self.rec_shown:   # the panel takes the map's place
+            if bool(helping) != self.rec_shown:   # the panel takes the map's (and stats') place
                 self.rec_shown = bool(helping)
-                (self.map if helping else self.rec.frame).pack_forget()
-                (self.rec.frame if helping else self.map).pack(fill='both', expand=True, padx=16)
+                for w in (self.map, self.stats_c, self.rec.frame):
+                    w.pack_forget()
+                if helping:
+                    self.rec.frame.pack(fill='both', expand=True, padx=16)
+                else:
+                    self.stats_c.pack(side='right', fill='y', padx=(0, 16))
+                    self.map.pack(fill='both', expand=True, padx=16)
             if helping:
                 self.rec.show(s, helping)
             else:
                 self._draw_map(s, t)
+                self._draw_stats(s)
             for arm in ('arm1', 'arm2'):
                 self._draw_card(arm, s, t)
             for view in self.views:
@@ -1172,6 +1198,91 @@ class Dashboard:
 
     def _force_quit_ready(self):
         return self.estop_seen is not None and time.time() - self.estop_seen >= FORCE_QUIT_AFTER_S
+
+    # ── run stats ────────────────────────────────────────────────────────────
+    def _draw_stats(self, s):
+        """Per item name: grasp success (per attempt, and with error recovery: the
+        automatic retries folded into one attempt) and labelling success; for the run:
+        time per labelled item, which only changes when an item is labelled. Counted in
+        full_sequence.py (run_stats.py). Laid out from the font sizes, which depend on the
+        display's DPI."""
+        c = self.stats_c
+        c.delete('all')
+        W, H = max(c.winfo_width(), STATS_W), max(c.winfo_height(), 200)
+        fs, fsb, fb, fn = self.f_small, self.f_smallb, self.f_bodyb, self.f_num
+        ls = lambda f: f.metrics('linespace')
+        x0, x1 = 16, W - 16
+        rrect(c, 1, 1, W - 1, H - 1, 16, fill=MANTLE, outline=SURF1, width=2)
+        y = 12
+        c.create_text(x0, y, text="RUN STATS", anchor='nw', fill=SUBTEXT, font=fsb)
+        st = (s or {}).get('stats') or {}
+        y += ls(fsb) + 2
+
+        # Time per labelled item, run-wide: held from one labelled item to the next
+        per, done = st.get('per_item_s'), st.get('labelled', 0)
+        big = clock_text(per) if per is not None else "–:––"
+        c.create_text(x0, y, text=big, anchor='nw', fill=TEAL if per is not None else OVERLAY,
+                      font=fn)
+        tx = x0 + fn.measure(big) + 12
+        ty = y + max(0, (ls(fn) - ls(fb) - ls(fs)) / 2)
+        c.create_text(tx, ty, text="per labelled item", anchor='nw', fill=TEXT, font=fb)
+        c.create_text(tx, ty + ls(fb), anchor='nw', fill=SUBTEXT, font=fs,
+                      text=("after %d labelled item%s" % (done, "" if done == 1 else "s")
+                            if per is not None else "waiting for the first labelled item"))
+        y += ls(fn) + 4
+        c.create_line(x0, y, x1, y, fill=SURF0, width=2)
+        y += 8
+
+        # Definitions at the bottom; the table fills what is between
+        foot = c.create_text(x0, H - 10, anchor='sw', width=x1 - x0, fill=OVERLAY, font=fs,
+                             text="With error recovery: automatic retries count as one "
+                                  "attempt. Time leaves out pauses and help.")
+        foot_top = c.bbox(foot)[1] - 6
+
+        # Column headings: a bold first line, then smaller ones
+        heads = (("GRASPS", "per attempt"), ("GRASPS", "with error", "recovery"), ("LABELLED",))
+        col_w = 10 + max([fb.measure("100%"), fs.measure("888/888")]
+                         + [max([fsb.measure(h[0])] + [fs.measure(x) for x in h[1:]])
+                            for h in heads])
+        cols = [x1 - i * col_w for i in (2, 1, 0)]   # right edges of the three columns
+        name_w = cols[0] - col_w - x0
+        c.create_text(x0, y, text="ITEM", anchor='nw', fill=SUBTEXT, font=fsb)
+        for x, h in zip(cols, heads):
+            c.create_text(x, y, text=h[0], anchor='ne', fill=SUBTEXT, font=fsb)
+            for i, line in enumerate(h[1:]):
+                c.create_text(x, y + ls(fsb) + i * ls(fs), text=line, anchor='ne',
+                              fill=OVERLAY, font=fs)
+        y += ls(fsb) + max(len(h) - 1 for h in heads) * ls(fs) + 8
+
+        names = list(reversed(st.get('names') or []))   # newest item first
+        if not names:
+            c.create_text(x0, y, anchor='nw', fill=OVERLAY, font=self.f_body,
+                          text="No bin picks yet this run." if s else "Not connected.")
+            return
+        row_h = ls(fb) + ls(fs) + 6
+        fits = max(1, int((foot_top - y) // row_h))
+        if len(names) > fits:   # leave room for "+N more", unless only one row fits at all
+            fits = max(1, int((foot_top - y - ls(fs)) // row_h))
+        say_more = y + fits * row_h + ls(fs) <= foot_top
+        for n in names[:fits]:
+            c.create_text(x0, y, text=shorten(n['name'], fb, name_w), anchor='nw',
+                          fill=TEXT, font=fb)
+            if n.get('in_cell'):
+                c.create_text(x0, y + ls(fb), text="%d in the cell" % n['in_cell'],
+                              anchor='nw', fill=OVERLAY, font=fs)
+            done = n['ok'] + n['failed']
+            for x, (num, den) in zip(cols, ((n['tries_ok'], n['tries']),
+                                            (n['picks_ok'], n['picks']), (n['ok'], done))):
+                pct, col = rate_look(num, den)
+                c.create_text(x, y, text=pct, anchor='ne', fill=col, font=fb)
+                c.create_text(x, y + ls(fb), text="%d/%d" % (num, den), anchor='ne',
+                              fill=SUBTEXT, font=fs)
+            y += row_h
+        more = len(names) - fits
+        if more > 0 and say_more:
+            c.create_text(x0, y, anchor='nw', fill=OVERLAY, font=fs,
+                          text="+%d more item%s (all in the end-of-run log)"
+                               % (more, "" if more == 1 else "s"))
 
     # ── cell map ─────────────────────────────────────────────────────────────
     def _draw_map(self, s, t):

@@ -78,6 +78,7 @@ from custom_msgs.srv import AddLabeledItem
 import CollisionChecker
 from item_setup_gui import show_item_setup_gui
 import RobotUtil as rt
+from run_stats import RunStats, summary_lines
 
 try:
     from orio_core.events import TOPIC as EVENTS_TOPIC, EventSink
@@ -1975,6 +1976,8 @@ _bin_empty = threading.Event()
 BIN_EMPTY_ACTIVITY = "Input bin empty: add items, then click ITEMS ADDED"
 # Labels applied (dashboard)
 _labels_applied = 0
+# Grasp and labelling success per item name, and time per labelled item (dashboard)
+run_stats = RunStats(emit=lambda *a, **kw: events.emit(*a, **kw))
 # The two arm state machines and the run's start time (dashboard), set in main()
 _machines = {}
 _run_started = None
@@ -2128,6 +2131,7 @@ def _show_recovery_gui(arm_name, failed_state, error_msg, valid_states,
                 for zone in ['A', 'B']:
                     if manager.states[zone] != zone_vars[zone].get():
                         manager.reset_items(zone)
+                        run_stats.zone_set(zone, manager.states[zone], zone_vars[zone].get())
                     manager.states[zone] = zone_vars[zone].get()
                     manager.busy[zone] = False
             log.info("[Recovery] Zones updated: %s  busy: %s", manager.states, manager.busy)
@@ -2297,6 +2301,7 @@ class RecoveryBoard:
         if kind == 'zone' and cmd.get('zone') in ('A', 'B') and cmd.get('state') in ZONE_STATES:
             log.info("[%s Recovery] zone %s set from the dashboard", arm.upper(), cmd['zone'])
             with manager.lock:
+                run_stats.zone_set(cmd['zone'], manager.states[cmd['zone']], cmd['state'])
                 manager.set_state(cmd['zone'], cmd['state'])
                 manager.reset_items(cmd['zone'])
 
@@ -2438,11 +2443,13 @@ class HumanRecoveryArm1(smach.State):
             return 'shutdown'
         log.warning("[ARM1 Recovery] Pausing ARM1 — showing GUI (ARM2 continues)")
         recovery_event_arm1.set()
-        with manager.lock:  # release any zone locks held by the failed state
-            for z in ['A', 'B']:
-                manager.busy[z] = False
         failed = getattr(userdata, 'recovery_failed_state', 'UNKNOWN')
         err_msg = getattr(userdata, 'recovery_error_msg', 'No details available.')
+        with manager.lock:  # release any zone locks held by the failed state
+            claimed = [z for z in ['A', 'B'] if manager.busy[z] == 'arm1']
+            for z in ['A', 'B']:
+                manager.busy[z] = False
+        run_stats.recovery('arm1', failed, claimed)
         while True:
             choice = _ask_recovery(
                 'arm1', "ARM1 (Pick-and-Place)", failed, err_msg, ARM1_STATES,
@@ -2494,11 +2501,13 @@ class HumanRecoveryArm2(smach.State):
             return 'shutdown'
         log.warning("[ARM2 Recovery] Pausing ARM2 — showing GUI (ARM1 continues)")
         recovery_event_arm2.set()
-        with manager.lock:  # release any zone locks held by the failed state
-            for z in ['A', 'B']:
-                manager.busy[z] = False
         failed = getattr(userdata, 'recovery_failed_state', 'UNKNOWN')
         err_msg = getattr(userdata, 'recovery_error_msg', 'No details available.')
+        with manager.lock:  # release any zone locks held by the failed state
+            claimed = [z for z in ['A', 'B'] if manager.busy[z] == 'arm2']
+            for z in ['A', 'B']:
+                manager.busy[z] = False
+        run_stats.recovery('arm2', failed, claimed)
         choice = _ask_recovery(
             'arm2', "ARM2 (Labeling)", failed, err_msg, ARM2_STATES,
             hardware.label_arm, '/orio/lbl_cup/on', '/orio/lbl_cup/off')
@@ -2723,6 +2732,7 @@ class FetchInput(smach.State):
 
         if self._bin_changed(epoch, above_bin=True):
             return 'no_grasp'
+        run_stats.grasp_try(_item_name)
         log.info("[FetchInput] Descending to pick")
         hardware._move('arm1', hardware.pick_and_place_arm.goto_joints,
                        hardware.pick_up_final_joints, duration=2, desc="descend to contact",
@@ -2749,6 +2759,7 @@ class FetchInput(smach.State):
         except RuntimeError as exc:
             return self._missed_pick(exc)
         _pick_misses = 0
+        run_stats.grasp_held()
         _held_item = (_item_name, _item_expiry)
         log.info("[FetchInput] Exiting: succeeded (item_depth=%.4f)", hardware.current_fetch_depth)
         return 'succeeded'
@@ -2763,7 +2774,8 @@ class FetchInput(smach.State):
             log.error("[FetchInput] Missed %d picks in a row: opening the recovery window",
                       _pick_misses)
             _pick_misses = 0
-            raise exc
+            raise exc   # the recovery window: run_stats.recovery counts this try as failed
+        run_stats.grasp_missed()
         log.warning("[FetchInput] Missed the pick (%s). Retry %d/%d: cup off, going home, "
                     "re-scanning", exc, _pick_misses, opts.pick_retries)
         events.emit('pick', 'missed', n=_pick_n, retry=_pick_misses, msg=str(exc), ok=False)
@@ -2844,6 +2856,7 @@ class DropToZone(smach.State):
                 manager.set_state(target_zone, 'NEEDS_LABEL')
                 manager.items[target_zone] = _held_item or (_item_name, _item_expiry)
                 manager.busy[target_zone] = False
+            run_stats.dropped(target_zone)
             log.info("[DropToZone] Exiting: dropped (zone %s)", target_zone)
             return 'dropped'
         except Exception:
@@ -2931,6 +2944,7 @@ class RetrieveFromZone(smach.State):
                             "it goes back to be labelled", zone, left)
                 manager.leftover[zone] = True
                 manager.set_state(zone, 'NEEDS_LABEL')
+                run_stats.leftover(zone, _item_name)
             else:
                 manager.set_state(zone, 'EMPTY')
             manager.busy[zone] = False
@@ -3000,6 +3014,7 @@ class RetrieveFromZone(smach.State):
             with manager.lock:
                 manager.busy[target_zone] = False
             raise
+        run_stats.retrieved(target_zone)
 
         # Arm 1 is clear of the zone here, holding the item: look at what is left.
         self._after_pick(target_zone, n_before)
@@ -3045,6 +3060,7 @@ class PlaceOutput(smach.State):
         hardware.assert_vacuum('pnp', False)
 
         _items_placed_output += 1
+        run_stats.placed()
         log.info("[PlaceOutput] Exiting: succeeded (total items placed: %d)", _items_placed_output)
         return 'succeeded'
 
@@ -3140,6 +3156,7 @@ class ApplyLabel(smach.State):
                     manager.reset_items(target_zone)
                     manager.set_state(target_zone, 'EMPTY')
                     manager.busy[target_zone] = False
+                run_stats.vanished(target_zone)
                 arm_status.set('arm2', target=None)
                 return 'wait'
             manager.measured_z[target_zone] = hardware.label_measured_z.get(zone_number)
@@ -3185,6 +3202,7 @@ class ApplyLabel(smach.State):
             with manager.lock:
                 manager.set_state(target_zone, 'READY_FOR_PICKUP')
                 manager.busy[target_zone] = False
+            run_stats.labelled(target_zone)
             log.info("[ApplyLabel] Exiting: labeled (zone %s)", target_zone)
             return 'labeled'
         except Exception:
@@ -3317,6 +3335,25 @@ def _active_state(sm):
     return None if label in (None, 'None') else label
 
 
+def _stats_counting():
+    """Whether the clock behind the time per labelled item runs: from the start of the
+    run to its end, except while the robot waits on a person: paused, a recovery window
+    or INTERVENE open, the item window open, a terminal prompt, or the bin empty with
+    nothing left in the cell (waiting for ITEMS ADDED)."""
+    if _run_started is None or _stopping() or shutdown_event.is_set():
+        return False
+    if (pause_ctl.paused or recovery_event_arm1.is_set() or recovery_event_arm2.is_set()
+            or any(e.is_set() for e in intervene.values()) or _item_dialog['kind']
+            or (console is not None and console.prompt)):
+        return False
+    if _bin_empty.is_set():
+        with manager.lock:
+            zones_empty = all(manager.states[z] == 'EMPTY' for z in ('A', 'B'))
+        if zones_empty and _active_state(_machines.get('arm1')) == 'DECIDE_HUB':
+            return False
+    return True
+
+
 def _status_snapshot():
     """Everything the dashboard shows, as one JSON-able dict."""
     with manager.lock:
@@ -3344,6 +3381,7 @@ def _status_snapshot():
         'vacuum': not disable_pneumatics,
         'bin_empty': _bin_empty.is_set(),
         'item_dialog': _item_dialog['kind'],
+        'stats': run_stats.snapshot(),
     }
 
 
@@ -3412,6 +3450,10 @@ def _start_status_server():
     def loop():
         rate = rospy.Rate(STATUS_HZ)
         while not rospy.is_shutdown():
+            try:
+                run_stats.tick(time.time(), _stats_counting())
+            except Exception as exc:  # noqa: BLE001 — the stats must never stop the status
+                log.debug("[Dashboard] stats clock failed: %s", exc)
             try:
                 pub.publish(String(data=json.dumps(_status_snapshot(), default=str)))
             except Exception as exc:  # noqa: BLE001
@@ -3621,6 +3663,10 @@ def main():
         log.warning("[Main] Shutting down: turning off both vacuums")
         log.info("[Main] Total items placed at output: %d", _items_placed_output)
         events.emit('summary', 'run', items_placed=_items_placed_output, picks=_pick_n)
+        stats = run_stats.snapshot()
+        events.emit('summary', 'stats', **stats)
+        for line in summary_lines(stats):
+            log.info("[Stats] %s", line)
         call_trigger_service('/orio/pnp_cup/off')
         call_trigger_service('/orio/lbl_cup/off')
         if 'sis' in locals():
