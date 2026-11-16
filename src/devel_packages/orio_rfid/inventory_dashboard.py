@@ -1,41 +1,46 @@
 #!/usr/bin/env python3
-"""Inventory window: what the RFID node has put in the database, live.
+"""Inventory window: abuela's master inventory and the labels applied on this PC.
 
 run_full_demo.sh opens it on the host when it starts the RFID node (--no-inventory to
 skip). By hand, from any folder:
     python3 src/devel_packages/orio_rfid/inventory_dashboard.py
 
-Reads medical_inventory.db next to this file (read-only) once a second and shows:
-  - the newest label large, and every label registered since the window opened;
+Every PULL_S seconds it refreshes this PC's copy of abuela's inventory (master_sync.py
+pull, over ssh), and once a second it shows:
+  - the newest label large, and every label applied here since the window opened,
+    each with its item number and whether it has been pushed to abuela;
   - totals: labelled this run, tagged items, on the shelf, expired on the shelf;
-  - stock per item, either what the shelf reader sees or everything tagged.
-Click the expired tile to list the expired items. Needs Python 3 with tkinter;
-Pillow adds the item pictures from item_catalog/.
+  - stock per item in abuela's inventory, on the shelf or everything tagged.
+PUSH TO MASTER opens the list of labels not pushed yet: tick some and push them to
+abuela (master.db, item_names.csv, tag_registry.csv), or discard wrong ones; the
+labels already pushed are listed below. Click the expired tile to list the expired
+items. Needs Python 3 with tkinter; Pillow adds abuela's item photos.
 
-  --db PATH      another database file
   --since TIME   count labels from TIME ("YYYY-MM-DD HH:MM:SS") instead of from now
   --hide-new     stock only, no label panels
+  --no-pull      do not refresh the copy from abuela (show it as it is)
 """
 
 import argparse
-import json
 import os
 import sqlite3
+import threading
 import time
 import tkinter as tk
 from datetime import date, datetime
-from tkinter import font as tkfont
-from urllib.request import pathname2url
+from tkinter import font as tkfont, messagebox
+
+import master_sync
 
 try:
     from PIL import Image, ImageTk
 except ImportError:  # no pictures then, a drawn box instead
     Image = ImageTk = None
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(HERE, 'medical_inventory.db')
-CATALOG_DIR = os.path.join(HERE, 'item_catalog')
 POLL_MS = 1000
+PULL_S = 15           # refresh the copy of abuela's inventory this often
+STALE_S = 60          # a copy older than this is shown as out of date
+NO_NAME = 'No name yet'
 SHELF_LIVE_S = 10     # a shelf scan this recent = shelf reader live
 NEW_FLASH_S = 4.0     # how long a new label stays highlighted
 SOON_DAYS = 30        # expiring within this many days = yellow
@@ -124,47 +129,30 @@ def expiry_look(text):
     return ('Expires %s' % nice, SUBTEXT)
 
 
-def load_catalog():
-    """item name -> picture path, from item_catalog/items.json."""
-    pictures = {}
-    try:
-        with open(os.path.join(CATALOG_DIR, 'items.json')) as f:
-            for item in json.load(f).get('items', []):
-                if item.get('image'):
-                    pictures[item['name']] = os.path.join(CATALOG_DIR, 'images', item['image'])
-    except (OSError, ValueError) as e:
-        print('item catalog not read: %s' % e, flush=True)
-    return pictures
-
-
-def read_db(path, since):
-    """A snapshot of the database, or None when the file does not exist yet."""
-    if not os.path.exists(path):
-        return None
-    conn = sqlite3.connect('file:%s?mode=ro' % pathname2url(path), uri=True, timeout=1.0)
-    try:
-        c = conn.cursor()
-        session = c.execute(
-            'SELECT rfid_uid, item_name, expiration_date, date_labeled FROM medical_supplies '
-            'WHERE date_labeled >= ? ORDER BY date_labeled DESC, rowid DESC', (since,)).fetchall()
-        stock = c.execute(
-            'SELECT item_name, COUNT(*), COALESCE(SUM(is_on_shelf), 0) FROM medical_supplies '
-            'GROUP BY item_name ORDER BY 2 DESC, 1').fetchall()
-        expired = c.execute(
-            'SELECT rfid_uid, item_name, expiration_date FROM medical_supplies '
-            'WHERE is_on_shelf = 1 AND expiration_date < ? ORDER BY expiration_date',
-            (date.today().isoformat(),)).fetchall()
-        last_scan = c.execute('SELECT MAX(last_seen) FROM medical_supplies').fetchone()[0]
-    finally:
-        conn.close()
-    return {'session': session, 'stock': stock, 'expired': expired, 'last_scan': last_scan}
+def read_data(since):
+    """A snapshot of the copy of abuela's inventory and of the labels applied here."""
+    have_copy = os.path.exists(master_sync.COPY_DB)
+    items = master_sync.copy_items() if have_copy else []
+    today = date.today().isoformat()
+    stock = {}
+    for i in items:
+        total, on = stock.get(i['name'] or NO_NAME, (0, 0))
+        stock[i['name'] or NO_NAME] = (total + 1, on + i['on_shelf'])
+    session = [(r['rfid_uid'], r['item_name'], r['expiration_date'], r['date_labeled'], r['item_no'], r['status'])
+               for r in master_sync.labelled_since(since)]
+    return {'have_copy': have_copy, 'session': session,
+            'stock': sorted(((n, t, o) for n, (t, o) in stock.items()), key=lambda r: (-r[1], r[0])),
+            'expired': sorted(((i['rfid_uid'], i['name'] or 'Item %d' % i['no'], i['expiry']) for i in items
+                               if i['on_shelf'] and i['expiry'] and i['expiry'] < today), key=lambda r: r[2]),
+            'last_scan': max((i['last_seen'] for i in items if i['last_seen']), default=None),
+            'pending': len(master_sync.pending())}
 
 
 # ── Window ───────────────────────────────────────────────────────────────────
 
 class InventoryWindow:
-    def __init__(self, root, db_path, since, show_new=True):
-        self.root, self.db_path, self.since, self.show_new = root, db_path, since, show_new
+    def __init__(self, root, since, show_new=True, pull=True):
+        self.root, self.since, self.show_new = root, since, show_new
         root.title('ORIO Inventory')
         root.configure(bg=CRUST)
         root.geometry('1180x720' if show_new else '640x720')
@@ -182,7 +170,6 @@ class InventoryWindow:
         self.canvas = tk.Canvas(root, bg=CRUST, highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
 
-        self.pictures = load_catalog()
         self.thumbs = {}
         self.data, self.error, self.updated = None, None, None
         self.known = None           # rfid_uids seen in an earlier poll
@@ -191,6 +178,9 @@ class InventoryWindow:
         self.scroll = {'list': 0, 'stock': 0}
         self.regions = {}           # scroll region name -> (x0, y0, x1, y1)
         self.popup = None
+        self.push_win = None
+        self.sync_lock = threading.Lock()   # one ssh exchange with abuela at a time
+        self.pull_ok, self.pull_msg = None, ''  # the last pull: True / False / None (none yet)
 
         c = self.canvas
         c.bind('<Configure>', lambda e: self.draw())
@@ -199,7 +189,21 @@ class InventoryWindow:
         self.clickable('expired', self.show_expired)
         self.clickable('tab_shelf', lambda: self.set_tab('shelf'))
         self.clickable('tab_all', lambda: self.set_tab('all'))
+        self.clickable('push', self.show_push)
+        if pull:
+            threading.Thread(target=self.pull_loop, daemon=True).start()
+        else:
+            self.pull_msg = 'not refreshed (--no-pull)'
         self.poll()
+
+    def pull_loop(self):
+        while True:
+            self.pull_now()
+            time.sleep(PULL_S)
+
+    def pull_now(self):
+        with self.sync_lock:
+            self.pull_ok, self.pull_msg = master_sync.pull()
 
     def clickable(self, tag, action):
         c = self.canvas
@@ -224,7 +228,7 @@ class InventoryWindow:
 
     def poll(self):
         try:
-            self.data = read_db(self.db_path, self.since)
+            self.data = read_data(self.since)
             self.error = None
             if self.data is not None:
                 self.updated = time.time()
@@ -237,7 +241,7 @@ class InventoryWindow:
                 self.known = set(uids)
                 if self.stock_tab is None:
                     self.stock_tab = 'shelf' if self.shelf_live() else 'all'
-        except sqlite3.Error as e:
+        except (sqlite3.Error, OSError) as e:
             self.error = str(e)
         self.draw()
         self.root.after(POLL_MS, self.poll)
@@ -248,7 +252,7 @@ class InventoryWindow:
 
     def thumb(self, name, size):
         """A PhotoImage of the item's picture fitted in size x size, or None."""
-        path = self.pictures.get(name)
+        path = master_sync.photo_for(name)
         if Image is None or not path:
             return None
         key = (path, size)
@@ -304,22 +308,31 @@ class InventoryWindow:
         c = self.canvas
         c.create_text(pad, 32, text='Inventory', anchor='w', fill=TEXT, font=self.f_title)
         c.create_text(pad + self.f_title.measure('Inventory') + 14, 35, anchor='w',
-                      text='RFID labels and shelf stock', fill=OVERLAY, font=self.f_body)
+                      text="abuela's master inventory and the labels applied here", fill=OVERLAY, font=self.f_body)
+        pulled = master_sync.pulled_at()
+        fresh = pulled is not None and time.time() - pulled <= STALE_S
         if self.error:
-            look = ('●  Database error', RED, '#3a2530')
-        elif self.data is None:
-            look = ('●  Waiting for database', YELLOW, '#3a3426')
+            look = ('●  Error', RED, '#3a2530')
+        elif self.pull_ok is False:
+            look = ('●  abuela unreachable', YELLOW, '#3a3426')
+        elif pulled is None:
+            look = ('●  Waiting for abuela', YELLOW, '#3a3426')
         else:
-            look = ('●  Live', GREEN, '#253a2c')
-        pill(c, W - pad, 30, look[0], look[1], look[2], self.f_row, anchor='e', h=28, padx=14)
+            look = ('●  Live' if fresh else '●  Copy out of date', GREEN if fresh else YELLOW,
+                    '#253a2c' if fresh else '#3a3426')
+        w = pill(c, W - pad, 30, look[0], look[1], look[2], self.f_row, anchor='e', h=28, padx=14)
+        n = self.data['pending'] if self.data else 0
+        pill(c, W - pad - w - 12, 30, 'PUSH TO MASTER · %d' % n, CRUST if n else SUBTEXT, PEACH if n else SURF1,
+             self.f_row, anchor='e', h=28, padx=14, tags=('push',))
         if self.error:
-            sub = shorten(self.error, self.f_body, 420)
-        elif self.updated:
-            sub = 'updated %s' % datetime.fromtimestamp(self.updated).strftime('%H:%M:%S')
+            sub, color = shorten(self.error, self.f_body, 420), RED
+        elif self.pull_ok is False:
+            sub, color = shorten(self.pull_msg, self.f_body, 420), YELLOW
+        elif pulled is not None:
+            sub, color = 'copy of abuela from %s' % datetime.fromtimestamp(pulled).strftime('%H:%M:%S'), OVERLAY
         else:
-            sub = os.path.basename(self.db_path)
-        c.create_text(W - pad, 58, text=sub, anchor='e', fill=RED if self.error else OVERLAY,
-                      font=self.f_body)
+            sub, color = self.pull_msg or 'fetching the copy…', OVERLAY
+        c.create_text(W - pad, 58, text=sub, anchor='e', fill=color, font=self.f_body)
 
     def draw_tiles(self, x0, y0, x1, y1):
         d = self.data
@@ -334,13 +347,14 @@ class InventoryWindow:
             on_shelf = sum(s for _, _, s in d['stock'])
             t = parse_ts(d['last_scan'])
             if self.shelf_live():
-                shelf_txt = 'shelf reader live'
+                shelf_txt = 'robot scanning'
             elif t is None:
                 shelf_txt = 'no shelf scans yet'
             else:
                 shelf_txt = 'last scan %s' % ago(time.time() - t)
             n_exp = len(d['expired'])
-            tiles = [('LABELLED THIS RUN', str(len(d['session'])), 'since %s' % since_txt, TEAL, None),
+            tiles = [('LABELLED THIS RUN', str(len(d['session'])),
+                      ('%d not pushed' % d['pending']) if d['pending'] else 'since %s' % since_txt, TEAL, None),
                      ('TAGGED ITEMS', str(total), '%d kinds' % len(d['stock']), BLUE, None),
                      ('ON SHELF', str(on_shelf), shelf_txt, GREEN, None),
                      ('EXPIRED ON SHELF', str(n_exp),
@@ -363,9 +377,9 @@ class InventoryWindow:
         self.card(x0, y0, x1, y1)
         cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
         box_icon(c, cx, cy - 50, 34)
-        c.create_text(cx, cy + 12, text='Waiting for the inventory database', fill=TEXT, font=self.f_h2)
+        c.create_text(cx, cy + 12, text='Could not read the inventory', fill=TEXT, font=self.f_h2)
         c.create_text(cx, cy + 40, fill=OVERLAY, font=self.f_body, justify='center',
-                      text='The RFID node creates it when it first starts:\n%s' % self.db_path)
+                      text=self.error or '')
 
     def draw_hero(self, x0, y0, x1, y1):
         c = self.canvas
@@ -379,9 +393,9 @@ class InventoryWindow:
             c.create_text(x0 + 120, cy - 12, anchor='w', fill=TEXT, font=self.f_h2,
                           text='Waiting for the first label')
             c.create_text(x0 + 120, cy + 14, anchor='w', fill=OVERLAY, font=self.f_body,
-                          text='Labels show up here as arm 2 applies and registers them.')
+                          text='Labels show up here as arm 2 applies and saves them.')
             return
-        uid, name, expiry, labelled = session[0]
+        uid, name, expiry, labelled, no, status = session[0]
         size = y1 - y0 - 58
         self.picture(name, x0 + 20 + size / 2, y0 + 40 + size / 2, size)
         tx, right = x0 + 40 + size, x1 - 20
@@ -393,7 +407,9 @@ class InventoryWindow:
             c.create_text(right, y0 + 22, text=when, anchor='e', fill=OVERLAY, font=self.f_body)
         c.create_text(tx, y0 + 56, text=shorten(name, self.f_name, right - tx), anchor='w',
                       fill=TEXT, font=self.f_name)
-        c.create_text(tx, y0 + 88, text=tag_groups(uid), anchor='w', fill=SUBTEXT, font=self.f_mono_big)
+        c.create_text(tx, y0 + 88, text='Item %d · %s' % (no, tag_groups(uid)), anchor='w', fill=SUBTEXT,
+                      font=self.f_mono_big)
+        self.push_pill(right, y0 + 122, status)
         words, color = expiry_look(expiry)
         w = pill(c, tx, y0 + 122, words, color, SURF0, self.f_row, h=26)
         if flashing:
@@ -415,7 +431,7 @@ class InventoryWindow:
         self.scroll['list'] = start = min(self.scroll['list'], max(0, len(session) - fits))
         self.regions['list'] = (x0, top, x1, y1)
         now = time.time()
-        for i, (uid, name, expiry, labelled) in enumerate(session[start:start + fits]):
+        for i, (uid, name, expiry, labelled, no, status) in enumerate(session[start:start + fits]):
             ry = top + i * row_h
             cy = ry + row_h / 2
             if session[start + i][0] == self.flash_uid and now < self.flash_until:
@@ -424,17 +440,25 @@ class InventoryWindow:
                 c.create_line(x0 + 20, ry, x1 - 20, ry, fill=SURF0)
             self.picture(name, x0 + 40, cy, 40)
             t = parse_ts(labelled)
-            when = ago(now - t) if t else ''
+            when = ('pushed · ' if status == 'pushed' else 'not pushed · ') + (ago(now - t) if t else '')
             right = x1 - 20
-            c.create_text(right, cy - 9, text=when, anchor='e', fill=OVERLAY, font=self.f_body)
+            c.create_text(right, cy - 9, text=when, anchor='e', fill=GREEN if status == 'pushed' else PEACH,
+                          font=self.f_body)
             words, color = expiry_look(expiry)
             c.create_text(right, cy + 10, text=words, anchor='e', fill=color, font=self.f_body)
             text_w = right - (x0 + 72) - max(self.f_body.measure(when), self.f_body.measure(words)) - 16
             c.create_text(x0 + 72, cy - 9, text=shorten(name, self.f_row, text_w), anchor='w',
                           fill=TEXT, font=self.f_row)
-            c.create_text(x0 + 72, cy + 10, text='tag …' + tag_groups(uid[-8:]), anchor='w',
+            c.create_text(x0 + 72, cy + 10, text='Item %d · tag …%s' % (no, tag_groups(uid[-8:])), anchor='w',
                           fill=OVERLAY, font=self.f_mono)
         self.more_note(x0, x1, y1, start, len(session) - start - fits)
+
+    def push_pill(self, right, y, status):
+        """'Pushed to abuela' / 'Not pushed yet' at the right end of a line."""
+        if status == 'pushed':
+            pill(self.canvas, right, y, 'Pushed to abuela', GREEN, '#253a2c', self.f_row, anchor='e', h=26)
+        else:
+            pill(self.canvas, right, y, 'Not pushed yet', PEACH, '#3a2f26', self.f_row, anchor='e', h=26)
 
     def more_note(self, x0, x1, y1, above, below):
         parts = (['%d above' % above] if above > 0 else []) + (['%d more below' % below] if below > 0 else [])
@@ -458,10 +482,14 @@ class InventoryWindow:
         top, row_h = y0 + 56, 50
         if not rows:
             cy = (top + y1) / 2
-            c.create_text((x0 + x1) / 2, cy - 12, fill=TEXT, font=self.f_row,
-                          text='Nothing on the shelf' if shelf else 'No tagged items')
-            c.create_text((x0 + x1) / 2, cy + 12, fill=OVERLAY, font=self.f_body,
-                          text='The shelf reader has not seen any tags recently.' if shelf else '')
+            if not self.data['have_copy']:
+                head, sub = "No copy of abuela's inventory yet", self.pull_msg or 'fetching it…'
+            elif shelf:
+                head, sub = 'Nothing on the shelf', 'The robot did not see any tags in its last scan.'
+            else:
+                head, sub = 'No tagged items', ''
+            c.create_text((x0 + x1) / 2, cy - 12, fill=TEXT, font=self.f_row, text=head)
+            c.create_text((x0 + x1) / 2, cy + 12, fill=OVERLAY, font=self.f_body, text=shorten(sub, self.f_body, x1 - x0 - 40))
             return
         fits = max(1, int((y1 - 12 - top) // row_h))
         self.scroll['stock'] = start = min(self.scroll['stock'], max(0, len(rows) - fits))
@@ -481,6 +509,12 @@ class InventoryWindow:
                   fill=color, outline='')
         self.more_note(x0, x1, y1, start, len(rows) - start - fits)
 
+    def show_push(self):
+        if self.push_win is not None and self.push_win.alive():
+            self.push_win.top.lift()
+            return
+        self.push_win = PushWindow(self)
+
     # ── Expired list ──
 
     def show_expired(self):
@@ -494,7 +528,7 @@ class InventoryWindow:
         top.transient(self.root)
         tk.Label(top, text='Remove these from the shelf', bg=CRUST, fg=RED, font=self.f_h2,
                  anchor='w').pack(fill='x', padx=20, pady=(18, 4))
-        tk.Label(top, text='%d expired item%s the shelf reader can see' % (len(expired), '' if len(expired) == 1 else 's'),
+        tk.Label(top, text='%d expired item%s on the shelf in the last scan' % (len(expired), '' if len(expired) == 1 else 's'),
                  bg=CRUST, fg=OVERLAY, font=self.f_body, anchor='w').pack(fill='x', padx=20, pady=(0, 10))
         body = tk.Frame(top, bg=BASE, padx=16, pady=10)
         body.pack(fill='both', expand=True, padx=20)
@@ -512,18 +546,220 @@ class InventoryWindow:
                   highlightthickness=0, bd=0).pack(pady=14)
 
 
+# ── Push to abuela ───────────────────────────────────────────────────────────
+
+class Scrolled(tk.Frame):
+    """A frame with a vertical scrollbar; put rows in .inner."""
+
+    def __init__(self, parent, height):
+        super().__init__(parent, bg=BASE)
+        self.canvas = tk.Canvas(self, bg=BASE, highlightthickness=0, height=height)
+        bar = tk.Scrollbar(self, orient='vertical', command=self.canvas.yview)
+        self.inner = tk.Frame(self.canvas, bg=BASE)
+        win = self.canvas.create_window(0, 0, window=self.inner, anchor='nw')
+        self.inner.bind('<Configure>', lambda e: self.canvas.configure(scrollregion=self.canvas.bbox('all')))
+        self.canvas.bind('<Configure>', lambda e: self.canvas.itemconfigure(win, width=e.width))
+        self.canvas.configure(yscrollcommand=bar.set)
+        self.canvas.pack(side='left', fill='both', expand=True)
+        bar.pack(side='right', fill='y')
+        for seq, step in (('<MouseWheel>', None), ('<Button-4>', -1), ('<Button-5>', 1)):
+            self.bind_all_rows(seq, step)
+
+    def bind_all_rows(self, seq, step):
+        def wheel(e):
+            if str(e.widget).startswith(str(self)):
+                self.canvas.yview_scroll(step if step is not None else (-1 if e.delta > 0 else 1), 'units')
+        self.bind_all(seq, wheel, add='+')
+
+    def clear(self):
+        for w in self.inner.winfo_children():
+            w.destroy()
+
+
+class PushWindow:
+    """The labels not pushed yet, with a tick box each; the ticked ones are pushed to abuela or
+    discarded. Below them, the labels already pushed."""
+
+    def __init__(self, inv):
+        self.inv = inv
+        self.top = top = tk.Toplevel(inv.root, bg=CRUST)
+        top.title('[ORIO] Push labels to abuela')
+        top.geometry('900x640')
+        top.minsize(700, 480)
+        f = inv
+        self.checks = {}          # rfid_uid -> BooleanVar
+        self.shown = None         # (pending rows, history rows) last drawn
+        self.busy = False
+
+        tk.Label(top, text='Labels not pushed yet', bg=CRUST, fg=TEXT, font=f.f_h2,
+                 anchor='w').pack(fill='x', padx=20, pady=(16, 0))
+        tk.Label(top, bg=CRUST, fg=OVERLAY, font=f.f_body, anchor='w', justify='left',
+                 text="Pushing adds each ticked label to abuela: master.db, item_names.csv and "
+                      "tag_registry.csv.\nLabels you leave unticked stay here for later.").pack(fill='x', padx=20)
+        self.pending_box = Scrolled(top, 230)
+        self.pending_box.pack(fill='both', expand=True, padx=20, pady=(10, 6))
+
+        bar = tk.Frame(top, bg=CRUST)
+        bar.pack(fill='x', padx=20)
+        btn = dict(relief='flat', bd=0, highlightthickness=0, font=f.f_row, padx=14, pady=6)
+        tk.Button(bar, text='Select all', command=lambda: self.tick(True), bg=SURF1, fg=TEXT,
+                  activebackground=SURF2, activeforeground=TEXT, **btn).pack(side='left', padx=(0, 8))
+        tk.Button(bar, text='Select none', command=lambda: self.tick(False), bg=SURF1, fg=TEXT,
+                  activebackground=SURF2, activeforeground=TEXT, **btn).pack(side='left')
+        self.push_btn = tk.Button(bar, text='Push selected', command=self.push, bg=GREEN, fg=CRUST,
+                                  activebackground='#c3ecbe', activeforeground=CRUST, **btn)
+        self.push_btn.pack(side='right')
+        self.discard_btn = tk.Button(bar, text='Discard selected', command=self.discard, bg=RED, fg=CRUST,
+                                     activebackground='#f6b3c4', activeforeground=CRUST, **btn)
+        self.discard_btn.pack(side='right', padx=8)
+        self.status = tk.Label(top, text='', bg=CRUST, fg=OVERLAY, font=f.f_body, anchor='w')
+        self.status.pack(fill='x', padx=20, pady=(6, 0))
+
+        tk.Label(top, text='Pushed', bg=CRUST, fg=TEXT, font=f.f_h2, anchor='w').pack(fill='x', padx=20, pady=(12, 0))
+        self.history_box = Scrolled(top, 150)
+        self.history_box.pack(fill='both', expand=True, padx=20, pady=(6, 16))
+        self.refresh()
+
+    def alive(self):
+        return self.top.winfo_exists()
+
+    def refresh(self):
+        """Redraw when the lists changed (a new label, a push, a discard); ticks are kept."""
+        if not self.alive():
+            return
+        rows, done = master_sync.pending(), master_sync.history()
+        key = ([tuple(r.values()) for r in rows], [tuple(r.values()) for r in done])
+        if key != self.shown:
+            self.shown = key
+            self.draw_pending(rows)
+            self.draw_history(done)
+        self.top.after(2000, self.refresh)
+
+    def draw_pending(self, rows):
+        f, box = self.inv, self.pending_box
+        box.clear()
+        self.checks = {r['rfid_uid']: self.checks.get(r['rfid_uid']) or tk.BooleanVar(master=self.top, value=False)
+                       for r in rows}
+        if not rows:
+            tk.Label(box.inner, text='Every label applied here has been pushed.', bg=BASE, fg=OVERLAY,
+                     font=f.f_body).pack(pady=20)
+            return
+        for r in rows:
+            row = tk.Frame(box.inner, bg=BASE)
+            row.pack(fill='x', padx=8, pady=3)
+            # On X11 the tick is drawn in the foreground colour (black by default).
+            tk.Checkbutton(row, variable=self.checks[r['rfid_uid']], bg=BASE, activebackground=BASE,
+                           fg=GREEN, activeforeground=GREEN,
+                           selectcolor=SURF0, highlightthickness=0, bd=0).pack(side='left')
+            tk.Label(row, text='Item %d' % r['item_no'], bg=BASE, fg=SUBTEXT, font=f.f_mono, width=10,
+                     anchor='w').pack(side='left')
+            words, color = expiry_look(r['expiration_date'])
+            tk.Label(row, text=(r['date_labeled'] or '')[5:16], bg=BASE, fg=OVERLAY, font=f.f_body).pack(side='right')
+            tk.Label(row, text='…' + r['rfid_uid'][-8:], bg=BASE, fg=OVERLAY, font=f.f_mono).pack(side='right', padx=12)
+            tk.Label(row, text=words, bg=BASE, fg=color, font=f.f_body).pack(side='right', padx=6)
+            tk.Label(row, text=r['item_name'], bg=BASE, fg=TEXT, font=f.f_row, anchor='w').pack(side='left', padx=6)
+            if r['note']:
+                tk.Label(box.inner, text='      last push failed: %s' % r['note'], bg=BASE, fg=RED, font=f.f_body,
+                         anchor='w').pack(fill='x', padx=8)
+
+    def draw_history(self, rows):
+        f, box = self.inv, self.history_box
+        box.clear()
+        if not rows:
+            tk.Label(box.inner, text='Nothing pushed yet.', bg=BASE, fg=OVERLAY, font=f.f_body).pack(pady=12)
+            return
+        for r in rows:
+            row = tk.Frame(box.inner, bg=BASE)
+            row.pack(fill='x', padx=8, pady=2)
+            tk.Label(row, text='Item %d' % r['item_no'], bg=BASE, fg=SUBTEXT, font=f.f_mono, width=10,
+                     anchor='w').pack(side='left')
+            tk.Label(row, text='pushed %s' % (r['pushed_at'] or '')[5:16], bg=BASE, fg=GREEN,
+                     font=f.f_body).pack(side='right')
+            tk.Label(row, text='…' + r['rfid_uid'][-8:], bg=BASE, fg=OVERLAY, font=f.f_mono).pack(side='right', padx=12)
+            tk.Label(row, text=r['expiration_date'] or '', bg=BASE, fg=OVERLAY, font=f.f_body).pack(side='right', padx=6)
+            tk.Label(row, text=r['item_name'], bg=BASE, fg=TEXT, font=f.f_body, anchor='w').pack(side='left', padx=6)
+
+    def tick(self, value):
+        for var in self.checks.values():
+            var.set(value)
+
+    def selected(self):
+        return [uid for uid, var in self.checks.items() if var.get()]
+
+    def set_busy(self, busy, text, color=OVERLAY):
+        self.busy = busy
+        state = 'disabled' if busy else 'normal'
+        self.push_btn.configure(state=state)
+        self.discard_btn.configure(state=state)
+        self.status.configure(text=text, fg=color)
+
+    def push(self):
+        uids = self.selected()
+        if self.busy:
+            return
+        if not uids:
+            self.status.configure(text='Tick the labels to push first.', fg=YELLOW)
+            return
+        self.set_busy(True, 'Pushing %d label%s to abuela…' % (len(uids), '' if len(uids) == 1 else 's'))
+
+        self.result = None
+
+        def work():   # no Tk calls in this thread: wait_push() picks the result up
+            with self.inv.sync_lock:
+                try:
+                    self.result = master_sync.push(uids)
+                except Exception as e:  # noqa: BLE001 — shown in the window
+                    self.result = (False, str(e), {})
+        threading.Thread(target=work, daemon=True).start()
+        self.top.after(200, self.wait_push)
+
+    def wait_push(self):
+        if not self.alive():
+            return
+        if self.result is None:
+            self.top.after(200, self.wait_push)
+            return
+        self.pushed(*self.result)
+
+    def pushed(self, ok, msg, results):
+        failed = [m for good, m in results.values() if not good]
+        if not ok:
+            self.set_busy(False, 'Not pushed: %s' % msg, RED)
+        elif failed:
+            self.set_busy(False, '%s. The others stay in the list; the reason is under each.' % msg, YELLOW)
+        else:
+            self.set_busy(False, msg[:1].upper() + msg[1:] + '.', GREEN)
+        for uid, (good, _) in results.items():
+            if good and uid in self.checks:
+                self.checks[uid].set(False)
+        self.shown = None
+
+    def discard(self):
+        uids = self.selected()
+        if self.busy or not uids:
+            if not uids:
+                self.status.configure(text='Tick the labels to discard first.', fg=YELLOW)
+            return
+        if not messagebox.askyesno('Discard labels', 'Discard %d label%s? They will not be pushed to abuela.'
+                                   % (len(uids), '' if len(uids) == 1 else 's'), parent=self.top):
+            return
+        n = master_sync.discard(uids)
+        self.status.configure(text='%d label%s discarded.' % (n, '' if n == 1 else 's'), fg=OVERLAY)
+        self.shown = None
+
+
 def main():
-    ap = argparse.ArgumentParser(description='Live view of the RFID inventory database.')
-    ap.add_argument('--db', default=DB_PATH, help='database file (default: %(default)s)')
+    ap = argparse.ArgumentParser(description="Live view of abuela's inventory and the labels applied here.")
     ap.add_argument('--since', default=None,
                     help='count labels from this time, "YYYY-MM-DD HH:MM:SS" (default: now)')
     ap.add_argument('--hide-new', action='store_true', help='stock only, no label panels')
+    ap.add_argument('--no-pull', action='store_true', help='do not refresh the copy from abuela')
     args = ap.parse_args()
     since = args.since or datetime.now().strftime(TS)
     if parse_ts(since) is None:
         ap.error('--since must look like "2026-11-10 14:30:00"')
     root = tk.Tk()
-    InventoryWindow(root, os.path.abspath(args.db), since, show_new=not args.hide_new)
+    InventoryWindow(root, since, show_new=not args.hide_new, pull=not args.no_pull)
     root.mainloop()
 
 

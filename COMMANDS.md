@@ -72,6 +72,8 @@ Each run saves a log to `logging/demo/<timestamp>.log`.
 - Needs both robots on: iam-doc (arm 1) and iam-luisa (arm 2). It unlocks both arms
   at the start (they move slightly); `--no-unlock` skips this.
 - Uses the ZED for label placement. If it won't start, replug it or use `--no-zed`.
+- The item list comes from abuela's inventory. Each label is saved on this PC; to send
+  labels to abuela, click **PUSH TO MASTER** in the inventory window and tick the ones you want.
 - Puts the label on the top item in a zone, and arm 1 picks a labelled item at the middle
   of that top item. After every zone pick arm 1 waits about half a second while the zone is
   looked at again: only that look decides if another item is there. If one is, the zone goes
@@ -140,7 +142,6 @@ bash run_full_demo.sh
 | `--no-zone-rescan` | Do not look at a label zone again after arm 1 picks from it. |
 | `--no-rfid` | Do not start the RFID inventory node or register labels. |
 | `--no-inventory` | Do not open the inventory window. |
-| `--no-shelf-reader` | Register labels but do not use the Impinj shelf reader. |
 | `--no-dashboard` | Do not open the dashboard window. |
 | `--no-unlock` | Do not unlock the arms at the start. |
 | `--no-affordance` | Do not save the grasp pictures (a bit faster). The dashboard then shows no grasp picture. |

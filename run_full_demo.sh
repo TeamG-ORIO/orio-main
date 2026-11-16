@@ -10,8 +10,10 @@
 # the newest grasp and label images, LOCK / UNLOCK & PRIME per arm through desk_helper.py
 # on the host; --no-dashboard to skip it), whose recovery panel opens when an arm fails (a
 # separate recovery window instead without the dashboard).
-# With RFID on, the inventory window (orio_rfid/inventory_dashboard.py) also opens on the
-# host and shows each label as it is registered; --no-inventory to skip it.
+# Each label is saved on this PC (orio_rfid/master_sync.py). With RFID on, the inventory
+# window (orio_rfid/inventory_dashboard.py) also opens on the host: it shows abuela's
+# master inventory and each label as it is saved, and its PUSH TO MASTER button sends the
+# labels you pick to abuela; --no-inventory to skip it.
 #
 # Ctrl-C stops THIS RUN only (sequence, pneumatics, recorder). The slow-to-start stack —
 # roscore, the main container, BOTH control PCs (iam-doc for arm 1, iam-luisa for arm 2),
@@ -52,8 +54,6 @@
 #                                           #   picks from it (it then counts as empty)
 #   bash run_full_demo.sh --no-rfid       # skip the RFID node and label registration
 #   bash run_full_demo.sh --no-inventory  # RFID on, but no inventory window
-#   bash run_full_demo.sh --no-shelf-reader  # RFID labels only: skip the Impinj shelf
-#                                           #   reader (use when it is not connected)
 #   bash run_full_demo.sh --no-unlock     # do not unlock + prime both arms at start
 #   bash run_full_demo.sh --no-logging    # skip the rerun recorder for this run
 #   bash run_full_demo.sh --live          # also stream to a running `rerun` viewer
@@ -107,7 +107,6 @@ AFFORDANCE=1
 USE_ZED=1
 USE_RFID=1
 INVENTORY_WINDOW=1
-RFID_ARGS=
 UNLOCK=1
 # XY corrections (metres) tuned on the cell; the flags or ORIO_* env vars override them.
 PNP_OFFSET_X="${ORIO_PNP_OFFSET_X:-0.01}"
@@ -146,7 +145,6 @@ while [ $# -gt 0 ]; do
         --no-zone-rescan) SM_EXTRA+=(--no-zone-rescan) ;;
         --no-rfid)       USE_RFID=0; SM_EXTRA+=(--no-rfid) ;;
         --no-inventory)  INVENTORY_WINDOW=0 ;;
-        --no-shelf-reader) RFID_ARGS=--no-shelf ;;
         --no-unlock)     UNLOCK=0 ;;
         --no-dashboard)  SM_EXTRA+=(--no-dashboard) ;;
         --no-logging)    export ORIO_LOGGING=0; LOGGING_REQUESTED=0 ;;
@@ -318,17 +316,23 @@ xtion_bringup || exit 1
 LBL_MODELS=0
 perception_bringup "backend=$PLANNER labelling=$LBL_MODELS lbl_seg=rgbd" "ORIO_LOAD_LABELLING_MODELS=$LBL_MODELS"
 
-# RFID inventory node (/inventory/add_item). Best effort: the sequence degrades to a
-# warning per label when it is absent.
+# This PC's copy of abuela's inventory: the item setup window takes its item names and
+# photos from it. Best effort: when abuela cannot be reached, the last copy is used.
+log "refreshing the copy of abuela's inventory…"
+python3 "$REPO/src/devel_packages/orio_rfid/master_sync.py" pull 2>&1 | prefix master \
+    || log "NOTE: abuela not reached; the item list is the last copy."
+
+# RFID label node (/inventory/add_item): saves each label on this PC. Best effort: the
+# sequence degrades to a warning per label when it is absent.
 if [ "$USE_RFID" -eq 1 ]; then
-    if docker exec "$CONTAINER" python3 -c "import mercury, sllurp" >/dev/null 2>&1; then
-        log "starting RFID inventory node (db_manager)…"
+    if docker exec "$CONTAINER" python3 -c "import mercury" >/dev/null 2>&1; then
+        log "starting RFID label node (db_manager)…"
         stop_detached rfid
         start_detached rfid docker exec "$CONTAINER" bash -c \
             "source /home/ros_ws/devel/setup.bash && \
-             cd /home/ros_ws/src/devel_packages/orio_rfid && python3 -u db_manager.py $RFID_ARGS"
-        # The inventory window, on the host (it only reads the database file, which the
-        # repo mount shares), for this run only.
+             cd /home/ros_ws/src/devel_packages/orio_rfid && python3 -u db_manager.py"
+        # The inventory window, on the host (the labels file is shared through the repo
+        # mount, and the host has the ssh key for abuela), for this run only.
         if [ "$INVENTORY_WINDOW" -eq 1 ]; then
             log "opening the inventory window…"
             python3 -u "$REPO/src/devel_packages/orio_rfid/inventory_dashboard.py" \
@@ -336,10 +340,10 @@ if [ "$USE_RFID" -eq 1 ]; then
             PIDS+=($!)
         fi
     else
-        log "NOTE: RFID node NOT started — the container lacks the 'mercury' and/or"
-        log "      'sllurp' python modules (see src/devel_packages/orio_rfid/README.md:"
-        log "      pip install sllurp; build RFID/python-mercuryapi). Label registration"
-        log "      will log a warning per label and continue. --no-rfid silences this."
+        log "NOTE: RFID node NOT started — the container lacks the 'mercury' python"
+        log "      module (see src/devel_packages/orio_rfid/README.md: build"
+        log "      RFID/python-mercuryapi). Label registration will log a warning per"
+        log "      label and continue. --no-rfid silences this."
     fi
 else
     log "RFID node DISABLED (--no-rfid): labels are not registered."

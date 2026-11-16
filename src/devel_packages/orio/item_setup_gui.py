@@ -3,31 +3,31 @@
 The item is chosen from a dropdown of known items, each with a picture. Choosing
 "Other…" opens a field for a new item name. Known items come from:
 
-  * orio_rfid/item_catalog/items.json   names and pictures (tracked)
-  * the RFID database                   every item name already labelled
+  * abuela's item_names.csv            the master inventory's names (this PC's copy,
+                                       orio_rfid/master_sync/copy/, see master_sync.py)
   * orio_rfid/item_catalog/local_items.json
-                                        names typed in through "Other…" (git-ignored)
+                                       names typed in through "Other…" (git-ignored)
 
-Items without a picture get item_catalog/images/default.png.
+Pictures are abuela's item_photos (the same copy); items without one get
+item_catalog/images/default.png.
 """
 
 import datetime
 import json
 import os
 import re
-import sqlite3
+import sys
 import tkinter as tk
 from tkinter import font as tkfont, messagebox
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 RFID_DIR = os.path.normpath(os.path.join(_HERE, '..', 'orio_rfid'))
 CATALOG_DIR = os.path.join(RFID_DIR, 'item_catalog')
-CATALOG_FILE = os.path.join(CATALOG_DIR, 'items.json')
 LOCAL_ITEMS_FILE = os.path.join(CATALOG_DIR, 'local_items.json')
-IMAGE_DIR = os.path.join(CATALOG_DIR, 'images')
-DEFAULT_ICON = os.path.join(IMAGE_DIR, 'default.png')
-DB_FILES = [os.path.join(RFID_DIR, 'medical_inventory.db'),        # runtime copy
-            os.path.join(RFID_DIR, 'seed_medical_inventory.db')]   # tracked seed
+DEFAULT_ICON = os.path.join(CATALOG_DIR, 'images', 'default.png')
+
+sys.path.insert(0, RFID_DIR)
+import master_sync  # noqa: E402
 
 ICON_SIZE = 40
 MENU_ROWS = 12  # entries per dropdown column; longer lists wrap into more columns
@@ -45,46 +45,14 @@ def _read_json(path, default):
         return default
 
 
-def _db_item_names():
-    """Item names in the RFID database (runtime copy if present, else the seed)."""
-    for path in DB_FILES:
-        if not os.path.exists(path):
-            continue
-        try:
-            conn = sqlite3.connect('file:%s?mode=ro' % path, uri=True)
-            try:
-                rows = conn.execute("SELECT DISTINCT item_name FROM medical_supplies").fetchall()
-            finally:
-                conn.close()
-            return [r[0] for r in rows if r[0] and r[0].strip()]
-        except sqlite3.Error:
-            continue
-    return []
-
-
 def load_items():
     """Known items as a sorted list of (name, image path or None), one per name."""
-    items = {}  # lower-case name -> (name, image)
-
-    def add(name, image=None):
+    items = {}  # lower-case name -> name
+    for name in master_sync.name_list() + _read_json(LOCAL_ITEMS_FILE, []):
         name = (name or '').strip()
-        if not name:
-            return
-        key = name.lower()
-        if key in items:
-            if image and not items[key][1]:
-                items[key] = (items[key][0], image)
-            return
-        items[key] = (name, image)
-
-    for entry in _read_json(CATALOG_FILE, {}).get('items', []):
-        image = entry.get('image')
-        add(entry.get('name'), os.path.join(IMAGE_DIR, image) if image else None)
-    for name in _db_item_names():
-        add(name)
-    for name in _read_json(LOCAL_ITEMS_FILE, []):
-        add(name)
-    return sorted(items.values(), key=lambda it: it[0].lower())
+        if name:
+            items.setdefault(name.lower(), name)
+    return [(name, master_sync.photo_for(name)) for name in sorted(items.values(), key=str.lower)]
 
 
 def remember_item(name):
@@ -97,7 +65,7 @@ def remember_item(name):
         with open(LOCAL_ITEMS_FILE, 'w') as f:
             json.dump(names, f, indent=2)
     except OSError:
-        pass  # not worth failing the run over; the RFID database records it too
+        pass  # not worth failing the run over; the label records the name too
 
 
 def _load_icon(master, path, default):

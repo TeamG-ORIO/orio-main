@@ -40,8 +40,7 @@ dataset/
 *.onnx
 
 # --- SQLite ---
-# Ignore mutable runtime DBs; track only the canonical seed. db_manager seeds the
-# runtime copy from seed_medical_inventory.db on first run (see orio_rfid).
+# Ignore runtime DBs; track only the old catalog seed (orio_rfid).
 *.db
 *.sqlite
 *.sqlite3
@@ -49,6 +48,8 @@ dataset/
 
 # Item catalog files written by the item setup window; local to this machine.
 src/devel_packages/orio_rfid/item_catalog/
+# Labels applied on this PC and the copy of abuela's master inventory (master_sync.py).
+src/devel_packages/orio_rfid/master_sync/
 
 # --- Regenerable debug captures ---
 depth_image.png
