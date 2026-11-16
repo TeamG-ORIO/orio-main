@@ -194,7 +194,9 @@ planner_resolve || exit 2
 # stack dir), so either launcher reuses it and stop_all.sh stops it.
 run_log_paths demo
 # The zone polling (every 0.5 s while both arms wait) is saved to the log but not shown:
-# the dashboard already shows the zone states.
+# the dashboard already shows the zone states. Terminal text in pure white, brighter than
+# the terminal's default grey.
+LOG_FILTER_COLOR="38;5;231"
 log_filter_start '\[FetchInput\]|\[DropToZone\]|\[RetrieveFromZone\]|\[PlaceOutput\]|\[GetLabel\]|\[ApplyLabel\]|\[TaskSelector\]|\[ZoneManager\]|\[RFID\]|\[ORIO\]|Recovery\]|\[Pause\]|\[Stop\]|\[Dashboard\]|\[desk\]' 0 \
     '\[ApplyLabel\] (Entering state \(zones|No zone needs label)|\[TaskSelector\] (Evaluating zone states|. wait \(no actionable zones\))'
 

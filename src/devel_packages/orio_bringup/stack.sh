@@ -137,10 +137,12 @@ kill_bg() {  # stop this run's background processes (followers, recorder, pneuma
 # ANSI colours are stripped. The terminal gets CRLF: the foreground script runs under
 # `docker exec -it`, whose pty leaves the terminal in raw-ish output mode for the whole
 # merged stream, where a bare \n only moves down a row and lines would staircase. The
-# file gets plain LF. Needs LOG_FILE.
+# file gets plain LF. Needs LOG_FILE. Optional LOG_FILTER_COLOR = an SGR colour code (e.g.
+# "38;5;231", pure white) for the terminal lines; unset = the terminal's default colour.
 log_filter_start() {
     exec > >(
-        LOG_FILE="$LOG_FILE" SHOW_RE="${1:-}" SHOW_ALL="${2:-0}" HIDE_RE="${3:-}" awk '
+        LOG_FILE="$LOG_FILE" SHOW_RE="${1:-}" SHOW_ALL="${2:-0}" HIDE_RE="${3:-}" \
+        COLOR="${LOG_FILTER_COLOR:-}" awk '
         function strip(s){ gsub(/\033\[[0-9;]*m/, "", s); gsub(/\r/, "", s); return s }
         {
             line = strip($0)
@@ -159,7 +161,11 @@ log_filter_start() {
             if (!show && line ~ /tensorflow|cuda_gpu|dso_loader|NUMA node|StreamExecutor|gpu_device|libcu[a-z]+\.so|XLA service|Building (convolutional|fully|Softmax)|Converting fc layer|Advertised on topic|ikpy|is of type .fixed.|Detection max range|warnings\.warn|TF_CPP/) next
 
             print line >> ENVIRON["LOG_FILE"]; fflush(ENVIRON["LOG_FILE"])
-            if (show) { printf "%s\r\n", line; fflush() }
+            if (show) {
+                if (ENVIRON["COLOR"] != "") printf "\033[%sm%s\033[0m\r\n", ENVIRON["COLOR"], line
+                else printf "%s\r\n", line
+                fflush()
+            }
         }'
     ) 2>&1
     echo "[$LOG_TAG] logging this run to $LOG_FILE"

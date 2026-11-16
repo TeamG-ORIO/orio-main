@@ -59,7 +59,9 @@ ROBOT_PREFIX = re.compile(r'^\[robot \d+ [^\]]*\]\s*')
 # Catppuccin Mocha, as in the recovery and item setup windows
 CRUST, MANTLE, BASE = '#11111b', '#181825', '#1e1e2e'
 SURF0, SURF1, SURF2 = '#313244', '#45475a', '#585b70'
-OVERLAY, SUBTEXT, TEXT = '#6c7086', '#a6adc8', '#cdd6f4'
+# Text colours, brighter than the stock palette so the dashboard reads on a projector.
+OVERLAY, SUBTEXT, TEXT = '#b8bdd3', '#dfe3f0', '#f5f7ff'
+DISABLED = '#9399b2'   # text on a disabled button
 BLUE, MAUVE, GREEN, YELLOW = '#89b4fa', '#cba6f7', '#a6e3a1', '#f9e2af'
 PEACH, RED, TEAL, SKY = '#fab387', '#f38ba8', '#94e2d5', '#89dceb'
 CARDBOARD, CARDBOARD_DARK = '#c8a27a', '#9c7a56'
@@ -311,7 +313,7 @@ class FeedView:
 def flat_button(parent, text, command, bg, fg, font, padx=12, pady=6):
     return tk.Button(parent, text=text, command=command, font=font, relief='flat', bd=0,
                      padx=padx, pady=pady, cursor='hand2', bg=bg, fg=fg, activebackground=bg,
-                     activeforeground=fg, disabledforeground=SURF2, highlightthickness=0)
+                     activeforeground=fg, disabledforeground=DISABLED, highlightthickness=0)
 
 
 class RecoveryPanel:
@@ -573,7 +575,7 @@ class RecoveryPanel:
                 cur = zs['state'] == state
                 seg[state].configure(bg=col if cur else SURF0, fg=CRUST if cur else SUBTEXT,
                                      state='disabled' if (cur or locked) else 'normal',
-                                     disabledforeground=CRUST if cur else SURF2)
+                                     disabledforeground=CRUST if cur else DISABLED)
 
         # continue from
         chosen = self.chosen.get(rid)
@@ -698,7 +700,7 @@ class Dashboard:
         self.item_btn = tk.Button(mid, text="CHANGE ITEM", font=self.f_smallb, relief='flat', bd=0,
                                   padx=12, pady=7, cursor='hand2', bg=BLUE, fg=CRUST,
                                   activebackground='#b4cefb', activeforeground=CRUST,
-                                  disabledforeground=SURF2, highlightthickness=0,
+                                  disabledforeground=DISABLED, highlightthickness=0,
                                   command=self.change_item)
         self.item_btn.pack(side='left', padx=(16, 0))
 
@@ -760,13 +762,13 @@ class Dashboard:
             # not (set each tick from Desk's state, in _draw_brakes)
             brake = tk.Button(row, text="UNLOCK & PRIME", font=self.f_smallb, relief='flat', bd=0,
                               padx=12, pady=7, cursor='hand2', bg=SURF0, fg=CRUST,
-                              disabledforeground=SURF2, state='disabled',
+                              disabledforeground=DISABLED, state='disabled',
                               command=lambda a=arm: self._brake_pressed(a))
             brake.pack(side='left')
             help_btn = tk.Button(row, text="INTERVENE", font=self.f_smallb, relief='flat', bd=0,
                                  padx=12, pady=7, cursor='hand2', bg=PEACH, fg=CRUST,
                                  activebackground='#fdd0b0', activeforeground=CRUST,
-                                 disabledforeground=SURF2,
+                                 disabledforeground=DISABLED,
                                  command=lambda a=arm: self.intervene(a))
             help_btn.pack(side='left', padx=(8, 0))
             self.desk_btns[arm] = brake
@@ -1171,19 +1173,19 @@ class Dashboard:
                                activeforeground=CRUST)
         usable = s is not None and not s.get('shutdown') and not self.pending
         self.btn.configure(state='normal' if usable else 'disabled',
-                           disabledforeground=SURF2 if s is None else CRUST)
+                           disabledforeground=DISABLED if s is None else CRUST)
         stopping = s.get('stopping') if s else None
         if s is None or stopping or s.get('shutdown'):
-            self.btn.configure(bg=SURF1, disabledforeground=SURF2)
+            self.btn.configure(bg=SURF1, disabledforeground=DISABLED)
 
         self.shut_btn.configure(state='normal' if s is not None and not stopping else 'disabled',
                                 bg=PEACH if s is not None and not stopping else SURF1,
-                                disabledforeground=SURF2)
+                                disabledforeground=DISABLED)
         if stopping == 'estop' and self.estop_seen is None:
             self.estop_seen = time.time()
         if s is None:
             self.estop_btn.configure(text="■  E-STOP", state='disabled', bg=SURF1,
-                                     disabledforeground=SURF2)
+                                     disabledforeground=DISABLED)
         elif stopping == 'estop':
             ready = self._force_quit_ready()
             self.estop_btn.configure(text="FORCE QUIT" if ready else "STOPPING…",
